@@ -1,0 +1,95 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: delegation-chain
+  version: 1.0.0
+  name: Delegation Chain (RFC-AITP-0006)
+  summary: >
+    Demonstrates single-hop delegation. The researcher handshakes with the
+    writer and receives a TCT granting write.content. The researcher delegates
+    that grant to a sub-researcher. The sub-researcher presents the
+    DelegationToken to the writer's /aitp/delegation/redeem endpoint and
+    receives a fresh TCT bound to its own key. The sub-researcher then invokes
+    writer.write.content using the redeemed TCT.
+
+    Trust chain: writer → researcher (via handshake) → sub-researcher (via
+    delegation). The writer's verifier ensures every link before issuing the
+    fresh TCT.
+  tags: [delegation, rfc-0006, trust-chain, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent trust"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+    - id: sub-researcher
+      ref: _shared/agents/researcher
+      port_offset: 2
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    # The delegation flow controls trust timing itself — no eager pairwise.
+    eager: false
+
+  workflow:
+    steps:
+      - id: trust_researcher_writer
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: >
+          Researcher initiates a handshake with writer; writer issues
+          researcher a TCT granting write.content.
+
+      - id: delegate
+        type: delegate
+        delegator: researcher
+        delegatee: sub-researcher
+        via_peer: writer
+        scope: [write.content]
+        ttl_secs: 600
+        description: >
+          Researcher uses the held TCT (issued by writer) to mint a
+          DelegationToken for sub-researcher, narrowing the scope to
+          write.content.
+
+      - id: redeem
+        type: redeem_delegation
+        delegatee: sub-researcher
+        target: writer
+        via_delegation: delegate
+        description: >
+          Sub-researcher presents the delegation to writer's
+          /aitp/delegation/redeem. Writer verifies and mints a fresh TCT
+          for sub-researcher, bound to sub-researcher's own key.
+
+      - id: sub_research
+        agent: sub-researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: >
+          Sub-researcher self-executes its own research.query to produce
+          findings to be written up.
+
+      - id: sub_write
+        agent: sub-researcher
+        capability: write.content
+        input_from: sub_research
+        description: >
+          Sub-researcher calls writer.write.content using the redeemed TCT
+          (sub-researcher holds writer's port in its held_tcts, populated by
+          the redeem step).

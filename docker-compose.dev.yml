@@ -1,0 +1,12 @@
+services:
+  playground:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "aitp_playground.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./src:/app/src
+      - ./agents:/app/agents
+      - ./scenarios:/app/scenarios
+    environment:
+      - LOG_LEVEL=DEBUG

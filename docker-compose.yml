@@ -1,0 +1,12 @@
+services:
+  playground:
+    build: .
+    image: aitp-playground:latest
+    ports:
+      - "8000:8000"
+      - "8100-8120:8100-8120"
+    environment:
+      - PLAYGROUND_BASE_URL=http://localhost:8000
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env

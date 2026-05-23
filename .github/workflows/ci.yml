@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies (without aitp SDK)
+        # The `aitp` runtime dep is a local SDK built from
+        # ../aitp-rs/bindings/aitp-py via `maturin develop`. It is not on
+        # PyPI, so CI installs the rest of the deps explicitly and installs
+        # the project with --no-deps. Tests that need the SDK use
+        # `pytest.importorskip("aitp")` and skip cleanly in this environment.
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "fastapi>=0.115" \
+            "uvicorn[standard]>=0.32" \
+            "pydantic>=2.10" \
+            "pydantic-settings>=2.7" \
+            "pyyaml>=6.0" \
+            "jsonschema>=4.23" \
+            "httpx>=0.27" \
+            "anyio>=4.7" \
+            "pytest>=8.3" \
+            "pytest-asyncio>=0.24" \
+            "coverage[toml]>=7.6"
+          pip install -e . --no-deps
+
+      - name: Run tests
+        run: pytest tests/ -v

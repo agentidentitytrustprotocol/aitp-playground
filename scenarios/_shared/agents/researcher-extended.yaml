@@ -1,0 +1,22 @@
+apiVersion: aitp.dev/v1
+kind: AgentManifest
+metadata:
+  id: researcher-extended
+  name: Research Analyst (Extended)
+  framework: crewai
+  version: 1.0.0
+spec:
+  entrypoint:
+    type: python_module
+    value: researcher.main
+  host:
+    python: python3
+    cwd: agents/researcher
+    startupTimeoutMs: 30000
+  aitp:
+    # Two grants — used to demonstrate grant intersection.
+    offered_caps: [research.query, research.deep]
+    display_name: Research Analyst Extended
+    identity_type: pinned_key
+    ttl_secs: 3600
+  did_web: false

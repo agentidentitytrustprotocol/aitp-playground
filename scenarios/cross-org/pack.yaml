@@ -1,0 +1,7 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioPack
+metadata:
+  slug: cross-org
+  name: Cross-Org Scenarios
+  description: Agents from different organisations / trust domains
+  tags: [cross-org, federation]

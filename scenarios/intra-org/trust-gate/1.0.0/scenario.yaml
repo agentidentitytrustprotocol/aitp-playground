@@ -1,0 +1,67 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: trust-gate
+  version: 1.0.0
+  name: Trust Gate — Access Denied Then Granted
+  summary: >
+    Demonstrates AITP capability enforcement. The caller first invokes the
+    writer's write.content endpoint with no Trust Context Token and observes
+    the 403. The agents then perform a mutual handshake, after which the same
+    capability call succeeds. The run log shows both the rejection and the
+    successful invocation, end to end.
+  tags: [trust-gate, access-control, aitp-enforcement, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent identity"
+      required: [topic]
+
+  agents:
+    - id: caller
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    # Critical: do NOT pre-establish trust — the probe step must observe a 403.
+    eager: false
+
+  workflow:
+    steps:
+      - id: probe_no_tct
+        type: capability_call_no_trust
+        agent: caller
+        target_agent: writer
+        capability: write.content
+        expect_status: 403
+        description: >
+          Caller invokes writer.write.content without a TCT. Writer's
+          verify_capability_tct() rejects, returning 403.
+
+      - id: establish_trust
+        type: handshake
+        initiator: caller
+        responder: writer
+        description: AITP mutual 4-message handshake establishes trust.
+
+      - id: research
+        agent: caller
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+
+      - id: write_with_trust
+        agent: caller
+        capability: write.content
+        input_from: research
+        description: The same capability call now succeeds with a valid TCT.

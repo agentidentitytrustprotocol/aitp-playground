@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+httpx>=0.27
+# Optional — agent gracefully falls back when these are unavailable.
+crewai>=0.70
+langchain-anthropic>=0.3

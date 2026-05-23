@@ -1,0 +1,7 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioPack
+metadata:
+  slug: intra-org
+  name: Intra-Org Scenarios
+  description: Agents within the same organisation
+  tags: [intra-org, same-trust-domain]

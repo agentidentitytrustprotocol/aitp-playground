@@ -1,0 +1,7 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioPack
+metadata:
+  slug: cross-cloud
+  name: Cross-Cloud Scenarios
+  description: Agents distributed across simulated cloud environments
+  tags: [cross-cloud, distributed]
