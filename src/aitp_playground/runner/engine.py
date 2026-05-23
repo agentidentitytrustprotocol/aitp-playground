@@ -275,8 +275,12 @@ class ScenarioRunner:
                 )
             a = running[step.initiator]
             b = running[step.responder]
+            # Only the explicit direction is established. Earlier versions also
+            # auto-ran the reverse direction with no scope narrowing, which
+            # silently overwrote a previously-scoped TCT when scenarios used
+            # ``requested_grants`` (e.g. scoped-capabilities). Scenarios that
+            # genuinely need both directions list two handshake steps.
             await self._ensure_trust(a, b, peers[step.responder], step.requested_grants, ctx)
-            await self._ensure_trust(b, a, peers[step.initiator], None, ctx)
             step_outputs[step.id] = {"trust": "established"}
             ctx.emit(RunEvent(type="step.complete", step_id=step.id))
             return
@@ -390,7 +394,7 @@ class ScenarioRunner:
             )
         caller_ra = running[step.agent]
         target_agent_id = self._find_capability_holder(
-            step.capability, scenario, resolved_manifests,
+            step.capability, scenario, resolved_manifests, prefer=step.agent,
         )
         if target_agent_id is None:
             raise PlaygroundError(
@@ -516,7 +520,20 @@ class ScenarioRunner:
         capability: str,
         scenario: ScenarioVersion,
         resolved_manifests: dict[str, Any],
+        prefer: Optional[str] = None,
     ) -> Optional[str]:
+        """Return the agent id that offers ``capability``.
+
+        If ``prefer`` is set and that agent offers the capability, it wins —
+        this keeps step ``agent: X, capability: Y`` as a self-execute when X
+        actually offers Y, instead of routing to some other agent that also
+        offers Y (e.g. delegation-chain has both ``researcher`` and
+        ``sub-researcher`` offering ``research.query``).
+        """
+        if prefer is not None:
+            manifest = resolved_manifests.get(prefer)
+            if manifest is not None and capability in manifest.spec.aitp.offered_caps:
+                return prefer
         for agent_spec in scenario.spec.agents:
             manifest = resolved_manifests[agent_spec.id]
             if capability in manifest.spec.aitp.offered_caps:

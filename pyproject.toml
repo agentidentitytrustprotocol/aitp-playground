@@ -16,10 +16,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-researcher = ["crewai>=0.70", "langchain-anthropic>=0.3"]
-writer = ["langchain>=0.3", "langchain-anthropic>=0.3"]
-analyzer = ["langgraph>=0.2", "langchain-anthropic>=0.3"]
-all-agents = ["crewai>=0.70", "langgraph>=0.2", "langchain>=0.3", "langchain-anthropic>=0.3"]
+researcher = ["crewai>=0.70", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
+writer = ["langchain>=0.3", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
+analyzer = ["langgraph>=0.2", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
+all-agents = [
+  "crewai>=0.70",
+  "langgraph>=0.2",
+  "langchain>=0.3",
+  "langchain-openai>=0.2",
+  "langchain-anthropic>=0.3",
+  "openai>=1.50",
+]
 dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",

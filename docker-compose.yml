@@ -1,6 +1,10 @@
 services:
   playground:
-    build: .
+    build:
+      # Parent directory so the multi-stage build can see the sibling
+      # aitp-rs/ source tree and build the SDK wheel from source.
+      context: ..
+      dockerfile: aitp-playground/Dockerfile
     image: aitp-playground:latest
     ports:
       - "8000:8000"

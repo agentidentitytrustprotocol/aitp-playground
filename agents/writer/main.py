@@ -60,7 +60,7 @@ async def do_write(payload: Any, commissioned_by: str = "self") -> dict[str, Any
     await emit_event(
         "llm.started", bootstrap, task="write", commissioned_by=commissioned_by,
     )
-    article = run_writer(findings, style=style)
+    article = await run_writer(findings, style=style)
     await emit_event("llm.complete", bootstrap, task="write")
     return {"article": article, "style": style, "agent": bootstrap["agent_id"]}
 

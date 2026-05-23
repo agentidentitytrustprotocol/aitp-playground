@@ -58,3 +58,51 @@ Agent dependencies are installed via the top-level `pyproject.toml` optional
 extras (e.g. `pip install -e .[researcher]`). Manifests intentionally do not
 carry per-agent `requirementsFile` pointers — the host adapters do not install
 dependencies on spawn.
+
+### LLM end-to-end tests (Docker)
+
+`docker-compose.test.yml` spins up two containers — one running the playground
+service with all three frameworks installed (CrewAI / LangChain / LangGraph),
+one running pytest — and exercises every scenario against **real OpenAI**
+calls under real AITP identity + trust. Stub fallbacks are detected and fail
+the test, so a green run proves the LLM path actually executed.
+
+No host prerequisites except Docker. The image is multi-stage: it compiles
+the `aitp` Python SDK from the sibling `aitp-rs/` Rust source itself, so
+you don't need maturin or a Rust toolchain on your Mac.
+
+```bash
+# 1. Provide your OpenAI key.
+cp .env.example .env
+$EDITOR .env      # set OPENAI_API_KEY=sk-...
+
+# 2. Run the suite. Exit code of the `tests` container is the result.
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+
+# 3. Tear down when done.
+docker compose -f docker-compose.test.yml down
+```
+
+The build context is the *parent* directory of this repo so the SDK source is
+visible — the compose file handles that for you. First build takes ~5 minutes
+on Apple Silicon (Rust compile); subsequent rebuilds are fast thanks to
+BuildKit cache mounts on cargo registry + target/.
+
+What it covers:
+
+| Scenario | Agents (frameworks) | Trust discovery |
+| --- | --- | --- |
+| `intra-org/research-and-write@1.0.0` | researcher (CrewAI), writer (LangChain) | static |
+| `cross-cloud/distributed-review@1.0.0` | author (CrewAI), reviewer (LangChain), approver (LangGraph) | did:web |
+| `cross-org/federated-analysis@1.0.0` | researcher (CrewAI), analyzer (LangGraph) | CP registry, with static fallback |
+
+To swap providers, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` in
+`.env`. Models are overridable via `OPENAI_MODEL` / `ANTHROPIC_MODEL`.
+
+The same test file can be run against a non-Dockerized playground:
+
+```bash
+AITP_LLM_E2E=1 PLAYGROUND_URL=http://localhost:8000 \
+  OPENAI_API_KEY=sk-... \
+  uv run pytest tests/integration/test_llm_e2e.py -v
+```

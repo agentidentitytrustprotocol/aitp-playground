@@ -170,21 +170,34 @@ class AitpServer:
         return router
 
     def verify_capability_tct(self, tct_json: str, required_grant: str) -> "aitp.TctIdentity":
-        """Verify the X-AITP-TCT header. Any failure — missing token, revoked
-        jti, bad signature, wrong audience, missing grant — produces a 403."""
+        """Verify the X-AITP-TCT header on an incoming capability call.
+
+        Two-stage verification:
+          1. Local revocation short-circuit on the TCT's ``jti``.
+          2. SDK ``verify_tct`` in presented-TCT mode: we pass the TCT's
+             own declared ``audience`` as ``expected_audience``. In v0.1
+             (RFC-AITP-0005) ``audience == subject``, so this asserts
+             "the TCT identifies this holder" — the holder's identity
+             claim. The signature check (against the issuer's pubkey
+             derived from ``tct.issuer``) is the security gate: it
+             proves WE (this resource server) actually issued the TCT.
+
+        Any failure produces a 403. The two parse failures (missing
+        token, malformed JSON) are reported distinctly so debugging is
+        easier."""
         if not tct_json:
             raise HTTPException(status_code=403, detail="missing X-AITP-TCT")
-        # Local revocation short-circuit. RFC-AITP-0008 §5 specifies the
-        # revocation check after signature verification (so a forged jti can't
-        # bypass the deny set); checking first here is fine for a demo because
-        # only callers we trusted-enough-to-handshake have jtis in the set.
         try:
-            jti = json.loads(tct_json).get("tct", {}).get("jti", "")
-        except (json.JSONDecodeError, AttributeError):
-            jti = ""
+            tct_obj = json.loads(tct_json).get("tct", {})
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise HTTPException(status_code=403, detail=f"tct malformed: {exc}") from exc
+        jti = tct_obj.get("jti", "")
         if jti and jti in self.revoked_jtis:
             raise HTTPException(status_code=403, detail=f"tct revoked: jti={jti}")
+        declared_audience = tct_obj.get("audience")
         try:
-            return self.agent.verify_tct(tct_json, required_grant)
+            return self.agent.verify_tct(
+                tct_json, required_grant, expected_audience=declared_audience,
+            )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=403, detail=f"tct rejected: {exc}") from exc

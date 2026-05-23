@@ -1,0 +1,43 @@
+# Per-Dockerfile ignore — applied when building with
+#   docker build -f aitp-playground/Dockerfile <context>
+# Picked up automatically by BuildKit when this file sits next to its
+# Dockerfile (alternative to placing .dockerignore at the context root).
+#
+# Build context is the *parent* directory containing aitp-rs/ and
+# aitp-playground/. Without this file, BuildKit hashes every file in the
+# context (~10 GB of cargo target/ + broken venv symlinks) before it can
+# even start the build.
+
+# ---- aitp-rs (Rust SDK source) --------------------------------------------
+# Build outputs — these are the 9.5 GB problem.
+aitp-rs/target/
+aitp-rs/**/target/
+# Virtualenvs (interop tests carry one with a broken python symlink).
+aitp-rs/**/.venv/
+aitp-rs/**/venv/
+aitp-rs/.git/
+aitp-rs/**/__pycache__/
+aitp-rs/**/.pytest_cache/
+aitp-rs/**/.ruff_cache/
+aitp-rs/**/node_modules/
+aitp-rs/fuzz/corpus/
+aitp-rs/fuzz/artifacts/
+
+# ---- aitp-playground ------------------------------------------------------
+# The Dockerfile only COPYs pyproject.toml + src/ + agents/ + scenarios/.
+# Everything else is dead weight in the build context.
+aitp-playground/.git/
+aitp-playground/.venv/
+aitp-playground/__pycache__/
+aitp-playground/**/__pycache__/
+aitp-playground/.pytest_cache/
+aitp-playground/.ruff_cache/
+aitp-playground/temp/
+aitp-playground/wheels/
+aitp-playground/plans/
+# tests/ is bind-mounted at runtime by docker-compose.test.yml, not baked in.
+aitp-playground/tests/
+
+# ---- sibling repos in the parent dir we never need ------------------------
+agentidentitytrustprotocol/
+agentidentitytrustprotocol.zip
