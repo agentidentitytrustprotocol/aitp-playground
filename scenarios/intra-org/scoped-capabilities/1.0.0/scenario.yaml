@@ -1,0 +1,65 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: scoped-capabilities
+  version: 1.0.0
+  name: Scoped Capabilities — Grant Intersection
+  summary: >
+    The researcher offers two capabilities: research.query and research.deep.
+    The writer initiates a handshake requesting ONLY research.query — the TCT
+    it receives carries only that grant. The writer then tries research.deep
+    and is rejected (TCT does not cover the grant). A second, in-scope call
+    to research.query succeeds. Demonstrates AITP grant intersection.
+  tags: [scoped-grants, grant-intersection, aitp-tct, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent security"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher-extended
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: scoped_handshake
+        type: handshake
+        initiator: writer
+        responder: researcher
+        requested_grants: [research.query]
+        description: >
+          Writer requests only research.query. Researcher issues a TCT scoped
+          to exactly that grant, even though researcher offers research.deep too.
+
+      - id: probe_out_of_scope
+        type: capability_probe
+        agent: writer
+        target_agent: researcher
+        capability: research.deep
+        expect_status: 403
+        input_template: "{{ inputs.topic }}"
+        description: >
+          Writer tries research.deep WITH its held TCT — the TCT only grants
+          research.query, so researcher's verify_tct rejects with 403.
+
+      - id: in_scope_call
+        agent: writer
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: research.query is granted — the call succeeds.

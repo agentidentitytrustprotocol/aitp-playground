@@ -1,0 +1,21 @@
+apiVersion: aitp.dev/v1
+kind: AgentManifest
+metadata:
+  id: researcher
+  name: Research Analyst
+  framework: crewai
+  version: 1.0.0
+spec:
+  entrypoint:
+    type: python_module
+    value: researcher.main
+  host:
+    python: python3
+    cwd: agents/researcher
+    startupTimeoutMs: 30000
+  aitp:
+    offered_caps: [research.query]
+    display_name: Research Analyst
+    identity_type: pinned_key
+    ttl_secs: 3600
+  did_web: false

@@ -1,0 +1,62 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: cross-cloud
+  scenario: distributed-review
+  version: 1.0.0
+  name: Distributed Review
+  summary: >
+    Three agents on simulated different cloud environments review and approve
+    a document. Each agent runs on a different port with a distinct origin URL,
+    simulating agents on different cloud providers or clusters.
+    did:web resolution is used for discovery.
+  tags: [cross-cloud, distributed, three-agent]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        document:
+          type: string
+          default: "Draft policy on AI agent data access"
+      required: [document]
+
+  agents:
+    - id: author
+      ref: _shared/agents/researcher
+      port_offset: 0
+      cloud: aws-us-east
+    - id: reviewer
+      ref: _shared/agents/writer
+      port_offset: 1
+      cloud: gcp-europe
+      did_web_host: "localhost:8101"
+    - id: approver
+      ref: _shared/agents/analyzer
+      port_offset: 2
+      cloud: azure-us-west
+      did_web_host: "localhost:8102"
+
+  trust:
+    boundary: cross_cloud
+    discovery: did_web
+
+  workflow:
+    steps:
+      - id: discover
+        description: Author resolves did:web for reviewer and approver
+      - id: trust
+        description: Three-way AITP handshakes (author↔reviewer, author↔approver)
+      - id: draft
+        agent: author
+        capability: research.query
+        input_template: "{{ inputs.document }}"
+      - id: review
+        agent: reviewer
+        capability: write.content
+        input_from: draft
+      - id: approve
+        agent: approver
+        capability: analyze.data
+        input_from: review

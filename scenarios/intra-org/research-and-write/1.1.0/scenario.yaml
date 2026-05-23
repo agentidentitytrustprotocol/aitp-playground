@@ -1,0 +1,52 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: research-and-write
+  version: 1.1.0
+  name: Research, Write, and Analyse
+  summary: >
+    Same as 1.0.0 but an analyst reviews the writer's output afterwards.
+  tags: [research, writing, analyst, crewai, langchain, langgraph]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent collaboration"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+    - id: analyst
+      ref: _shared/agents/analyzer
+      port_offset: 2
+
+  trust:
+    boundary: intra_org
+    discovery: static
+
+  workflow:
+    steps:
+      - id: trust
+        description: All agents perform AITP mutual handshake
+      - id: research
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+      - id: write
+        agent: writer
+        capability: write.content
+        input_from: research
+      - id: analyse
+        agent: analyst
+        capability: analyze.data
+        input_from: write

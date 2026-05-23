@@ -1,0 +1,70 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: revocation-demo
+  version: 1.0.0
+  name: Revocation Demo (RFC-AITP-0008)
+  summary: >
+    Writer establishes trust with researcher and receives a TCT. The first
+    capability call succeeds. Researcher then revokes that TCT (adds its jti
+    to a local deny set). The writer retries with the same held TCT — the
+    revocation check rejects with 403. Demonstrates fail-closed behavior:
+    once a TCT is revoked, subsequent presentations of it are denied.
+  tags: [revocation, rfc-0008, fail-closed, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent lifecycle"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: handshake
+        type: handshake
+        initiator: writer
+        responder: researcher
+        description: Writer initiates handshake; researcher issues writer a TCT.
+
+      - id: first_call
+        agent: writer
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: First call succeeds — writer's TCT is valid.
+
+      - id: revoke
+        type: revoke_tct
+        issuer: researcher
+        audience: writer
+        description: >
+          Researcher adds writer's TCT jti to its revocation set. Any future
+          capability call presenting that jti will be rejected.
+
+      - id: blocked_call
+        type: capability_probe
+        agent: writer
+        target_agent: researcher
+        capability: research.query
+        expect_status: 403
+        input_template: "{{ inputs.topic }}"
+        description: >
+          Writer retries with the same held TCT. Researcher's revocation
+          check rejects with 403 before any signature work.

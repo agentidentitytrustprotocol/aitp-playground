@@ -1,0 +1,54 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: cross-org
+  scenario: federated-analysis
+  version: 1.0.0
+  name: Federated Analysis
+  summary: >
+    Internal researcher commissions an external (cross-org) analyzer.
+    The external agent is discovered via CP registry; its identity is
+    unknown until discovery. AITP trust established before any capability call.
+  tags: [cross-org, federation, external-agent]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "market trends in enterprise AI"
+        external_capability:
+          type: string
+          default: "analyze.data"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+      org: internal
+    - id: analyzer
+      ref: _shared/agents/analyzer
+      port_offset: 1
+      org: external
+
+  trust:
+    boundary: cross_org
+    discovery: cp_registry
+
+  workflow:
+    steps:
+      - id: discover
+        description: Researcher queries CP registry for analyzer capability
+      - id: trust
+        description: AITP mutual handshake — researcher verifies external AID
+      - id: research
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+      - id: analyze
+        agent: analyzer
+        capability: analyze.data
+        input_from: research

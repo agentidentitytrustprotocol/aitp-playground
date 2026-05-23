@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build / dist
+dist/
+build/
+*.so
+*.dylib
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Misc
+tmp/
+temp/
+
+# Plans (kept local)
+plans/
+temp/
+
+# Claude
+.claude/
+CLAUDE.md
+
+# AITP runtime data
+.aitp-data/
+
+
