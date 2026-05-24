@@ -1,108 +1,152 @@
 # aitp-playground
 
-Python FastAPI service that runs **Agent Identity & Trust Protocol** (AITP)
-scenario demonstrations end-to-end with real LLM-powered agents.
+Python FastAPI service that runs **Agent Identity & Trust Protocol**
+(AITP) scenario demonstrations end-to-end with real LLM-powered agents.
 
-The service:
+What it does:
 
-1. Loads scenario packs from `scenarios/` (intra-org, cross-org, cross-cloud).
-2. Spawns agent worker subprocesses (CrewAI, LangChain, LangGraph).
-3. Each agent uses the `aitp-py` SDK to establish AITP identity and perform
-   the 4-message mutual handshake with its peers.
-4. The runner drives capability calls between agents and surfaces a trace of
-   every protocol event for observability.
+1. Loads scenario packs from `scenarios/` (`intra-org`, `cross-org`,
+   `cross-cloud`).
+2. Spawns each scenario's agents as their own Python subprocesses
+   (CrewAI / LangChain / LangGraph / custom).
+3. Each agent uses the [`aitp-py`](../aitp-rs/bindings/aitp-py) SDK to
+   build its identity and run the 4-message AITP handshake with peers.
+4. The runner drives capability calls, delegation, and revocation
+   between agents and surfaces a live event stream for observability.
 
-All protocol logic lives in the `aitp-py` SDK
-(`/Users/ajitkoti/code/agentIdenitytrustprotocol/aitp-rs/bindings/aitp-py`).
-This repo is purely a scenario-orchestration and demo harness.
+This is a demo harness, not production. All AITP protocol logic lives
+in `aitp-py`; this repo contains no envelope signing, JCS, or
+handshake state. See [docs/aitp-integration.md](docs/aitp-integration.md)
+for the boundary.
+
+## Documentation
+
+The full contributor docs are under [`docs/`](docs/):
+
+- **[Architecture](docs/architecture.md)** — components, runtime
+  topology, where AITP lives.
+- **[Getting started](docs/getting-started.md)** — install, env, first
+  scenario run, endpoint cheatsheet.
+- **[Scenarios](docs/scenarios.md)** — YAML schema, workflow step
+  types, authoring guide.
+- **[Agents](docs/agents.md)** — agent worker pattern, adding a
+  capability, adding a framework.
+- **[AITP integration](docs/aitp-integration.md)** — how the SDK is
+  called, identity / handshake / TCT / delegation / revocation.
+- **[Runner](docs/runner.md)** — engine internals, step dispatch,
+  event stream.
+- **[LLM providers](docs/llm-providers.md)** — OpenAI/Anthropic
+  selection, stubs, adding a provider.
+- **[Docker](docs/docker.md)** — multi-stage Dockerfile, compose
+  files, e2e build.
+- **[Testing](docs/testing.md)** — unit / integration / scenario / live
+  LLM tiers.
+
+Sibling repos referenced throughout:
+
+- [`agentidentitytrustprotocol/`](../agentidentitytrustprotocol/) —
+  RFCs / specifications.
+- [`aitp-rs/`](../aitp-rs/) — reference Rust runtime; ships the
+  Python SDK from `bindings/aitp-py/`.
 
 ## Quick start
 
+Two paths.
+
+### Docker (no host toolchain)
+
+The Dockerfile is multi-stage and builds the `aitp` SDK from the
+sibling Rust source for you. The compose files set the build context
+to the parent directory so the sibling repo is visible.
+
 ```bash
-# 1. Build the aitp-py extension into a venv (one-time):
+cp .env.example .env
+$EDITOR .env                          # set OPENAI_API_KEY=sk-... (optional for stub runs)
+
+# Just run the service:
+docker compose up --build
+
+# Or run the full LLM end-to-end test suite (three scenarios, real
+# OpenAI, real AITP trust). Exit code of the `tests` container is the
+# result.
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+```
+
+First image build is ~5 minutes on Apple Silicon (Rust cold compile);
+subsequent rebuilds are seconds thanks to BuildKit cache mounts.
+
+### Native (requires Rust + maturin once)
+
+```bash
+# 1. Build the aitp-py extension into your active venv (one-time).
 cd ../aitp-rs/bindings/aitp-py
 maturin develop --release
 
-# 2. Run the service from this repo:
+# 2. Install the service.
 cd ../../../aitp-playground
-uv sync                              # or: pip install -e .
+uv sync                               # or: pip install -e .
+
+# 3. Run.
 uv run uvicorn aitp_playground.main:app --reload --port 8000
 
-# 3. Trigger a scenario:
+# 4. Trigger a scenario.
 curl -X POST http://localhost:8000/runs \
   -H "Content-Type: application/json" \
   -d '{"scenario_ref":"intra-org/research-and-write@1.0.0",
        "inputs":{"topic":"AI agent trust protocols"}}'
+
+# 5. Watch live events (SSE) or poll:
+curl -N http://localhost:8000/runs/<run_id>/events
+curl    http://localhost:8000/runs/<run_id> | jq .
 ```
 
-See `CLAUDE.md` for invariants and architecture, `plans/aitp-playground-python.md`
-for the original design document, and `scenarios/` for the available demos.
-
-## Testing
+Agent extras (CrewAI / LangChain / LangGraph + the OpenAI/Anthropic
+clients) are optional; without them the agents fall back to
+deterministic stubs and AITP handshakes still run end-to-end. Install
+when you want real LLM output:
 
 ```bash
-# Unit + integration suite (default — fast, no subprocesses)
-uv run pytest tests/
+pip install -e ".[all-agents]"
+```
 
-# Live end-to-end: spawns real agent workers, runs the intra-org scenario,
-# and asserts the expected AITP events fired. Takes ~30-45 seconds with stub
-# agents (no LLM keys required); longer with real LLMs configured.
+See [docs/getting-started.md](docs/getting-started.md) for the full
+env reference and the endpoint cheatsheet.
+
+## Repo map
+
+```
+aitp-playground/
+├── docs/                  # contributor documentation (start here)
+├── src/aitp_playground/   # FastAPI service — no AITP protocol logic here
+│   ├── api/               # routes: /runs /scenarios /packs /agents /healthz
+│   ├── registry/          # YAML pack loader + index
+│   ├── runner/            # scenario engine + run store + SSE
+│   ├── hosting/           # subprocess spawn, identity, port alloc, adapters
+│   ├── trust/             # peer resolver (static / cp_registry / did_web)
+│   └── cp_client/         # optional Control Plane client
+├── agents/                # agent subprocess workers
+│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm
+│   ├── researcher/        # CrewAI worker
+│   ├── writer/            # LangChain worker
+│   └── analyzer/          # LangGraph worker
+├── scenarios/             # YAML scenario packs (registry on disk)
+└── tests/                 # unit / integration / scenario / e2e
+```
+
+## Tests
+
+```bash
+# Default unit suite — fast, in-process.
+uv run pytest tests/unit/
+
+# Runner integration — spawns real subprocesses, no LLM keys needed.
 AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v
+
+# Live LLM end-to-end (one-command via Docker, see above).
 ```
 
-The `AITP_E2E=1` gate exists because subprocess spawn + handshake is slow and
-flaky on resource-constrained CI; opt in explicitly when you want runner
-regression coverage.
+Full details: [docs/testing.md](docs/testing.md).
 
-Agent dependencies are installed via the top-level `pyproject.toml` optional
-extras (e.g. `pip install -e .[researcher]`). Manifests intentionally do not
-carry per-agent `requirementsFile` pointers — the host adapters do not install
-dependencies on spawn.
+## License
 
-### LLM end-to-end tests (Docker)
-
-`docker-compose.test.yml` spins up two containers — one running the playground
-service with all three frameworks installed (CrewAI / LangChain / LangGraph),
-one running pytest — and exercises every scenario against **real OpenAI**
-calls under real AITP identity + trust. Stub fallbacks are detected and fail
-the test, so a green run proves the LLM path actually executed.
-
-No host prerequisites except Docker. The image is multi-stage: it compiles
-the `aitp` Python SDK from the sibling `aitp-rs/` Rust source itself, so
-you don't need maturin or a Rust toolchain on your Mac.
-
-```bash
-# 1. Provide your OpenAI key.
-cp .env.example .env
-$EDITOR .env      # set OPENAI_API_KEY=sk-...
-
-# 2. Run the suite. Exit code of the `tests` container is the result.
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
-
-# 3. Tear down when done.
-docker compose -f docker-compose.test.yml down
-```
-
-The build context is the *parent* directory of this repo so the SDK source is
-visible — the compose file handles that for you. First build takes ~5 minutes
-on Apple Silicon (Rust compile); subsequent rebuilds are fast thanks to
-BuildKit cache mounts on cargo registry + target/.
-
-What it covers:
-
-| Scenario | Agents (frameworks) | Trust discovery |
-| --- | --- | --- |
-| `intra-org/research-and-write@1.0.0` | researcher (CrewAI), writer (LangChain) | static |
-| `cross-cloud/distributed-review@1.0.0` | author (CrewAI), reviewer (LangChain), approver (LangGraph) | did:web |
-| `cross-org/federated-analysis@1.0.0` | researcher (CrewAI), analyzer (LangGraph) | CP registry, with static fallback |
-
-To swap providers, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` in
-`.env`. Models are overridable via `OPENAI_MODEL` / `ANTHROPIC_MODEL`.
-
-The same test file can be run against a non-Dockerized playground:
-
-```bash
-AITP_LLM_E2E=1 PLAYGROUND_URL=http://localhost:8000 \
-  OPENAI_API_KEY=sk-... \
-  uv run pytest tests/integration/test_llm_e2e.py -v
-```
+See [LICENSE](LICENSE).
