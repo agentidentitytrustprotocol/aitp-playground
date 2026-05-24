@@ -64,7 +64,7 @@ async def do_analyze(payload: Any, commissioned_by: str = "self") -> dict[str, A
     await emit_event(
         "llm.started", bootstrap, task="analyze", commissioned_by=commissioned_by,
     )
-    result = run_analyzer(input_text)
+    result = await run_analyzer(input_text)
     await emit_event("llm.complete", bootstrap, task="analyze")
     return {**result, "agent": bootstrap["agent_id"]}
 

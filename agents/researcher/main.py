@@ -65,7 +65,9 @@ async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, 
         topic=topic, commissioned_by=commissioned_by,
     )
     crew = build_crew({"topic": topic})
-    result = crew.kickoff()
+    # CrewAI ≥1.0 refuses sync kickoff() inside a running event loop. Use the
+    # async variant when available; the offline stub only has the sync one.
+    result = await crew.kickoff_async() if hasattr(crew, "kickoff_async") else crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
     await emit_event("llm.complete", bootstrap, task="research", topic=topic)
     return {"findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}
@@ -78,7 +80,7 @@ async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[
         topic=topic, commissioned_by=commissioned_by,
     )
     crew = build_crew({"topic": topic, "depth": "deep"})
-    result = crew.kickoff()
+    result = await crew.kickoff_async() if hasattr(crew, "kickoff_async") else crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
     await emit_event("llm.complete", bootstrap, task="research.deep", topic=topic)
     return {"deep_findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}

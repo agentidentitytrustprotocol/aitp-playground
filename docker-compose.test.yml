@@ -1,0 +1,67 @@
+# End-to-end test stack: real CrewAI/LangChain/LangGraph agents calling
+# OpenAI, exercising AITP identity + trust. One command, no host prereqs
+# beyond Docker.
+#
+#   cp .env.example .env && $EDITOR .env  # set OPENAI_API_KEY
+#   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+#
+# Exit code of the `tests` container is the suite result.
+#
+# The Dockerfile is multi-stage: stage 1 builds the aitp SDK wheel from
+# the sibling aitp-rs/ Rust source (via maturin), stage 2 is the slim
+# runtime. That's why the build context is the parent directory.
+
+services:
+  playground:
+    build:
+      context: ..
+      dockerfile: aitp-playground/Dockerfile
+      args:
+        INSTALL_EXTRAS: "all-agents"
+    image: aitp-playground:e2e
+    env_file:
+      - .env
+    environment:
+      # Agent subprocesses run inside this container; their inter-agent
+      # traffic stays on localhost. The tests container talks to us via
+      # the compose-network DNS name "playground".
+      PLAYGROUND_BASE_URL: "http://localhost:8000"
+      LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    expose:
+      - "8000"
+    ports:
+      # Exposed for ad-hoc curl/debug from the host while tests run.
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  tests:
+    build:
+      context: ..
+      dockerfile: aitp-playground/Dockerfile
+      args:
+        INSTALL_EXTRAS: "all-agents,dev"
+    image: aitp-playground:e2e-tests
+    depends_on:
+      playground:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      AITP_LLM_E2E: "1"
+      PLAYGROUND_URL: "http://playground:8000"
+      LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
+    volumes:
+      # Mount tests so iteration doesn't require rebuilding the image.
+      - ./tests:/app/tests:ro
+    working_dir: /app
+    command:
+      - pytest
+      - -v
+      - -s
+      - tests/integration/test_llm_e2e.py

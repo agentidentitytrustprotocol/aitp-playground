@@ -1,12 +1,13 @@
 """CrewAI research crew — with a deterministic fallback if CrewAI isn't installed."""
 from __future__ import annotations
 
-import os
 from typing import Any
 
+from llm import build_crewai_llm, select_provider  # type: ignore[import-not-found]
 
-def _has_crewai_and_key() -> bool:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+
+def _crewai_ready() -> bool:
+    if select_provider() is None:
         return False
     try:
         import crewai  # noqa: F401
@@ -27,13 +28,15 @@ def build_crew(inputs: dict[str, Any]):
     if depth not in ("short", "deep"):
         depth = "short"
 
-    if _has_crewai_and_key():
+    if _crewai_ready():
         from crewai import Agent, Crew, Process, Task  # type: ignore
 
+        llm = build_crewai_llm()
         researcher = Agent(
             role="Senior Research Analyst",
             goal=f"Surface high-signal facts and recent developments about: {topic}",
             backstory="Veteran analyst with a strong nose for primary sources.",
+            llm=llm,
             verbose=False,
             allow_delegation=False,
         )
