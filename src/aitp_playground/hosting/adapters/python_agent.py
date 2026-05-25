@@ -1,6 +1,8 @@
 """Generic Python host adapter shared by every framework."""
 from __future__ import annotations
 
+import os
+
 from ...config import Settings
 from ...registry.models import AgentManifest
 from .base import AgentFramework, AgentHostAdapter, ManifestValidation, PreparedLaunch
@@ -41,9 +43,23 @@ class PythonAgentAdapter(AgentHostAdapter):
     ) -> PreparedLaunch:
         host = manifest.spec.host
         return PreparedLaunch(
-            command=host.get("python", config.agent_python),
+            command=self._resolve_python(host, config),
             args=self._entrypoint_args(manifest),
             env=self._build_env(manifest, bootstrap_file, port),
             cwd=self._resolve_cwd(manifest, config),
             startup_timeout_ms=host.get("startupTimeoutMs", 30_000),
         )
+
+    @staticmethod
+    def _resolve_python(host: dict, config: Settings) -> str:
+        """Pick the python interpreter to launch the agent.
+
+        Manifests may pin an absolute path (e.g. a host-side venv) so that
+        local `uv run` workflows pick up the right env. In a packaged
+        container that absolute path won't exist; fall back to
+        `config.agent_python` so the same manifest works inside Docker.
+        """
+        pinned = host.get("python")
+        if pinned and os.path.isabs(pinned) and not os.path.exists(pinned):
+            return config.agent_python
+        return pinned or config.agent_python

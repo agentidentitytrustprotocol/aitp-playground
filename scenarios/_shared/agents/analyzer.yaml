@@ -10,7 +10,7 @@ spec:
     type: python_module
     value: analyzer.main
   host:
-    python: python3
+    python: /Users/ajitkoti/code/agentIdenitytrustprotocol/aitp-playground/.venv/bin/python
     cwd: agents/analyzer
     startupTimeoutMs: 30000
   aitp:
