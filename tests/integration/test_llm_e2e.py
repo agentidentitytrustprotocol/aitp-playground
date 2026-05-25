@@ -1,11 +1,12 @@
 """End-to-end test: real CrewAI / LangChain / LangGraph agents, real OpenAI
-calls, real AITP identity + trust.
+calls, real AITP identity + trust, real Control Plane ingestion.
 
 Gated on ``AITP_LLM_E2E=1`` so it stays off the default suite. Intended to be
 run inside the ``tests`` container of ``docker-compose.test.yml``, which sets:
 
     AITP_LLM_E2E=1
     PLAYGROUND_URL=http://playground:8000
+    CP_URL=http://aitp-cp:4000
     OPENAI_API_KEY=...           (from .env)
     LLM_PROVIDER=openai
 
@@ -15,6 +16,8 @@ Each scenario exercise:
   3. Calls OpenAI through the framework's native LLM client.
   4. Asserts trust events fired AND the output text is from the real LLM
      (not the deterministic stub baked into each agent for offline runs).
+  5. Confirms the run's events made it to the Control Plane's audit store
+     (``GET /api/events/history?run_id=<id>``).
 """
 from __future__ import annotations
 
@@ -31,6 +34,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 PLAYGROUND_URL = os.environ.get("PLAYGROUND_URL", "http://localhost:8000")
+CP_URL = os.environ.get("CP_URL", "http://localhost:4000")
+# `next start` keeps the CP in NODE_ENV=production, where its middleware
+# requires a Bearer token on non-public routes. /api/events/history is
+# non-public, so we pass the same key the playground uses via CP_API_KEY.
+CP_API_KEY = os.environ.get("CP_API_KEY", "")
+# Engine fires cp.ingest_events as a background task on run.complete. The CP
+# ingest path is synchronous (write to audit_events) but the playground task
+# loop may not have flushed by the time GET /runs/{id} returns terminal.
+_CP_INGEST_POLL_SECS = 15
+_CP_REQUIRED_EVENT_TYPES = {"run.started", "run.complete"}
 
 _TERMINAL = {"success", "failed", "cancelled"}
 _RUN_DEADLINE_SECS = 300  # multi-agent CrewAI flows + OpenAI can take a while
@@ -91,6 +104,43 @@ def client() -> httpx.Client:
         yield c
 
 
+@pytest.fixture(scope="module")
+def cp_client() -> httpx.Client:
+    """Probe the CP once at module setup. If it isn't reachable, fail loud
+    rather than silently letting the playground's degraded-mode mask a broken
+    docker-compose wiring."""
+    headers = {"Authorization": f"Bearer {CP_API_KEY}"} if CP_API_KEY else {}
+    with httpx.Client(base_url=CP_URL, timeout=10.0, headers=headers) as c:
+        try:
+            r = c.get("/api/readyz")
+        except httpx.HTTPError as exc:
+            pytest.fail(f"CP not reachable at {CP_URL}: {exc}")
+        assert r.status_code == 200, (
+            f"CP /api/readyz returned {r.status_code}: {r.text}"
+        )
+        yield c
+
+
+def _wait_for_cp_events(cp: httpx.Client, run_id: str) -> list[dict]:
+    """Poll the CP audit-history endpoint until events for this run land,
+    or _CP_INGEST_POLL_SECS elapses."""
+    deadline = time.time() + _CP_INGEST_POLL_SECS
+    last: list[dict] = []
+    while time.time() < deadline:
+        r = cp.get("/api/events/history", params={"run_id": run_id, "limit": 200})
+        assert r.status_code == 200, (
+            f"CP /api/events/history failed: {r.status_code} {r.text}"
+        )
+        last = r.json().get("events", [])
+        # Wait for the terminal "run.complete" event specifically — the engine
+        # fires the ingest task only after that emit, so its presence is the
+        # signal that ingest_events ran.
+        if any(e.get("type") == "run.complete" for e in last):
+            return last
+        time.sleep(0.5)
+    return last
+
+
 def _start_run(client: httpx.Client, case: ScenarioCase) -> str:
     r = client.post("/runs", json={"scenario_ref": case.ref, "inputs": case.inputs})
     assert r.status_code == 202, f"POST /runs failed: {r.status_code} {r.text}"
@@ -133,7 +183,7 @@ def _output_text(step_output) -> str:
 
 @pytest.mark.parametrize("case", SCENARIOS, ids=lambda c: c.ref)
 def test_scenario_runs_real_llm_under_aitp_trust(
-    client: httpx.Client, case: ScenarioCase
+    client: httpx.Client, cp_client: httpx.Client, case: ScenarioCase
 ) -> None:
     run_id = _start_run(client, case)
     body = _wait_for_terminal(client, run_id)
@@ -177,3 +227,15 @@ def test_scenario_runs_real_llm_under_aitp_trust(
             f"stub marker — the deterministic fallback ran instead of OpenAI. "
             f"Check OPENAI_API_KEY and LLM_PROVIDER inside the playground container."
         )
+
+    # Control-plane ingestion: the playground's cp_client.ingest_events ran
+    # on run.complete. Confirm the events actually landed in the CP audit
+    # store rather than being silently swallowed by the graceful-degrade path.
+    cp_events = _wait_for_cp_events(cp_client, run_id)
+    cp_types = {e.get("type") for e in cp_events}
+    missing_cp = _CP_REQUIRED_EVENT_TYPES - cp_types
+    assert not missing_cp, (
+        f"{case.ref}: CP did not ingest required event types {sorted(missing_cp)} "
+        f"for run_id={run_id} (got {sorted(cp_types)}). "
+        f"Check CP_BASE_URL on the playground container and CP /api/events errors."
+    )

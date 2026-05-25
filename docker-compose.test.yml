@@ -1,17 +1,101 @@
-# End-to-end test stack: real CrewAI/LangChain/LangGraph agents calling
-# OpenAI, exercising AITP identity + trust. One command, no host prereqs
-# beyond Docker.
+# End-to-end test stack: real CrewAI / LangChain / LangGraph agents calling
+# OpenAI, exercising AITP identity + trust against a real Control Plane.
+# One command, no host prereqs beyond Docker.
 #
-#   cp .env.example .env && $EDITOR .env  # set OPENAI_API_KEY
+#   cp .env.example .env && $EDITOR .env   # set OPENAI_API_KEY
 #   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 #
 # Exit code of the `tests` container is the suite result.
 #
-# The Dockerfile is multi-stage: stage 1 builds the aitp SDK wheel from
-# the sibling aitp-rs/ Rust source (via maturin), stage 2 is the slim
-# runtime. That's why the build context is the parent directory.
+# Topology:
+#   cp-postgres  → Postgres 16 (ephemeral data, no volume; aitp-cp/drizzle/
+#                  mounted at /docker-entrypoint-initdb.d so the schema is
+#                  applied automatically on first boot)
+#   aitp-cp      → Next.js control plane (built from sibling ../aitp-cp)
+#   playground   → FastAPI scenario runner (built from this repo)
+#   tests        → pytest container running tests/integration/test_*_e2e.py
+#
+# The playground talks to aitp-cp via the compose network DNS name
+# "aitp-cp"; CP_BASE_URL is set accordingly. Agent subprocesses still
+# run inside the playground container and talk over localhost.
 
 services:
+  cp-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aitp_cp
+    expose:
+      - "5432"
+    volumes:
+      # postgres:16-alpine's entrypoint runs every *.sql / *.sh in
+      # /docker-entrypoint-initdb.d/ in lexicographic order on the first
+      # boot (when PGDATA is empty). Mount the drizzle migrations there so
+      # the schema is in place by the time the healthcheck flips green.
+      #
+      # We do not declare a named volume for the data dir, so every
+      # `docker compose down -v` (or even just a fresh `up` after `down`)
+      # gives us an empty PGDATA and re-runs the migrations. That's the
+      # behavior we want for a test stack.
+      #
+      # Subdirs (drizzle/manual/, drizzle/meta/) and the README are
+      # skipped by the entrypoint's "*.sql" glob.
+      - ../aitp-cp/drizzle:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # pg_isready flips green AFTER the initdb scripts have all applied,
+      # so dependents can rely on the schema being live.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aitp_cp"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  aitp-cp:
+    build:
+      # See aitp-playground/Dockerfile.cp-e2e for why we use a vendored
+      # Dockerfile rather than aitp-cp/Dockerfile directly: the sibling
+      # Dockerfile assumes the napi binding ships pre-built for every
+      # platform, and the only checked-in .node is darwin-arm64.
+      context: ..
+      dockerfile: aitp-playground/Dockerfile.cp-e2e
+    image: aitp-cp:e2e
+    depends_on:
+      cp-postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: "development"
+      PORT: "4000"
+      CP_BASE_URL: "http://aitp-cp:4000"
+      DATABASE_URL: "postgres://postgres:postgres@cp-postgres:5432/aitp_cp"
+      # Required (>=32 chars). Test-only constant — never use outside this stack.
+      ENROLLMENT_SECRET: "test-enrollment-secret-do-not-use-in-prod-0123456789"
+      # `next start` forces NODE_ENV=production regardless of what we pass
+      # below, so the CP's auth middleware enforces API_KEYS on non-public
+      # routes (e.g. /api/events, /api/events/history). Provide a test key
+      # and pass the same key from the playground (CP_API_KEY) and from the
+      # test container's Authorization header.
+      API_KEYS: "test-api-key-do-not-use-in-prod-0123456789abcdef"
+      CORS_ORIGIN: "*"
+      LOG_LEVEL: "info"
+    expose:
+      - "4000"
+    # No host port mapping. The tests + playground reach CP via the compose
+    # network DNS name. (Map to a host port locally if you need to curl
+    # /api/readyz from your laptop while tests run.)
+    healthcheck:
+      # /api/readyz returns 200 only once the DB is reachable AND drizzle has
+      # been applied. node:20-slim has no curl/wget, but node 20 has fetch().
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:4000/api/readyz').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
   playground:
     build:
       context: ..
@@ -19,6 +103,9 @@ services:
       args:
         INSTALL_EXTRAS: "all-agents"
     image: aitp-playground:e2e
+    depends_on:
+      aitp-cp:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -28,11 +115,24 @@ services:
       PLAYGROUND_BASE_URL: "http://localhost:8000"
       LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      # Override the local-dev .env value (which points at a host-side
+      # venv) so agent subprocesses inside the container use the image's
+      # python. The python_agent adapter also falls back to this value
+      # whenever a manifest pins an absolute path that doesn't exist in
+      # the container, but setting it explicitly avoids ever depending
+      # on that fallback.
+      AGENT_PYTHON: "python3"
+      # Wire the playground to the real CP. cp_client posts ingest events here
+      # and the LLM e2e tests then query /api/events/history?run_id=… to
+      # confirm the events actually landed.
+      CP_BASE_URL: "http://aitp-cp:4000"
+      CP_API_KEY: "test-api-key-do-not-use-in-prod-0123456789abcdef"
+      CP_TIMEOUT_MS: "10000"
     expose:
       - "8000"
-    ports:
-      # Exposed for ad-hoc curl/debug from the host while tests run.
-      - "8000:8000"
+    # No host port mapping. The tests container reaches the playground via
+    # the compose network DNS name "playground". (Map a host port locally
+    # if you need to curl /healthz from your laptop while tests run.)
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 5s
@@ -50,11 +150,18 @@ services:
     depends_on:
       playground:
         condition: service_healthy
+      aitp-cp:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       AITP_LLM_E2E: "1"
+      AITP_PROTOCOL_E2E: "1"
       PLAYGROUND_URL: "http://playground:8000"
+      CP_URL: "http://aitp-cp:4000"
+      # Same key as `API_KEYS` on the CP. Tests send this as a Bearer token
+      # when hitting non-public CP endpoints (e.g. /api/events/history).
+      CP_API_KEY: "test-api-key-do-not-use-in-prod-0123456789abcdef"
       LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
     volumes:
       # Mount tests so iteration doesn't require rebuilding the image.
@@ -65,3 +172,4 @@ services:
       - -v
       - -s
       - tests/integration/test_llm_e2e.py
+      - tests/integration/test_protocol_e2e.py

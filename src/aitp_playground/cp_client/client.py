@@ -30,10 +30,10 @@ class CpClient:
         return self.settings.cp_timeout_ms / 1000
 
     async def discover_by_capability(self, capability: str) -> list[dict[str, Any]]:
-        """GET /registry/agents?capability=... — returns [] if CP disabled or fails."""
+        """GET /api/registry/agents?capability=... — returns [] if CP disabled or fails."""
         if not self.enabled:
             return []
-        url = f"{self.settings.cp_base_url.rstrip('/')}/registry/agents"
+        url = f"{self.settings.cp_base_url.rstrip('/')}/api/registry/agents"
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 r = await client.get(url, params={"capability": capability}, headers=self._headers())
@@ -48,10 +48,10 @@ class CpClient:
         return []
 
     async def ingest_events(self, events: list[Any]) -> None:
-        """POST /events — fire-and-forget."""
+        """POST /api/events — fire-and-forget."""
         if not self.enabled or not events:
             return
-        url = f"{self.settings.cp_base_url.rstrip('/')}/events"
+        url = f"{self.settings.cp_base_url.rstrip('/')}/api/events"
         payload = {"events": [e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in events]}
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:

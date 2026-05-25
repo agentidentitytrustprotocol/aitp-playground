@@ -10,7 +10,7 @@ spec:
     type: python_module
     value: writer.main
   host:
-    python: python3
+    python: /Users/ajitkoti/code/agentIdenitytrustprotocol/aitp-playground/.venv/bin/python
     cwd: agents/writer
     startupTimeoutMs: 30000
   aitp:

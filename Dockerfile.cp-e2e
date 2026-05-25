@@ -1,0 +1,126 @@
+# syntax=docker/dockerfile:1.7-labs
+#
+# Self-contained CP image used by docker-compose.test.yml.
+#
+# The sibling aitp-cp/Dockerfile assumes the napi binding at
+# aitp-rs/bindings/aitp-node ships pre-built .node files for every target
+# platform — but the checkout only has aitp.darwin-arm64.node, so a
+# `docker build` on a linux target ("Cannot find module 'aitp-linux-arm64-gnu'")
+# fails immediately. Rather than mutate the sibling repo, we vendor a
+# replacement Dockerfile here that:
+#
+#   stage 1 — napi-builder — compiles the aitp napi binding for the build
+#             platform (rustup + napi-cli, similar pattern to the
+#             playground's own sdk-builder stage).
+#   stage 2 — deps         — npm ci over the CP package, with the freshly
+#             built .node file dropped next to index.js.
+#   stage 3 — builder      — next build.
+#   stage 4 — runner       — slim runtime, identical to the upstream CP
+#             runner stage.
+#
+# Build context expectation: the parent directory of this repo, so the
+# sibling aitp-cp/ and aitp-rs/ checkouts are both visible. docker-
+# compose.test.yml sets `context: ..` accordingly.
+
+# ============================================================================
+# Stage 1 — build the aitp napi binding from Rust source.
+# ============================================================================
+FROM node:20-slim AS napi-builder
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates build-essential pkg-config git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
+
+# Pull the aitp-rs source tree (binding + all path-dependency crates).
+# Exclude target/ (huge), .git (huge), .venv (carries dangling python
+# symlinks that break BuildKit's checksum step), and node_modules (would
+# leak the host's darwin binding into a linux build).
+COPY --exclude=**/target --exclude=**/.git \
+     --exclude=**/.venv --exclude=**/node_modules \
+     aitp-rs/ /workspace/aitp-rs/
+
+WORKDIR /workspace/aitp-rs/bindings/aitp-node
+
+# @napi-rs/cli is already in devDependencies; npm install picks it up.
+RUN npm install
+
+# Build the binding for whatever platform Docker is targeting. napi-rs
+# auto-detects (e.g. aitp.linux-arm64-gnu.node on linux/arm64) and writes
+# the .node file into the cwd, which is exactly where index.js's loader
+# expects it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/workspace/aitp-rs/bindings/aitp-node/target \
+    npx --no-install napi build --platform --release && \
+    ls -la aitp.*.node
+
+# ============================================================================
+# Stage 2 — install CP dependencies. Mirrors aitp-cp/Dockerfile's deps stage,
+# but with the freshly-built .node file dropped in alongside index.js so the
+# autoloader resolves it instead of trying to require('aitp-linux-arm64-gnu').
+# ============================================================================
+FROM node:20-slim AS deps
+WORKDIR /workspace/aitp-cp
+COPY aitp-cp/package.json aitp-cp/package-lock.json* ./
+# Bring the aitp-rs binding source over, but skip the 800MB Rust target/
+# and the host's node_modules (which can carry a darwin-only .node).
+COPY --exclude=**/target --exclude=**/node_modules \
+     aitp-rs/bindings/aitp-node /workspace/aitp-rs/bindings/aitp-node
+# Overlay the platform-appropriate .node file from the napi build so that
+# index.js's autoloader resolves to it.
+COPY --from=napi-builder /workspace/aitp-rs/bindings/aitp-node/*.node \
+     /workspace/aitp-rs/bindings/aitp-node/
+RUN npm ci --omit=dev=false
+
+# ============================================================================
+# Stage 3 — next build.
+# ============================================================================
+FROM node:20-slim AS builder
+WORKDIR /workspace/aitp-cp
+COPY --from=deps /workspace/aitp-rs/bindings/aitp-node /workspace/aitp-rs/bindings/aitp-node
+COPY --from=deps /workspace/aitp-cp/node_modules ./node_modules
+COPY aitp-cp/ ./
+ENV NEXT_TELEMETRY_DISABLED=1
+# Build-time env: Next.js evaluates route modules during "Collecting page
+# data", and a few of those modules touch config defaults. Provide minimal
+# placeholders so the build doesn't blow up on missing secrets; the real
+# runtime values come from docker-compose.test.yml.
+ENV DATABASE_URL=postgres://placeholder:placeholder@localhost:5432/placeholder \
+    ENROLLMENT_SECRET=placeholder-build-time-secret-not-used-at-runtime
+RUN npm run build
+
+# ============================================================================
+# Stage 4 — runtime.
+#
+# The upstream CP Dockerfile copies .next/standalone, but aitp-cp's
+# next.config.ts does NOT set `output: 'standalone'` — so that copy would
+# fail. We use a plain `next start` here instead. It's a slightly fatter
+# image than the standalone form, but only matters for image size, not
+# functionality.
+# ============================================================================
+FROM node:20-slim AS runner
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=4000
+
+# Bring over the built app + node_modules + the napi binding location.
+COPY --from=builder /workspace/aitp-cp/.next /app/.next
+COPY --from=builder /workspace/aitp-cp/node_modules /app/node_modules
+COPY --from=builder /workspace/aitp-cp/package.json /app/package.json
+COPY --from=builder /workspace/aitp-cp/next.config.ts /app/next.config.ts
+# `next start` reads tsconfig at runtime to load next.config.ts (TypeScript
+# config file). Bring that too.
+COPY --from=builder /workspace/aitp-cp/tsconfig.json /app/tsconfig.json
+# The aitp package is `file:../aitp-rs/bindings/aitp-node` in CP's
+# package.json; preserve that relative path so resolution still works.
+COPY --from=builder /workspace/aitp-rs/bindings/aitp-node /workspace/aitp-rs/bindings/aitp-node
+
+EXPOSE 4000
+CMD ["npx", "next", "start", "--port", "4000"]
