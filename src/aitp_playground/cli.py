@@ -54,7 +54,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 and (len(rel) < 2 or s.metadata.scenario == rel[1])
             ]
         for sv in scenarios:
-            print(f"ok  {sv.metadata.pack}/{sv.metadata.scenario}@{sv.metadata.version}")
+            ref = f"{sv.metadata.pack}/{sv.metadata.scenario}@{sv.metadata.version}"
+            print(f"ok  {ref}")
+            for tpl in reg.list_templates(ref):
+                print(f"ok    template {tpl.metadata.name}")
         if not filter_to_subset:
             for ref in reg.all_agent_refs():
                 print(f"ok  agent {ref}")
@@ -66,7 +69,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def cmd_dry_run(args: argparse.Namespace) -> int:
     reg = _registry()
-    sv = reg.get_scenario(args.scenario_ref)
+    template = getattr(args, "template", None)
+    try:
+        sv = reg.get_scenario_resolved(args.scenario_ref, template=template)
+    except PlaygroundError as exc:
+        print(f"FAIL  {exc}", file=sys.stderr)
+        return 1
     inputs = json.loads(args.inputs) if args.inputs else {}
     schema = sv.spec.inputs.schema_
     if schema:
@@ -76,7 +84,10 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
             print(f"inputs INVALID: {exc.message}", file=sys.stderr)
             return 1
     print(f"Scenario: {sv.metadata.name}")
-    print(f"Trust:    boundary={sv.spec.trust.boundary} discovery={sv.spec.trust.discovery}")
+    print(
+        f"Trust:    boundary={sv.spec.trust.boundary} "
+        f"discovery={sv.spec.trust.discovery} eager={sv.spec.trust.eager}"
+    )
     print("Agents:")
     for a in sv.spec.agents:
         m = reg.get_agent_manifest(a.ref)
@@ -85,6 +96,13 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
     for s in sv.spec.workflow.steps:
         marker = f"{s.agent}.{s.capability}" if s.agent and s.capability else "descriptive"
         print(f"  - {s.id:10s} {marker}")
+    if template is None:
+        available = reg.list_templates(args.scenario_ref)
+        if available:
+            print("Templates available (pass --template <name> to merge):")
+            for t in available:
+                summary = t.metadata.summary or "(no summary)"
+                print(f"  - {t.metadata.name}: {summary.strip()}")
     return 0
 
 
@@ -212,6 +230,60 @@ def cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def _lint_scenario(sv, ref_label: str, reg: RegistryService) -> Iterable[str]:
+    """Yield step-level findings for ``sv`` (a base or template-merged scenario).
+
+    Shared between the base-scenario lint pass and the per-template pass —
+    the only difference is the ref_label, which is prefixed with the
+    template name when applicable so findings point back at the right file.
+    """
+    offered: dict[str, set[str]] = {}
+    agent_ids = {a.id for a in sv.spec.agents}
+    for agent in sv.spec.agents:
+        try:
+            manifest = reg.get_agent_manifest(agent.ref)
+        except PlaygroundError as exc:
+            yield f"{ref_label}: agent {agent.id} ref={agent.ref!r} does not resolve ({exc})"
+            continue
+        offered[agent.id] = set(manifest.spec.aitp.offered_caps)
+
+    prior_step_ids: set[str] = set()
+    for step in sv.spec.workflow.steps:
+        stype = step.type or ("workflow" if (step.agent and step.capability) else "meta")
+        for f in (
+            "agent", "target_agent", "initiator", "responder",
+            "delegator", "delegatee", "via_peer", "issuer", "audience",
+        ):
+            val = getattr(step, f, None)
+            if val and val not in agent_ids:
+                yield f"{ref_label} step {step.id}: {f}={val!r} not in agents {sorted(agent_ids)}"
+        if step.capability:
+            offering = {a for a, caps in offered.items() if step.capability in caps}
+            if not offering:
+                yield (
+                    f"{ref_label} step {step.id}: capability {step.capability!r} "
+                    f"not offered by any agent in this scenario"
+                )
+        if stype == "handshake" and step.requested_grants and step.responder in offered:
+            missing = set(step.requested_grants) - offered[step.responder]
+            if missing:
+                yield (
+                    f"{ref_label} step {step.id}: requested_grants {sorted(missing)} "
+                    f"not offered by responder {step.responder}"
+                )
+        if step.via_delegation and step.via_delegation not in prior_step_ids:
+            yield (
+                f"{ref_label} step {step.id}: via_delegation={step.via_delegation!r} "
+                f"does not reference an earlier step"
+            )
+        if step.input_from and step.input_from not in prior_step_ids:
+            yield (
+                f"{ref_label} step {step.id}: input_from={step.input_from!r} "
+                f"does not reference an earlier step"
+            )
+        prior_step_ids.add(step.id)
+
+
 def _lint_pack_dir(pack_dir: Path, reg: RegistryService) -> Iterable[str]:
     """Yield lint findings for every scenario under ``pack_dir``."""
     pack_slug = pack_dir.name
@@ -244,57 +316,20 @@ def _lint_pack_dir(pack_dir: Path, reg: RegistryService) -> Iterable[str]:
         if not sv.metadata.summary:
             yield f"{ref}: summary is empty (operators rely on it in list views)"
 
-        offered: dict[str, set[str]] = {}
-        agent_ids = {a.id for a in sv.spec.agents}
-        for agent in sv.spec.agents:
-            try:
-                manifest = reg.get_agent_manifest(agent.ref)
-            except PlaygroundError as exc:
-                yield f"{ref}: agent {agent.id} ref={agent.ref!r} does not resolve ({exc})"
-                continue
-            offered[agent.id] = set(manifest.spec.aitp.offered_caps)
+        yield from _lint_scenario(sv, ref, reg)
 
-        prior_step_ids: set[str] = set()
-        for step in sv.spec.workflow.steps:
-            stype = step.type or ("workflow" if (step.agent and step.capability) else "meta")
-            # agent / target_agent / initiator / responder / delegator /
-            # delegatee / via_peer must all resolve to agents in this scenario.
-            for field in (
-                "agent", "target_agent", "initiator", "responder",
-                "delegator", "delegatee", "via_peer", "issuer", "audience",
-            ):
-                val = getattr(step, field, None)
-                if val and val not in agent_ids:
-                    yield f"{ref} step {step.id}: {field}={val!r} not in agents {sorted(agent_ids)}"
-            # capability must be offered somewhere in the scenario.
-            if step.capability:
-                offering = {a for a, caps in offered.items() if step.capability in caps}
-                if not offering:
-                    yield (
-                        f"{ref} step {step.id}: capability {step.capability!r} "
-                        f"not offered by any agent in this scenario"
-                    )
-            # requested_grants on handshake must be offered by the responder.
-            if stype == "handshake" and step.requested_grants and step.responder in offered:
-                missing = set(step.requested_grants) - offered[step.responder]
-                if missing:
-                    yield (
-                        f"{ref} step {step.id}: requested_grants {sorted(missing)} "
-                        f"not offered by responder {step.responder}"
-                    )
-            # via_delegation must reference an earlier step in this workflow.
-            if step.via_delegation and step.via_delegation not in prior_step_ids:
-                yield (
-                    f"{ref} step {step.id}: via_delegation={step.via_delegation!r} "
-                    f"does not reference an earlier step"
-                )
-            # input_from must reference a prior step too.
-            if step.input_from and step.input_from not in prior_step_ids:
-                yield (
-                    f"{ref} step {step.id}: input_from={step.input_from!r} "
-                    f"does not reference an earlier step"
-                )
-            prior_step_ids.add(step.id)
+        # Templates: validate that template names are kebab-case and that the
+        # merged scenario passes the same agent / capability checks.
+        for tpl in reg.list_templates(ref):
+            tname = tpl.metadata.name
+            if not _KEBAB.match(tname):
+                yield f"{ref} template {tname!r}: name not kebab-case"
+            try:
+                merged = reg.get_scenario_resolved(ref, template=tname)
+            except PlaygroundError as exc:
+                yield f"{ref} template {tname!r}: failed to apply ({exc})"
+                continue
+            yield from _lint_scenario(merged, f"{ref} [template:{tname}]", reg)
 
 
 def cmd_trace(args: argparse.Namespace) -> int:
@@ -397,6 +432,11 @@ def main(argv: list[str] | None = None) -> int:
     pd = sub.add_parser("dry-run", help="dry-run a scenario (no spawn)")
     pd.add_argument("scenario_ref")
     pd.add_argument("--inputs", default="{}")
+    pd.add_argument(
+        "--template",
+        default=None,
+        help="apply the named template variant from templates/<name>.yaml",
+    )
     pd.set_defaults(func=cmd_dry_run)
 
     pn = sub.add_parser(

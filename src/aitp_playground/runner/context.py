@@ -15,6 +15,7 @@ class RunEvent(BaseModel):
     # Arbitrary, type-tag-dependent fields:
     run_id: Optional[str] = None
     scenario_ref: Optional[str] = None
+    template: Optional[str] = None
     agent_id: Optional[str] = None
     agent: Optional[str] = None
     aid: Optional[str] = None

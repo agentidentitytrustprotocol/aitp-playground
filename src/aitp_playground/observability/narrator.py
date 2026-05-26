@@ -148,6 +148,20 @@ def narrate_event(event: Mapping[str, Any]) -> str:
     if etype == "cp.enroll_succeeded":
         return f"[cp]    registered {agent_id}"
 
+    # CP webhook fan-out.
+    if etype == "cp.webhook.subscribed":
+        wid = result.get("id") if isinstance(result, dict) else ""
+        evs = result.get("events") if isinstance(result, dict) else []
+        evs_view = ",".join(evs) if evs else "<all>"
+        return f"[cp]    webhook subscribed  id={_short(wid, 14)}  events=[{evs_view}]"
+    if etype == "cp.webhook.subscribe_failed":
+        return f"[cp]    webhook subscribe FAILED — {event.get('notes') or '?'}"
+    if etype == "cp.webhook.delivered":
+        return (
+            f"[cp]    webhook delivery  event_type={event.get('event_type','?')}  "
+            f"delivery={_short(event.get('delivery_id'), 14)}"
+        )
+
     # Capability self-execute.
     if etype == "capability.self_execute":
         return f"[exec]  self     {agent_id}.{capability}"

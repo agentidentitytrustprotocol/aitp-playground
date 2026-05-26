@@ -151,6 +151,58 @@ class CpClient:
             return data
         return []
 
+    async def create_webhook(
+        self,
+        *,
+        url: str,
+        events: list[str] | None = None,
+        secret: Optional[str] = None,
+        active: bool = True,
+    ) -> Optional[dict[str, Any]]:
+        """POST /api/webhooks — subscribe to CP audit events.
+
+        ``events=[]`` (or ``None``) means *all* deliverable event types
+        on the CP side. Returns the full created record including the
+        webhook ``id`` and ``secret`` (CP autogenerates the secret when
+        the caller doesn't supply one). Returns ``None`` when CP is
+        disabled or the call failed — callers branch on truthiness.
+        """
+        if not self.enabled or not url:
+            return None
+        body: dict[str, Any] = {"url": url, "events": events or [], "active": active}
+        if secret:
+            body["secret"] = secret
+        target = f"{self.settings.cp_base_url.rstrip('/')}/api/webhooks"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.post(target, json=body, headers=self._headers())
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP create_webhook failed (degraded): %s", exc)
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        """DELETE /api/webhooks/{id}. Idempotent — a 404 is treated as success."""
+        if not self.enabled or not webhook_id:
+            return False
+        target = (
+            f"{self.settings.cp_base_url.rstrip('/')}/api/webhooks/{webhook_id}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.delete(target, headers=self._headers())
+                if r.status_code == 404:
+                    return True
+                r.raise_for_status()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP delete_webhook failed (degraded): %s", exc)
+            return False
+
     async def fetch_revocation_list(self) -> list[str]:
         """GET /.well-known/aitp-revocation-list — return the list of revoked
         jtis from the signed envelope. Returns [] when CP is disabled or the

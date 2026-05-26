@@ -27,6 +27,11 @@ class RunRequest(BaseModel):
     scenario_ref: str
     inputs: dict[str, Any] = {}
     run_label: Optional[str] = None
+    # Optional template variant declared under
+    # ``scenarios/<pack>/<scenario>/<version>/templates/<template>.yaml``.
+    # When set, the runner merges it on top of the base scenario before
+    # executing — same scenario_ref, different workflow / trust posture.
+    template: Optional[str] = None
 
 
 class RunCreated(BaseModel):
@@ -93,6 +98,7 @@ async def _run_in_background(runner: ScenarioRunner, run_id: str, body: RunReque
             scenario_ref=body.scenario_ref,
             inputs=body.inputs,
             run_label=body.run_label,
+            template=body.template,
         )
     except Exception:  # noqa: BLE001
         logger.exception("Background run %s crashed", run_id)
@@ -169,6 +175,51 @@ async def get_run_cp_audit(
         cp_enabled=True,
         events=events,
         event_types=sorted({e.get("type") for e in events if e.get("type")}),
+        count=len(events),
+    )
+
+
+class CpDeliveriesResponse(BaseModel):
+    run_id: str
+    subscribed: bool
+    webhook: Optional[dict[str, Any]] = None
+    deliveries: list[dict[str, Any]] = []
+    count: int = 0
+
+
+@router.get("/{run_id}/cp-deliveries", response_model=CpDeliveriesResponse)
+def get_run_cp_deliveries(
+    run_id: str,
+    event_type: Optional[str] = None,
+    store: RunStore = Depends(get_run_store),
+) -> CpDeliveriesResponse:
+    """List CP webhook deliveries this run has received.
+
+    Deliveries come from CP's audit fan-out into ``POST /webhooks/cp/{run_id}``;
+    each one is also visible in the main event log as
+    ``cp.webhook.delivered``. This endpoint surfaces just those rows so a
+    CLI / dashboard doesn't have to filter the full event list itself.
+    Pass ``event_type=`` to filter to a single CP event class
+    (``handshake.complete``, ``tct.revoked``, etc.).
+    """
+    record = store.get(run_id)
+    if record is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    cp_webhook = record.get("cp_webhook")
+    events = [
+        e for e in (record.get("events") or [])
+        if e.get("type") == "cp.webhook.delivered"
+        and (event_type is None or e.get("event_type") == event_type)
+    ]
+    # Strip the run-secret from the webhook block before exposing.
+    webhook_view = None
+    if cp_webhook:
+        webhook_view = {k: v for k, v in cp_webhook.items() if k != "secret"}
+    return CpDeliveriesResponse(
+        run_id=run_id,
+        subscribed=bool(cp_webhook),
+        webhook=webhook_view,
+        deliveries=events,
         count=len(events),
     )
 

@@ -124,6 +124,88 @@ async def test_publish_revocation_degrades_on_5xx() -> None:
     assert ok is False
 
 
+# ── create_webhook / delete_webhook ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_webhook_disabled_returns_none() -> None:
+    cp = CpClient(Settings(cp_base_url=""))
+    assert await cp.create_webhook(url="http://playground/webhooks/cp/r1") is None
+
+
+@pytest.mark.asyncio
+async def test_create_webhook_posts_body_and_returns_secret() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["method"] = request.method
+        captured["auth"] = request.headers.get("authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(201, json={
+            "id": "wh-1",
+            "secret": "deadbeef" * 4,
+            "url": "http://playground/webhooks/cp/r1",
+            "events": ["handshake.complete"],
+            "active": True,
+            "createdAt": "2026-05-26T00:00:00Z",
+        })
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler), api_key="key")
+        created = await cp.create_webhook(
+            url="http://playground/webhooks/cp/r1",
+            events=["handshake.complete"],
+        )
+    finally:
+        _clear_transport()
+    assert created is not None
+    assert created["id"] == "wh-1"
+    assert created["secret"].startswith("deadbeef")
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/api/webhooks")
+    assert captured["auth"] == "Bearer key"
+    assert '"url":"http://playground/webhooks/cp/r1"' in captured["body"]
+    assert '"events":["handshake.complete"]' in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_create_webhook_degrades_on_5xx() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.create_webhook(url="http://playground/webhooks/cp/r1")
+    finally:
+        _clear_transport()
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_delete_webhook_treats_404_as_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert str(request.url).endswith("/api/webhooks/wh-1")
+        return httpx.Response(404)
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        ok = await cp.delete_webhook("wh-1")
+    finally:
+        _clear_transport()
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_delete_webhook_disabled_returns_false() -> None:
+    cp = CpClient(Settings(cp_base_url=""))
+    assert await cp.delete_webhook("wh-1") is False
+
+
 # ── fetch_revocation_list ───────────────────────────────────────────────────
 
 

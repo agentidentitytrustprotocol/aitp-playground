@@ -49,6 +49,7 @@ WorkflowStepType = Literal[
     "redeem_delegation",                 # delegatee presents token to original peer
     "rotate_keys",                       # agent replaces its keypair + republishes manifest
     "enroll_with_cp",                    # agent self-enrolls via CP /api/registry/enroll
+    "cp_subscribe_webhook",              # register a CP webhook pointing at the run's receiver
 ]
 
 
@@ -107,6 +108,10 @@ class WorkflowStep(BaseModel):
     # redeem_delegation:
     via_delegation: Optional[str] = None      # id of the prior `delegate` step
     target: Optional[str] = None              # the agent whose redeem endpoint we POST to
+    # cp_subscribe_webhook:
+    # Empty (or omitted) means "all deliverable event types" on the CP side
+    # (agent.registered, handshake.complete, tct.revoked, etc.).
+    events: Optional[list[str]] = None
     # Fault injection (applies to handshake / workflow / capability_probe).
     # When set, the runner mutates the call's target before issuing it
     # so the step exercises a failure path, and records the outcome in
@@ -147,6 +152,47 @@ class ScenarioVersion(BaseModel):
     kind: Literal["ScenarioVersion"]
     metadata: ScenarioMeta
     spec: ScenarioSpec
+
+
+# ── Scenario templates (variants) ───────────────────────────────────────────
+#
+# A template is a named override on top of a ScenarioVersion. It lives at
+# ``<scenario>/<version>/templates/<name>.yaml`` and may replace
+# ``trust`` (field-level patch), ``agents`` (full list replacement) and/or
+# ``workflow.steps`` (full list replacement). Anything it omits falls
+# through from the base scenario.
+#
+# The motivating use case is trust-strict / trust-relaxed / delegation
+# variants of the same workflow: the participants and inputs are the
+# same, only the trust posture and step sequence change.
+
+
+class ScenarioTemplateMeta(BaseModel):
+    name: str
+    summary: Optional[str] = None
+
+
+class ScenarioTemplateSpec(BaseModel):
+    """All fields optional — present keys override, missing keys fall through.
+
+    ``trust`` is merged at field level (a template can flip just ``eager``
+    without restating ``boundary``). ``agents`` and ``workflow.steps``
+    are full replacements: partial list patching has too many edge
+    cases for a demo registry to be confident about.
+    """
+
+    trust: Optional[dict[str, Any]] = None
+    agents: Optional[list[AgentSpec]] = None
+    workflow: Optional[WorkflowSpec] = None
+
+
+class ScenarioTemplate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    api_version: str = Field(alias="apiVersion")
+    kind: Literal["ScenarioTemplate"]
+    metadata: ScenarioTemplateMeta
+    spec: ScenarioTemplateSpec = ScenarioTemplateSpec()
 
 
 class AitpAgentSpec(BaseModel):

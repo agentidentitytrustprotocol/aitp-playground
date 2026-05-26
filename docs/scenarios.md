@@ -18,7 +18,11 @@ scenarios/
 ├── intra-org/
 │   ├── pack.yaml                      # Pack metadata (slug, name, tags)
 │   ├── research-and-write/
-│   │   ├── 1.0.0/scenario.yaml
+│   │   ├── 1.0.0/
+│   │   │   ├── scenario.yaml
+│   │   │   └── templates/             # Named variants — see "Template variants"
+│   │   │       ├── trust-strict.yaml
+│   │   │       └── revoking.yaml
 │   │   └── 1.1.0/scenario.yaml
 │   ├── scoped-capabilities/1.0.0/scenario.yaml
 │   ├── delegation-chain/1.0.0/scenario.yaml
@@ -41,6 +45,10 @@ Loader rules (`registry/loader.py`):
   scenario version. The ref is built from the file's own metadata
   (`pack`, `scenario`, `version`), not from the path, so be consistent
   between path and metadata or the ref will surprise you.
+- A `templates/` directory next to `scenario.yaml` holds named
+  variant overrides (`kind: ScenarioTemplate`). Files without that
+  `kind` are skipped with a warning — they're not loaded as scenarios
+  or as templates.
 
 `!include` is supported in any YAML loaded by the registry, resolved
 relative to the including file. Use it to keep big scenarios readable
@@ -174,6 +182,7 @@ A step's `type` defaults sensibly when omitted:
 | `revoke_tct` | `issuer`, `audience`, optional `via_cp`, optional `reason` | Walks the event log to find the most recent TCT `issuer` granted to `audience`, then POSTs its jti to `issuer`'s `/admin/revoke-tct`. When `via_cp: true`, also POSTs the jti to the CP's `/api/revocation/entries` and asks the audience to pull the updated signed list from `/.well-known/aitp-revocation-list` — see `intra-org/revocation-via-cp`. |
 | `rotate_keys` | `agent` | The named agent replaces its keypair, rebuilds its manifest under the new AID, and clears in-flight handshake sessions. Subsequent capability calls that present TCTs issued under the old AID are rejected by `verify_capability_tct`'s issuer-AID guard — see `intra-org/key-rotation`. |
 | `enroll_with_cp` | `agent` | The named agent posts its current manifest to the Control Plane's `/api/registry/enroll` to mint a one-time bearer token, then re-posts to `/api/registry/agents` with that token to register. When `CP_BASE_URL` is unset the step skips. See `intra-org/external-enrollment`. |
+| `cp_subscribe_webhook` | optional `events` | Register a webhook on the Control Plane whose URL points back at this run's `POST /webhooks/cp/{run_id}` receiver. CP returns the webhook id and a secret; the playground stores the secret on the run record so subsequent deliveries can be HMAC-verified (`X-Aitp-Signature: sha256=<hex>`). `events: []` (or omitted) subscribes to every deliverable CP type. When `CP_BASE_URL` is unset the step skips. See `intra-org/webhook-subscription`. |
 | `meta` | — | No-op; records `step.skipped`. |
 
 ### Fault injection
@@ -239,6 +248,74 @@ Set `eager: false` when the scenario itself demonstrates trust gating
 or scoped grants — `trust-gate`, `scoped-capabilities`,
 `revocation-demo`, and `delegation-chain` all do this. Those scenarios
 control timing and scope themselves via explicit `handshake` steps.
+
+## Template variants
+
+A scenario version can ship named *templates* under
+`<pack>/<scenario>/<version>/templates/<name>.yaml`. A template is a
+named override on top of the base scenario — same `scenario_ref`,
+different posture. Use templates when two demonstrations share
+participants and inputs but diverge on trust posture or workflow shape.
+
+```yaml
+# scenarios/intra-org/research-and-write/1.0.0/templates/trust-strict.yaml
+apiVersion: aitp.dev/v1
+kind: ScenarioTemplate
+metadata:
+  name: trust-strict
+  summary: probe a 403 before the explicit handshake
+spec:
+  trust:
+    eager: false       # field-level patch — boundary/discovery fall through
+  workflow:
+    steps:             # full replacement of base workflow.steps
+      - id: probe_no_tct
+        type: capability_call_no_trust
+        ...
+```
+
+Merge rules:
+
+- `trust` patches the base field-by-field (e.g. flip `eager` without
+  restating `boundary`).
+- `agents` and `workflow.steps` are **full replacements**. Partial
+  list patching is intentionally not supported — the merge stays
+  deterministic and easy to read.
+- Anything the template omits falls through unchanged.
+
+The registry indexes templates and exposes them in three places:
+
+- `GET /scenarios/<pack>/<scenario>@<version>` includes a
+  `templates: [{name, summary}, ...]` list.
+- `GET /scenarios/<pack>/<scenario>@<version>/templates` lists them.
+- `GET /scenarios/<pack>/<scenario>@<version>/templates/<name>`
+  returns the resolved (merged) scenario.
+
+Run a templated scenario via `POST /runs`:
+
+```json
+{
+  "scenario_ref": "intra-org/research-and-write@1.0.0",
+  "template": "trust-strict",
+  "inputs": {"topic": "AI agents"}
+}
+```
+
+The CLI surfaces them too:
+
+```bash
+# Lists available templates at the bottom of base dry-run output
+uv run python -m aitp_playground.cli dry-run intra-org/research-and-write@1.0.0 \
+  --inputs '{"topic":"test"}'
+
+# Merge a template and print the resolved plan
+uv run python -m aitp_playground.cli dry-run intra-org/research-and-write@1.0.0 \
+  --template trust-strict --inputs '{"topic":"test"}'
+```
+
+`lint` walks each template and applies the same checks as the base
+scenario (agent / capability refs, step graph) against the merged
+output.
 
 ## Validating
 
@@ -340,6 +417,7 @@ see [agents.md](agents.md).
 | `intra-org/key-rotation@1.0.0` | RFC-AITP-0007: writer rotates keys; pre-rotation TCTs become invalid. |
 | `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
 | `intra-org/external-enrollment@1.0.0` | Agent self-enrolls via `POST /api/registry/enroll` then `POST /api/registry/agents` with the issued bearer token. |
+| `intra-org/webhook-subscription@1.0.0` | Playground registers a CP webhook and CP fans `handshake.complete` / other audit events back via `POST /webhooks/cp/{run_id}`; inspect deliveries with `GET /runs/{id}/cp-deliveries`. |
 | `cross-cloud/distributed-review@1.0.0` | Three agents; did:web discovery. |
 | `cross-org/federated-analysis@1.0.0` | CP-registry discovery for an external agent (falls back to static). |
 

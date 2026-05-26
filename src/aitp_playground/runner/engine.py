@@ -60,6 +60,7 @@ class ScenarioRunner:
         inputs: dict[str, Any],
         run_label: Optional[str] = None,
         run_id: Optional[str] = None,
+        template: Optional[str] = None,
     ) -> RunResult:
         run_id = run_id or str(uuid.uuid4())
         ctx = RunContext(
@@ -73,14 +74,20 @@ class ScenarioRunner:
             "outputs": {}, "events": [], "error": None,
         })
 
-        # 1. Load scenario
+        # 1. Load scenario (optionally merged with a named template)
         try:
-            scenario = self.registry.get_scenario(scenario_ref)
+            scenario = self.registry.get_scenario_resolved(
+                scenario_ref, template=template,
+            )
         except PlaygroundError as exc:
             ctx.emit(RunEvent(type="run.failed", error=str(exc)))
             return self._finalize_failure(run_id, str(exc), ctx)
 
-        ctx.emit(RunEvent(type="run.started", scenario_ref=scenario_ref))
+        ctx.emit(RunEvent(
+            type="run.started",
+            scenario_ref=scenario_ref,
+            template=template,
+        ))
 
         # 2. Validate inputs against scenario schema
         try:
@@ -471,6 +478,52 @@ class ScenarioRunner:
                 result={"registered_at": data.get("registered_at")},
             ))
             ctx.emit(RunEvent(type="step.complete", step_id=step.id, result=data))
+            return
+
+        if step_type == "cp_subscribe_webhook":
+            if not self.cp.enabled:
+                ctx.emit(RunEvent(
+                    type="step.skipped",
+                    step_id=step.id,
+                    notes="CP not configured (CP_BASE_URL unset)",
+                ))
+                step_outputs[step.id] = {"subscribed": False, "skipped": "no cp"}
+                return
+            base = self.config.playground_base_url.rstrip("/")
+            url = f"{base}/webhooks/cp/{ctx.run_id}"
+            created = await self.cp.create_webhook(
+                url=url,
+                events=list(step.events or []),
+            )
+            if not created:
+                ctx.emit(RunEvent(
+                    type="cp.webhook.subscribe_failed", step_id=step.id,
+                    notes="CP refused or unreachable",
+                ))
+                step_outputs[step.id] = {"subscribed": False}
+                return
+            self.store.upsert(ctx.run_id, {
+                "cp_webhook": {
+                    "id": created.get("id"),
+                    "secret": created.get("secret"),
+                    "url": url,
+                    "events": list(step.events or []),
+                },
+            })
+            ctx.emit(RunEvent(
+                type="cp.webhook.subscribed", step_id=step.id,
+                result={
+                    "id": created.get("id"),
+                    "url": url,
+                    "events": list(step.events or []),
+                },
+            ))
+            step_outputs[step.id] = {
+                "subscribed": True,
+                "webhook_id": created.get("id"),
+                "url": url,
+                "events": list(step.events or []),
+            }
             return
 
         if step_type == "rotate_keys":

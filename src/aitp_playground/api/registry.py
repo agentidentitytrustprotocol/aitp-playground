@@ -34,4 +34,37 @@ def get_scenario(
 ) -> dict:
     ref = f"{pack}/{scenario}@{version}"
     sv = registry.get_scenario(ref)
-    return sv.model_dump(by_alias=True)
+    body = sv.model_dump(by_alias=True)
+    body["templates"] = [
+        {"name": t.metadata.name, "summary": t.metadata.summary}
+        for t in registry.list_templates(ref)
+    ]
+    return body
+
+
+@router.get("/scenarios/{pack}/{scenario}@{version}/templates")
+def list_scenario_templates(
+    pack: str, scenario: str, version: str,
+    registry: RegistryService = Depends(get_registry),
+) -> dict:
+    ref = f"{pack}/{scenario}@{version}"
+    return {
+        "ref": ref,
+        "templates": [
+            {"name": t.metadata.name, "summary": t.metadata.summary}
+            for t in registry.list_templates(ref)
+        ],
+    }
+
+
+@router.get("/scenarios/{pack}/{scenario}@{version}/templates/{name}")
+def get_scenario_template(
+    pack: str, scenario: str, version: str, name: str,
+    registry: RegistryService = Depends(get_registry),
+) -> dict:
+    """Return the scenario *merged* with the named template — what the
+    runner would execute if you passed ``template=<name>`` to ``POST /runs``.
+    """
+    ref = f"{pack}/{scenario}@{version}"
+    resolved = registry.get_scenario_resolved(ref, template=name)
+    return resolved.model_dump(by_alias=True)
