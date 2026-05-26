@@ -51,6 +51,27 @@ WorkflowStepType = Literal[
 ]
 
 
+FaultKind = Literal[
+    "manifest_404",  # rewrite the peer's manifest URL to a path that 404s
+    "peer_offline",  # rewrite the peer's host:port to an unbound port
+]
+
+
+class StepFault(BaseModel):
+    """Operator-injected fault for a workflow step.
+
+    Faults are pure-engine constructs: the runner intercepts the step,
+    applies the transformation, and records the resulting outcome as a
+    structured step output without bubbling the failure out of the run.
+    Use them to demonstrate or test what happens when AITP plumbing
+    breaks (peer drops, manifest 404, etc.) — the scenario continues so
+    later steps can probe the consequences.
+    """
+
+    kind: FaultKind
+    note: Optional[str] = None
+
+
 class WorkflowStep(BaseModel):
     id: str
     type: Optional[WorkflowStepType] = None
@@ -85,6 +106,11 @@ class WorkflowStep(BaseModel):
     # redeem_delegation:
     via_delegation: Optional[str] = None      # id of the prior `delegate` step
     target: Optional[str] = None              # the agent whose redeem endpoint we POST to
+    # Fault injection (applies to handshake / workflow / capability_probe).
+    # When set, the runner mutates the call's target before issuing it
+    # so the step exercises a failure path, and records the outcome in
+    # step_outputs without raising the run.
+    fault: Optional[StepFault] = None
 
 
 class WorkflowSpec(BaseModel):

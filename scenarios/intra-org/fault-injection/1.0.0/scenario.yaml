@@ -1,0 +1,79 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: fault-injection
+  version: 1.0.0
+  name: Fault Injection — manifest 404 and peer offline
+  summary: >
+    Demonstrates the playground's `fault:` workflow-step knob.
+
+    A normal handshake/call succeeds. Then two injected-fault steps
+    deliberately break a) the peer's manifest URL (404) and
+    b) the peer's port (unbound), so a developer can observe the
+    failure surface of each transport-level break without leaving the
+    scenario runner. The run continues — fault steps record their
+    outcome rather than raising, so downstream assertions can branch on
+    the result.
+  tags: [fault-injection, observability, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "Fault injection demo"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: handshake_ok
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: >
+          Baseline handshake — succeeds. Establishes the trust we'll
+          break on the next steps.
+
+      - id: handshake_manifest_404
+        type: handshake
+        initiator: writer
+        responder: researcher
+        fault:
+          kind: manifest_404
+          note: "researcher's manifest URL is rewritten to a 404 path"
+        description: >
+          Writer attempts to handshake with researcher, but the runner
+          rewrites researcher's manifest URL to a path that doesn't
+          exist. The initiator's manifest GET returns 404; the handshake
+          never starts. step.fault_complete records the resulting error.
+
+      - id: call_peer_offline
+        type: capability_probe
+        agent: researcher
+        target_agent: writer
+        capability: write.content
+        input_template: "Doomed payload about {{ inputs.topic }}"
+        fault:
+          kind: peer_offline
+          note: "writer's port is rewritten to an unbound port"
+        description: >
+          Researcher tries to call writer.write.content, but the runner
+          rewrites writer's port to 1 (closed). The transport error
+          surfaces through /admin/invoke as a non-2xx; the probe path
+          records the outcome without failing the run.

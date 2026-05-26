@@ -175,6 +175,35 @@ A step's `type` defaults sensibly when omitted:
 | `rotate_keys` | `agent` | The named agent replaces its keypair, rebuilds its manifest under the new AID, and clears in-flight handshake sessions. Subsequent capability calls that present TCTs issued under the old AID are rejected by `verify_capability_tct`'s issuer-AID guard — see `intra-org/key-rotation`. |
 | `meta` | — | No-op; records `step.skipped`. |
 
+### Fault injection
+
+Any `handshake`, `workflow`, or `capability_probe` step can carry a
+`fault:` block. The runner mutates the call's target before issuing it
+so the step exercises a failure path, and records the outcome as
+`{fault_injected: true, kind, target, error}` in step_outputs without
+raising the run — downstream steps can branch on the result.
+
+```yaml
+- id: doomed_call
+  type: capability_probe
+  agent: researcher
+  target_agent: writer
+  capability: write.content
+  fault:
+    kind: peer_offline
+    note: "writer's port is rewritten to an unbound port"
+```
+
+Supported `fault.kind` values:
+
+| Kind | What it does |
+| --- | --- |
+| `manifest_404` | Rewrites the targeted peer's manifest URL to a path that 404s. Use to demonstrate "peer is unreachable for discovery" on a handshake or delegate step. |
+| `peer_offline` | Rewrites the targeted peer's port to a closed port. Use to demonstrate transport-level connection failures on handshake or workflow steps. |
+
+See `intra-org/fault-injection` for a worked example. New events:
+`step.fault_injected`, `step.fault_complete`.
+
 ### Input plumbing
 
 Each workflow step gets exactly one input:
@@ -308,6 +337,7 @@ see [agents.md](agents.md).
 | `intra-org/delegation-chain@1.0.0` | RFC-AITP-0006: single-hop delegation + redeem. |
 | `intra-org/delegation-multihop@1.0.0` | RFC-AITP-0011: two-hop chain (researcher → sub-researcher → analyst). |
 | `intra-org/key-rotation@1.0.0` | RFC-AITP-0007: writer rotates keys; pre-rotation TCTs become invalid. |
+| `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
 | `cross-cloud/distributed-review@1.0.0` | Three agents; did:web discovery. |
 | `cross-org/federated-analysis@1.0.0` | CP-registry discovery for an external agent (falls back to static). |
 

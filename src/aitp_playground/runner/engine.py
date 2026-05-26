@@ -238,6 +238,18 @@ class ScenarioRunner:
             ctx.emit(RunEvent(type="step.skipped", step_id=step.id, notes=step.description))
             return
 
+        # Fault injection short-circuit. When a step declares a fault we
+        # divert into a single helper that mutates the target URL/port and
+        # records the resulting failure as a structured outcome. The run
+        # itself never raises out of an injected step — the whole point is
+        # to demonstrate the failure path live and let subsequent steps
+        # probe the consequences.
+        if step.fault is not None:
+            await self._dispatch_fault_injected(
+                step, step_type, scenario, running, peers, ctx, step_outputs,
+            )
+            return
+
         if step_type == "capability_call_no_trust":
             if not step.agent or not step.target_agent or not step.capability:
                 raise PlaygroundError(
@@ -486,6 +498,146 @@ class ScenarioRunner:
             )
         step_outputs[step.id] = result
         ctx.emit(RunEvent(type="step.complete", step_id=step.id, result=result))
+
+    async def _dispatch_fault_injected(
+        self,
+        step: WorkflowStep,
+        step_type: str,
+        scenario: ScenarioVersion,
+        running: dict[str, RunningAgent],
+        peers: dict[str, dict[str, Any]],
+        ctx: RunContext,
+        step_outputs: dict[str, Any],
+    ) -> None:
+        """Apply a step.fault transformation and record the outcome.
+
+        Currently supports two pure-engine fault kinds:
+
+          - ``manifest_404``: rewrite the targeted peer's manifest URL
+            to a path that doesn't exist. Useful for handshake steps —
+            the initiator's manifest GET 404s before the SDK handshake
+            state machine ever runs.
+          - ``peer_offline``: rewrite the targeted peer's host:port to
+            an unbound port so the TCP connect fails. Useful for
+            handshake and workflow steps to demonstrate connection-
+            level failures.
+
+        The step output is always
+        ``{fault_injected: True, kind, target, error}`` and the run
+        continues; downstream steps can branch on the result.
+        """
+        assert step.fault is not None  # narrowed for type-checker
+        fault = step.fault
+
+        # Resolve which agent the fault targets. For handshake steps this
+        # is the responder; for workflow / capability_probe it's the
+        # capability provider. For delegate it's the via_peer (whose
+        # manifest the delegator fetches to bind the delegation).
+        target_agent_id: Optional[str] = None
+        if step_type == "handshake":
+            target_agent_id = step.responder
+        elif step_type in ("workflow", "capability_probe"):
+            target_agent_id = step.target_agent or self._find_capability_holder(
+                step.capability or "", scenario, {a.id: None for a in scenario.spec.agents},  # type: ignore[arg-type]
+                prefer=step.agent,
+            )
+            # The lookup above passes Nones so the manifest-driven branch
+            # can't fire — fall back to step.agent for self-execute case.
+            if target_agent_id is None:
+                target_agent_id = step.agent
+        elif step_type == "delegate":
+            target_agent_id = step.via_peer
+        elif step_type == "redeem_delegation":
+            target_agent_id = step.target
+
+        if target_agent_id is None or target_agent_id not in peers:
+            raise PlaygroundError(
+                f"step {step.id}: fault {fault.kind!r} could not resolve target peer "
+                f"(step_type={step_type})"
+            )
+
+        original_url: str = peers[target_agent_id]["manifest_url"]
+        original_port: int = running[target_agent_id].port
+        mutated_url, mutated_port = original_url, original_port
+
+        if fault.kind == "manifest_404":
+            mutated_url = original_url + "-DOES-NOT-EXIST"
+        elif fault.kind == "peer_offline":
+            # Use a port that's almost certainly closed. The supervisor
+            # never allocates 1; ECONNREFUSED is the expected outcome.
+            mutated_port = 1
+            mutated_url = original_url.replace(
+                f":{original_port}/", f":{mutated_port}/", 1,
+            )
+        else:  # noqa: E0801 — exhaustive guard for future kinds
+            raise PlaygroundError(
+                f"step {step.id}: unknown fault kind {fault.kind!r}"
+            )
+
+        ctx.emit(RunEvent(
+            type="step.fault_injected",
+            step_id=step.id,
+            target=target_agent_id,
+            notes=f"kind={fault.kind} note={fault.note or ''}",
+        ))
+
+        # Now run the step's natural action with the mutated peer URL/port,
+        # catching whatever the failure surface looks like.
+        error_msg: Optional[str] = None
+        try:
+            if step_type == "handshake":
+                # Build a synthetic peer_info dict that the trust path
+                # would normally hand us. _ensure_trust only reads
+                # manifest_url, so this is enough.
+                await self._ensure_trust(
+                    running[step.initiator],  # type: ignore[index]
+                    running[step.responder],  # type: ignore[index]
+                    {"manifest_url": mutated_url},
+                    step.requested_grants,
+                    ctx,
+                )
+            elif step_type in ("workflow", "capability_probe"):
+                # Synthesize a RunningAgent for the mutated peer so the
+                # caller's /admin/invoke posts to the unbound port. The
+                # caller's held_tcts is keyed on the *original* peer's
+                # port, so /admin/invoke will return 412 "no TCT" when
+                # the port changes — peer_offline still demonstrates a
+                # transport failure, just one observed at the caller's
+                # /admin/invoke rather than at the wire.
+                from copy import copy
+                fake_target = copy(running[target_agent_id])
+                fake_target.port = mutated_port
+                # Use the probe path so a 4xx is recorded, not raised.
+                payload = self._resolve_step_input(
+                    step, ctx.events and {} or {}, step_outputs,
+                )
+                await self._probe_with_held_tct(
+                    running[step.agent or target_agent_id],
+                    fake_target,
+                    step.capability or "",
+                    payload, step.expect_status, ctx,
+                )
+            else:
+                raise PlaygroundError(
+                    f"step {step.id}: fault on step_type={step_type!r} is not supported"
+                )
+        except Exception as exc:  # noqa: BLE001
+            error_msg = f"{type(exc).__name__}: {exc}"
+
+        outcome = {
+            "fault_injected": True,
+            "kind": fault.kind,
+            "target": target_agent_id,
+            "mutated_url": mutated_url,
+            "error": error_msg,
+        }
+        step_outputs[step.id] = outcome
+        ctx.emit(RunEvent(
+            type="step.fault_complete",
+            step_id=step.id,
+            target=target_agent_id,
+            result=outcome,
+        ))
 
     async def _call_without_trust(
         self,
