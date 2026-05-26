@@ -8,5 +8,9 @@ event taxonomy emitted from ``runner/context.py``, plus a Prometheus
 text-format encoder used by the ``/metrics`` route.
 """
 from .metrics import Metrics, metrics, record_event, format_prometheus
+from .narrator import narrate_event, narrate_events
 
-__all__ = ["Metrics", "metrics", "record_event", "format_prometheus"]
+__all__ = [
+    "Metrics", "metrics", "record_event", "format_prometheus",
+    "narrate_event", "narrate_events",
+]

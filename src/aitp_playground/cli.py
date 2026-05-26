@@ -297,6 +297,61 @@ def _lint_pack_dir(pack_dir: Path, reg: RegistryService) -> Iterable[str]:
             prior_step_ids.add(step.id)
 
 
+def cmd_trace(args: argparse.Namespace) -> int:
+    """Start a scenario run against a live playground and print narrated
+    events as they arrive. The playground itself does the protocol work;
+    the CLI is a thin client that polls /runs/{id}/narrate at intervals
+    until the run reaches a terminal status.
+    """
+    import time
+
+    import httpx
+
+    settings = get_settings()
+    base = settings.playground_base_url.rstrip("/")
+    inputs = json.loads(args.inputs) if args.inputs else {}
+
+    try:
+        with httpx.Client(base_url=base, timeout=30.0) as c:
+            r = c.post("/runs", json={
+                "scenario_ref": args.scenario_ref,
+                "inputs": inputs,
+            })
+            if r.status_code != 202:
+                print(f"FAIL  POST /runs returned {r.status_code}: {r.text}", file=sys.stderr)
+                return 1
+            run_id = r.json()["run_id"]
+            print(f"# run_id={run_id} scenario={args.scenario_ref}")
+
+            terminal = {"success", "failed", "cancelled"}
+            printed = 0
+            deadline = time.time() + args.timeout_secs
+            status = "pending"
+            while time.time() < deadline:
+                narr = c.get(f"/runs/{run_id}/narrate")
+                if narr.status_code == 200:
+                    lines = [ln for ln in narr.text.splitlines() if ln]
+                    for ln in lines[printed:]:
+                        print(ln)
+                    printed = len(lines)
+                status_r = c.get(f"/runs/{run_id}/status")
+                if status_r.status_code == 200:
+                    status = status_r.json().get("status") or status
+                if status in terminal:
+                    break
+                time.sleep(args.poll_secs)
+            else:
+                print(
+                    f"# timed out after {args.timeout_secs}s — last status={status}",
+                    file=sys.stderr,
+                )
+                return 2
+            return 0 if status == "success" else 1
+    except httpx.HTTPError as exc:
+        print(f"FAIL  playground at {base} not reachable: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_lint(args: argparse.Namespace) -> int:
     reg = _registry()
     root = reg.settings.scenarios_path
@@ -361,6 +416,24 @@ def main(argv: list[str] | None = None) -> int:
         help="optional pack slugs to lint; default = every pack under scenarios/",
     )
     pl.set_defaults(func=cmd_lint)
+
+    pt = sub.add_parser(
+        "trace",
+        help="run a scenario against a live playground and narrate events",
+    )
+    pt.add_argument("scenario_ref")
+    pt.add_argument("--inputs", default="{}")
+    pt.add_argument(
+        "--poll-secs", type=float, default=0.5,
+        dest="poll_secs",
+        help="how often to poll /runs/{id}/narrate (default 0.5s)",
+    )
+    pt.add_argument(
+        "--timeout-secs", type=float, default=180.0,
+        dest="timeout_secs",
+        help="how long to wait for the run to reach a terminal status",
+    )
+    pt.set_defaults(func=cmd_trace)
 
     args = p.parse_args(argv)
     return int(args.func(args) or 0)

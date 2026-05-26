@@ -8,12 +8,13 @@ import uuid
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..cp_client.client import CpClient
 from ..errors import RunNotFoundError
 from ..hosting.supervisor import AgentSupervisor
+from ..observability.narrator import narrate_events
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
 from ._deps import get_cp_client, get_run_store, get_runner, get_supervisor
@@ -193,6 +194,30 @@ async def get_run_cp_sessions(
     return CpSessionsResponse(
         run_id=run_id, cp_enabled=True, sessions=sessions, count=len(sessions),
     )
+
+
+@router.get("/{run_id}/narrate", response_class=PlainTextResponse)
+def get_run_narrate(
+    run_id: str,
+    store: RunStore = Depends(get_run_store),
+) -> PlainTextResponse:
+    """Return a human-readable narration of this run's event log.
+
+    Each protocol step (handshake, delegate, redeem, revoke, rotate,
+    enroll, fault) becomes a single short line. Unknown event types are
+    dropped — the raw log is still available via ``GET /runs/{id}``.
+    Useful for live tail (``curl -N`` over a long run) and for the
+    ``aitp-playground trace`` CLI subcommand.
+    """
+    record = store.get(run_id)
+    if record is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    events = list(record.get("events") or [])
+    lines = narrate_events(events)
+    # Add a trailing summary line so the output is self-contained.
+    status = record.get("status") or "unknown"
+    lines.append(f"[run] status={status}  events={len(events)}  narrated={len(lines)-0}")
+    return PlainTextResponse("\n".join(lines) + "\n")
 
 
 @router.get("/{run_id}/status", response_model=RunStatus)
