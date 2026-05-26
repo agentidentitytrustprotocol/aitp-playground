@@ -173,6 +173,7 @@ A step's `type` defaults sensibly when omitted:
 | `redeem_delegation` | `delegatee`, `target`, `via_delegation` | `delegatee` POSTs the prior step's token to `target`'s `/aitp/delegation/redeem`; receives a fresh TCT bound to its own key. |
 | `revoke_tct` | `issuer`, `audience`, optional `via_cp`, optional `reason` | Walks the event log to find the most recent TCT `issuer` granted to `audience`, then POSTs its jti to `issuer`'s `/admin/revoke-tct`. When `via_cp: true`, also POSTs the jti to the CP's `/api/revocation/entries` and asks the audience to pull the updated signed list from `/.well-known/aitp-revocation-list` — see `intra-org/revocation-via-cp`. |
 | `rotate_keys` | `agent` | The named agent replaces its keypair, rebuilds its manifest under the new AID, and clears in-flight handshake sessions. Subsequent capability calls that present TCTs issued under the old AID are rejected by `verify_capability_tct`'s issuer-AID guard — see `intra-org/key-rotation`. |
+| `enroll_with_cp` | `agent` | The named agent posts its current manifest to the Control Plane's `/api/registry/enroll` to mint a one-time bearer token, then re-posts to `/api/registry/agents` with that token to register. When `CP_BASE_URL` is unset the step skips. See `intra-org/external-enrollment`. |
 | `meta` | — | No-op; records `step.skipped`. |
 
 ### Fault injection
@@ -338,6 +339,7 @@ see [agents.md](agents.md).
 | `intra-org/delegation-multihop@1.0.0` | RFC-AITP-0011: two-hop chain (researcher → sub-researcher → analyst). |
 | `intra-org/key-rotation@1.0.0` | RFC-AITP-0007: writer rotates keys; pre-rotation TCTs become invalid. |
 | `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
+| `intra-org/external-enrollment@1.0.0` | Agent self-enrolls via `POST /api/registry/enroll` then `POST /api/registry/agents` with the issued bearer token. |
 | `cross-cloud/distributed-review@1.0.0` | Three agents; did:web discovery. |
 | `cross-org/federated-analysis@1.0.0` | CP-registry discovery for an external agent (falls back to static). |
 

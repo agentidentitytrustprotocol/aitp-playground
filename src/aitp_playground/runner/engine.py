@@ -439,6 +439,40 @@ class ScenarioRunner:
             ))
             return
 
+        if step_type == "enroll_with_cp":
+            if not step.agent:
+                raise PlaygroundError(
+                    f"step {step.id}: enroll_with_cp requires agent"
+                )
+            if not self.cp.enabled:
+                ctx.emit(RunEvent(
+                    type="step.skipped",
+                    step_id=step.id,
+                    notes="CP not configured (CP_BASE_URL unset)",
+                ))
+                step_outputs[step.id] = {"enrolled": False, "skipped": "no cp"}
+                return
+            ra = running[step.agent]
+            ctx.emit(RunEvent(
+                type="cp.enroll_started", step_id=step.id, agent_id=step.agent,
+            ))
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(
+                    f"http://localhost:{ra.port}/admin/enroll-with-cp",
+                    json={},
+                )
+                r.raise_for_status()
+                data = r.json()
+            step_outputs[step.id] = data
+            ctx.emit(RunEvent(
+                type="cp.enroll_complete",
+                step_id=step.id, agent_id=step.agent,
+                aid=data.get("aid"),
+                result={"registered_at": data.get("registered_at")},
+            ))
+            ctx.emit(RunEvent(type="step.complete", step_id=step.id, result=data))
+            return
+
         if step_type == "rotate_keys":
             if not step.agent:
                 raise PlaygroundError(

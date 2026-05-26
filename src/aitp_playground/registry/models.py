@@ -48,6 +48,7 @@ WorkflowStepType = Literal[
     "delegate",                          # delegator issues DelegationToken to delegatee
     "redeem_delegation",                 # delegatee presents token to original peer
     "rotate_keys",                       # agent replaces its keypair + republishes manifest
+    "enroll_with_cp",                    # agent self-enrolls via CP /api/registry/enroll
 ]
 
 
