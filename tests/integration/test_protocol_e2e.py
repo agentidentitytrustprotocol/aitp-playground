@@ -154,6 +154,107 @@ def _check_revocation_demo(body: dict) -> None:
     assert blocked.get("rejected") is True and blocked.get("matched") is True
 
 
+def _check_revocation_via_cp(body: dict) -> None:
+    """End-to-end CP revocation: revoke step must report both local and
+    CP-side propagation, and the audience must observe a 403 *after* its
+    own list-refresh — proving propagation through the public well-known
+    list, not just a direct issuer back-channel."""
+    first = _step(body, "first_call")
+    if isinstance(first, dict):
+        assert not first.get("error"), (
+            f"revocation-via-cp: first_call should succeed, got {first}"
+        )
+
+    revoke = _step(body, "revoke")
+    assert isinstance(revoke, dict) and revoke.get("revoked_jti"), (
+        f"revocation-via-cp: revoke produced no revoked_jti: {revoke!r}"
+    )
+    assert revoke.get("published_to_cp") is True, (
+        f"revocation-via-cp: jti was not published to the CP: {revoke!r}"
+    )
+    assert revoke.get("audience_revoked_count", 0) >= 1, (
+        f"revocation-via-cp: audience did not pull the jti from CP: {revoke!r}"
+    )
+
+    blocked = _step(body, "blocked_call")
+    assert blocked.get("status_code") == 403, (
+        f"revocation-via-cp: expected 403 on blocked_call, got "
+        f"{blocked.get('status_code')!r}"
+    )
+    assert blocked.get("rejected") is True and blocked.get("matched") is True
+
+    # The CP-publish event must appear in the run event log so an operator
+    # can correlate run → CP entry without inspecting the CP separately.
+    event_types = {e.get("type") for e in (body.get("events") or [])}
+    assert "revocation.published" in event_types, (
+        f"revocation-via-cp: revocation.published missing from events: "
+        f"{sorted(event_types)}"
+    )
+
+
+def _check_delegation_multihop(body: dict) -> None:
+    """Two-hop delegation: each delegate step must produce a non-empty
+    token, each redeem step must complete, and the terminal capability
+    call (analyst → writer.write.content) must succeed."""
+    assert _step(body, "trust_researcher_writer") == {"trust": "established"}
+
+    for hop_id in ("delegate_to_sub", "delegate_to_analyst"):
+        delegate = _step(body, hop_id)
+        assert isinstance(delegate, dict) and delegate.get("delegation_token"), (
+            f"delegation-multihop[{hop_id}]: missing delegation_token: {delegate!r}"
+        )
+        assert delegate.get("delegatee_aid"), (
+            f"delegation-multihop[{hop_id}]: missing delegatee_aid: {delegate!r}"
+        )
+
+    for hop_id in ("redeem_sub", "redeem_analyst"):
+        redeem = _step(body, hop_id)
+        assert isinstance(redeem, dict) and redeem, (
+            f"delegation-multihop[{hop_id}]: redeem produced empty output: {redeem!r}"
+        )
+
+    final = _step(body, "analyst_writes")
+    if isinstance(final, dict):
+        assert not final.get("error"), (
+            f"delegation-multihop: terminal call rejected: {final}"
+        )
+
+
+def _check_key_rotation(body: dict) -> None:
+    """Pre-rotation call succeeds; rotate emits old/new AID; post-rotation
+    probe with the stale TCT observes a 403 because the TCT's declared
+    issuer no longer matches the running agent."""
+    assert _step(body, "handshake") == {"trust": "established"}
+
+    first = _step(body, "first_write")
+    if isinstance(first, dict):
+        assert not first.get("error"), (
+            f"key-rotation: pre-rotation write should succeed, got {first}"
+        )
+
+    rotated = _step(body, "writer_rotates")
+    assert isinstance(rotated, dict), f"key-rotation: rotate output not dict: {rotated!r}"
+    assert rotated.get("old_aid") and rotated.get("new_aid"), (
+        f"key-rotation: rotate output missing old_aid/new_aid: {rotated!r}"
+    )
+    assert rotated["old_aid"] != rotated["new_aid"], (
+        f"key-rotation: new AID identical to old: {rotated!r}"
+    )
+
+    stale = _step(body, "stale_write")
+    assert stale.get("status_code") == 403, (
+        f"key-rotation: expected stale TCT to be rejected, got "
+        f"{stale.get('status_code')!r}"
+    )
+    assert stale.get("rejected") is True and stale.get("matched") is True
+
+    event_types = {e.get("type") for e in (body.get("events") or [])}
+    assert "identity.key.rotated" in event_types, (
+        f"key-rotation: identity.key.rotated missing from events: "
+        f"{sorted(event_types)}"
+    )
+
+
 def _check_scoped_capabilities(body: dict) -> None:
     """In-scope call succeeds, out-of-scope call observes 403."""
     assert _step(body, "scoped_handshake") == {"trust": "established"}
@@ -192,6 +293,21 @@ SCENARIOS: list[ProtocolCase] = [
         ref="intra-org/scoped-capabilities@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_scoped_capabilities,
+    ),
+    ProtocolCase(
+        ref="intra-org/revocation-via-cp@1.0.0",
+        inputs={"topic": "AITP self-test"},
+        check=_check_revocation_via_cp,
+    ),
+    ProtocolCase(
+        ref="intra-org/delegation-multihop@1.0.0",
+        inputs={"topic": "AITP self-test"},
+        check=_check_delegation_multihop,
+    ),
+    ProtocolCase(
+        ref="intra-org/key-rotation@1.0.0",
+        inputs={"topic": "AITP self-test"},
+        check=_check_key_rotation,
     ),
 ]
 

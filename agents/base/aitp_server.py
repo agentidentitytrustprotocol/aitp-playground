@@ -59,6 +59,50 @@ class AitpServer:
         def get_manifest() -> Response:
             return Response(self.manifest_json, media_type="application/json")
 
+        @router.post("/admin/rotate-keys")
+        async def rotate_keys(request: Request) -> Response:
+            """Replace this agent's keypair and republish its manifest under
+            the new identity. Existing TCTs that this agent issued become
+            invalid because their declared ``issuer`` (the old AID) no longer
+            matches the running agent; subsequent capability calls
+            presenting those TCTs will be rejected by
+            ``verify_capability_tct``.
+
+            The route is intentionally minimal: no rollover window, no
+            simultaneous accept-both-keys phase. The point is to demonstrate
+            that a peer caching the old manifest must re-handshake against
+            the new manifest to obtain a TCT under the new key. In-flight
+            handshake sessions are dropped (the responder state was scoped
+            to the old key); peers must restart their handshake.
+            """
+            old_aid = self.agent.aid
+            old_manifest = self.manifest_json
+
+            new_agent = aitp.AitpAgent.generate()
+            cfg = self.bootstrap.get("aitp", {})
+            new_manifest = new_agent.build_manifest(
+                display_name=cfg.get("display_name", ""),
+                handshake_endpoint=cfg.get("handshake_endpoint", ""),
+                offered_caps=list(cfg.get("offered_caps", [])),
+                ttl_secs=int(cfg.get("ttl_secs", 3600)),
+            )
+            self.agent = new_agent
+            self.manifest_json = new_manifest
+            self._sessions.clear()
+
+            await emit_event(
+                "identity.key.rotated", self.bootstrap,
+                old_aid=old_aid, new_aid=new_agent.aid,
+            )
+            return Response(
+                json.dumps({
+                    "aid": new_agent.aid,
+                    "old_aid": old_aid,
+                    "manifest_replaced": old_manifest != new_manifest,
+                }),
+                media_type="application/json",
+            )
+
         if self.did_web_host:
             @router.get("/.well-known/did.json")
             def get_did_document() -> Response:
@@ -194,6 +238,18 @@ class AitpServer:
         jti = tct_obj.get("jti", "")
         if jti and jti in self.revoked_jtis:
             raise HTTPException(status_code=403, detail=f"tct revoked: jti={jti}")
+        # Issuer-AID check: TCTs we issued must declare us as the issuer.
+        # After a key rotation our AID changes, so any TCT issued by the
+        # pre-rotation key fails this guard before the signature path runs.
+        # The check is defensive even outside the rotation flow — a peer
+        # presenting a TCT signed by some other resource server has no
+        # business calling our capability endpoints.
+        declared_issuer = tct_obj.get("issuer")
+        if declared_issuer and declared_issuer != self.agent.aid:
+            raise HTTPException(
+                status_code=403,
+                detail=f"tct issuer mismatch: {declared_issuer} != {self.agent.aid}",
+            )
         declared_audience = tct_obj.get("audience")
         try:
             return self.agent.verify_tct(

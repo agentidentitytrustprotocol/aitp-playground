@@ -247,14 +247,80 @@ def build_admin_router(
         Subsequent capability calls that present a TCT with this jti are
         rejected by ``AitpServer.verify_capability_tct`` before any signature
         check. This is the demo flow for RFC-AITP-0008 fail-closed behavior;
-        full conformance would publish a signed revocation list, which the
-        playground doesn't need.
+        the optional CP propagation (see /admin/refresh-revocations) lets a
+        peer pick up the same jti from a signed revocation list.
         """
         body = await request.json()
         jti: str = body["jti"]
         revoked_jtis.add(jti)
         await emit_event("tct.revoked", bootstrap, jti=jti)
         return {"revoked": jti, "total_revoked": len(revoked_jtis)}
+
+    @router.post("/refresh-revocations")
+    async def refresh_revocations(request: Request) -> dict[str, Any]:
+        """Pull the Control Plane's signed revocation list and merge every
+        jti into this agent's local deny-set.
+
+        This is how a TCT holder learns that its token was revoked: the
+        original issuer marks the jti on the CP (via /api/revocation/entries),
+        and any peer that consults the CP list will then short-circuit any
+        capability call that presents that jti — without ever asking the
+        issuer.
+
+        Body (all optional):
+          - cp_base_url: explicit override. When omitted, the agent uses
+            ``bootstrap['cp']['base_url']`` (set by the playground supervisor
+            from CP_BASE_URL at spawn time).
+          - cp_api_key: bearer token for gated CP routes. The well-known
+            revocation list is public so this is rarely needed, but we
+            accept it for forward-compat.
+
+        Returns the count of jtis now in the local deny set, plus how many
+        new entries this refresh added.
+        """
+        body = await request.json() if await request.body() else {}
+        cp_base_url = body.get("cp_base_url") or (
+            bootstrap.get("cp", {}).get("base_url") if isinstance(bootstrap.get("cp"), dict) else None
+        )
+        cp_api_key = body.get("cp_api_key") or (
+            bootstrap.get("cp", {}).get("api_key") if isinstance(bootstrap.get("cp"), dict) else None
+        )
+        if not cp_base_url:
+            return {"revoked_count": len(revoked_jtis), "added": 0, "skipped": "no cp configured"}
+
+        url = f"{cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
+        headers = {"Authorization": f"Bearer {cp_api_key}"} if cp_api_key else {}
+        added = 0
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            await emit_event(
+                "revocation.refresh_failed", bootstrap, error=str(exc),
+            )
+            return {"revoked_count": len(revoked_jtis), "added": 0, "error": str(exc)}
+
+        # Same envelope-tolerant parse as the playground's CpClient: accept
+        # either {"revocation_list": {"entries": [...]}} or
+        # {"entries": [...]} at the top level.
+        entries: list[Any] = []
+        if isinstance(data, dict):
+            inner = data.get("revocation_list") or data
+            if isinstance(inner, dict):
+                entries = list(inner.get("entries") or [])
+        for entry in entries:
+            jti_val = entry.get("jti") if isinstance(entry, dict) else entry
+            if isinstance(jti_val, str) and jti_val and jti_val not in revoked_jtis:
+                revoked_jtis.add(jti_val)
+                added += 1
+
+        await emit_event(
+            "revocation.list_fetched", bootstrap,
+            jti_count=len(entries), added=added,
+        )
+        return {"revoked_count": len(revoked_jtis), "added": added}
 
     @router.post("/self-execute")
     async def self_execute(request: Request) -> Any:

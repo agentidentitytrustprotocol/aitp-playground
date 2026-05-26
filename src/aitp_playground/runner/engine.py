@@ -381,9 +381,79 @@ class ScenarioRunner:
                     json={"jti": jti},
                 )
                 r.raise_for_status()
-            step_outputs[step.id] = {"revoked_jti": jti}
+
+            published_to_cp = False
+            audience_refreshed = 0
+            if step.via_cp:
+                # End-to-end revocation: publish the jti to the CP, then
+                # pull the updated revocation list into the audience's
+                # local deny-set so the audience also fails closed. The
+                # issuer rejects on its local list; the audience rejection
+                # is the federation story.
+                published_to_cp = await self.cp.publish_revocation(
+                    jti, reason=step.reason or f"step {step.id}",
+                )
+                ctx.emit(RunEvent(
+                    type="revocation.published",
+                    step_id=step.id, jti=jti,
+                    result={"to_cp": published_to_cp, "reason": step.reason},
+                ))
+                audience_ra = running[step.audience]
+                refresh_body = {
+                    "cp_base_url": self.config.cp_base_url,
+                    "cp_api_key": self.config.cp_api_key,
+                }
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    rr = await client.post(
+                        f"http://localhost:{audience_ra.port}/admin/refresh-revocations",
+                        json=refresh_body,
+                    )
+                    # Graceful: if the audience can't reach CP, the step
+                    # still records what happened — the test harness will
+                    # see audience_refreshed=0 and can decide whether to
+                    # fail.
+                    if rr.is_success:
+                        audience_refreshed = int(rr.json().get("revoked_count", 0))
+
+            result_payload = {"revoked_jti": jti}
+            if step.via_cp:
+                result_payload.update({
+                    "published_to_cp": published_to_cp,
+                    "audience_revoked_count": audience_refreshed,
+                })
+            step_outputs[step.id] = result_payload
             ctx.emit(RunEvent(
-                type="step.complete", step_id=step.id, result={"revoked_jti": jti},
+                type="step.complete", step_id=step.id, result=result_payload,
+            ))
+            return
+
+        if step_type == "rotate_keys":
+            if not step.agent:
+                raise PlaygroundError(
+                    f"step {step.id}: rotate_keys requires agent"
+                )
+            ra = running[step.agent]
+            old_aid = ra.aid
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    f"http://localhost:{ra.port}/admin/rotate-keys",
+                    json={},
+                )
+                r.raise_for_status()
+                data = r.json()
+            new_aid = data.get("aid") or ""
+            ra.aid = new_aid
+            step_outputs[step.id] = {
+                "old_aid": old_aid, "new_aid": new_aid,
+            }
+            ctx.emit(RunEvent(
+                type="identity.key.rotated",
+                step_id=step.id, agent_id=step.agent,
+                aid=new_aid, notes=f"old_aid={old_aid}",
+            ))
+            ctx.emit(RunEvent(
+                type="step.complete", step_id=step.id,
+                result={"old_aid": old_aid, "new_aid": new_aid},
             ))
             return
 

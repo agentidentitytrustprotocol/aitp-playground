@@ -1,0 +1,84 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: key-rotation
+  version: 1.0.0
+  name: Key Rotation (RFC-AITP-0007)
+  summary: >
+    Researcher handshakes with writer and successfully invokes
+    writer.write.content. Writer then rotates its identity keys —
+    generates a fresh keypair, republishes its manifest, and adopts the
+    new AID. Researcher still holds the pre-rotation TCT (issuer = old
+    writer AID). The next probe is rejected with 403 because the writer
+    now serves under a different issuer identity, and the TCT's declared
+    ``issuer`` field no longer matches the running agent.
+
+    The point is not just "old keys stop working" — it's that any peer
+    caching a pre-rotation manifest must re-handshake against the new
+    manifest to obtain a TCT under the new key. This scenario doesn't
+    re-handshake (the failure is the demonstration); a production peer
+    would on receiving the first 403.
+  tags: [identity, key-rotation, rfc-0007, manifest, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "Key rotation lifecycle"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: handshake
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: >
+          Researcher initiates handshake with writer. Writer issues
+          researcher a TCT under writer's *current* (pre-rotation) AID.
+
+      - id: first_write
+        agent: researcher
+        capability: write.content
+        input_template: "Pre-rotation write of {{ inputs.topic }}"
+        description: >
+          Researcher invokes writer.write.content with the pre-rotation
+          TCT. Succeeds — issuer in TCT matches writer's current AID.
+
+      - id: writer_rotates
+        type: rotate_keys
+        agent: writer
+        description: >
+          Writer replaces its keypair, rebuilds its manifest under the
+          new AID, and clears in-flight handshake sessions. The held TCT
+          on the researcher side is now stale: its ``issuer`` field
+          still points at the pre-rotation AID.
+
+      - id: stale_write
+        type: capability_probe
+        agent: researcher
+        target_agent: writer
+        capability: write.content
+        expect_status: 403
+        input_template: "Post-rotation attempt about {{ inputs.topic }}"
+        description: >
+          Researcher retries with the stale TCT. Writer's
+          verify_capability_tct rejects with 403 because the TCT's
+          declared issuer no longer matches writer's running AID.

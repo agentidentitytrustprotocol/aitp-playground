@@ -171,7 +171,8 @@ A step's `type` defaults sensibly when omitted:
 | `capability_probe` | `agent`, `target_agent`, `capability`, optional `expect_status` | Invoke via `/admin/invoke` and inspect the returned status; doesn't fail the run on a non-2xx. |
 | `delegate` | `delegator`, `delegatee`, `via_peer`, `scope`, optional `ttl_secs` | `delegator` issues a `DelegationToken` to `delegatee` using the TCT it received from `via_peer`. |
 | `redeem_delegation` | `delegatee`, `target`, `via_delegation` | `delegatee` POSTs the prior step's token to `target`'s `/aitp/delegation/redeem`; receives a fresh TCT bound to its own key. |
-| `revoke_tct` | `issuer`, `audience` | Walks the event log to find the most recent TCT `issuer` granted to `audience`, then POSTs its jti to `issuer`'s `/admin/revoke-tct`. |
+| `revoke_tct` | `issuer`, `audience`, optional `via_cp`, optional `reason` | Walks the event log to find the most recent TCT `issuer` granted to `audience`, then POSTs its jti to `issuer`'s `/admin/revoke-tct`. When `via_cp: true`, also POSTs the jti to the CP's `/api/revocation/entries` and asks the audience to pull the updated signed list from `/.well-known/aitp-revocation-list` — see `intra-org/revocation-via-cp`. |
+| `rotate_keys` | `agent` | The named agent replaces its keypair, rebuilds its manifest under the new AID, and clears in-flight handshake sessions. Subsequent capability calls that present TCTs issued under the old AID are rejected by `verify_capability_tct`'s issuer-AID guard — see `intra-org/key-rotation`. |
 | `meta` | — | No-op; records `step.skipped`. |
 
 ### Input plumbing
@@ -303,7 +304,10 @@ see [agents.md](agents.md).
 | `intra-org/trust-gate@1.0.0` | A capability call with no TCT is rejected; then it succeeds after handshake. |
 | `intra-org/scoped-capabilities@1.0.0` | Grant intersection — TCT scoped to one of two offered caps. |
 | `intra-org/revocation-demo@1.0.0` | RFC-AITP-0008: revoke a TCT's jti; subsequent calls 403. |
+| `intra-org/revocation-via-cp@1.0.0` | RFC-AITP-0008 federation: revocation propagates through the CP's signed `/.well-known/aitp-revocation-list`. |
 | `intra-org/delegation-chain@1.0.0` | RFC-AITP-0006: single-hop delegation + redeem. |
+| `intra-org/delegation-multihop@1.0.0` | RFC-AITP-0011: two-hop chain (researcher → sub-researcher → analyst). |
+| `intra-org/key-rotation@1.0.0` | RFC-AITP-0007: writer rotates keys; pre-rotation TCTs become invalid. |
 | `cross-cloud/distributed-review@1.0.0` | Three agents; did:web discovery. |
 | `cross-org/federated-analysis@1.0.0` | CP-registry discovery for an external agent (falls back to static). |
 

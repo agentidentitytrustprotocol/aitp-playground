@@ -58,3 +58,59 @@ class CpClient:
                 await client.post(url, json=payload, headers=self._headers())
         except Exception as exc:  # noqa: BLE001
             logger.warning("CP ingest_events failed (degraded): %s", exc)
+
+    async def publish_revocation(self, jti: str, reason: str = "") -> bool:
+        """POST /api/revocation/entries — record a TCT jti as revoked.
+
+        Returns True on a 2xx, False when CP is disabled or the call failed.
+        Idempotent on the CP side; re-posting an existing jti is a no-op.
+        """
+        if not self.enabled or not jti:
+            return False
+        url = f"{self.settings.cp_base_url.rstrip('/')}/api/revocation/entries"
+        body: dict[str, Any] = {"jti": jti}
+        if reason:
+            body["reason"] = reason
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.post(url, json=body, headers=self._headers())
+                r.raise_for_status()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP publish_revocation failed (degraded): %s", exc)
+            return False
+
+    async def fetch_revocation_list(self) -> list[str]:
+        """GET /.well-known/aitp-revocation-list — return the list of revoked
+        jtis from the signed envelope. Returns [] when CP is disabled or the
+        call failed.
+
+        The well-known endpoint is public on the CP; no bearer header is
+        sent. The signed-envelope body has the shape
+        ``{"revocation_list": {"entries": [{"jti": ...}, ...]}}`` — we
+        extract just the jtis since the playground's local deny-set is
+        keyed on jti.
+        """
+        if not self.enabled:
+            return []
+        url = f"{self.settings.cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP fetch_revocation_list failed (degraded): %s", exc)
+            return []
+        # Tolerate either {"entries": [...]} at the root or a wrapping
+        # envelope; CP's exact field shape may evolve, so probe both.
+        entries: list[Any] = []
+        if isinstance(data, dict):
+            inner = data.get("revocation_list") or data
+            if isinstance(inner, dict):
+                entries = list(inner.get("entries") or [])
+        return [
+            (e.get("jti") if isinstance(e, dict) else str(e))
+            for e in entries
+            if (isinstance(e, dict) and e.get("jti")) or isinstance(e, str)
+        ]

@@ -47,6 +47,7 @@ WorkflowStepType = Literal[
     "revoke_tct",                        # add a peer's TCT jti to issuer's deny set
     "delegate",                          # delegator issues DelegationToken to delegatee
     "redeem_delegation",                 # delegatee presents token to original peer
+    "rotate_keys",                       # agent replaces its keypair + republishes manifest
 ]
 
 
@@ -68,6 +69,13 @@ class WorkflowStep(BaseModel):
     # revoke_tct:
     issuer: Optional[str] = None
     audience: Optional[str] = None
+    # When true, also POST the jti to the Control Plane's
+    # /api/revocation/entries and refresh the audience's view from
+    # /.well-known/aitp-revocation-list, demonstrating end-to-end
+    # propagation through the CP. Defaults false — pure-local revocation
+    # (the original behavior) still works without a CP configured.
+    via_cp: Optional[bool] = None
+    reason: Optional[str] = None              # reason string passed to CP
     # delegate:
     delegator: Optional[str] = None
     delegatee: Optional[str] = None

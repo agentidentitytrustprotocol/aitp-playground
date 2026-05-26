@@ -1,0 +1,82 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: revocation-via-cp
+  version: 1.0.0
+  name: Revocation via Control Plane (RFC-AITP-0008)
+  summary: >
+    End-to-end revocation propagation through the Control Plane.
+    Researcher establishes trust with writer; writer issues a TCT and the
+    researcher's first call succeeds. Researcher then revokes the writer's
+    TCT and the engine *also* posts the jti to the CP's
+    /api/revocation/entries. The writer pulls the updated revocation list
+    from /.well-known/aitp-revocation-list into its local deny-set, so its
+    own follow-up probe is rejected — not because researcher told it
+    directly, but because the CP advertised the revocation publicly.
+
+    Demonstrates the federation story: any peer that consults the CP list
+    learns about revoked TCTs without needing a back-channel to the
+    issuer.
+  tags: [revocation, rfc-0008, control-plane, federation, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent revocation"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: handshake
+        type: handshake
+        initiator: writer
+        responder: researcher
+        description: Writer initiates handshake; researcher issues writer a TCT.
+
+      - id: first_call
+        agent: writer
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: First call succeeds — writer's TCT is valid.
+
+      - id: revoke
+        type: revoke_tct
+        issuer: researcher
+        audience: writer
+        via_cp: true
+        reason: "compromised-token"
+        description: >
+          Researcher revokes writer's TCT locally AND publishes the jti to
+          the CP's /api/revocation/entries. The engine then asks the
+          writer (the audience) to refresh its view from the signed
+          /.well-known/aitp-revocation-list, so the writer fails-closed
+          on this jti even though the issuer never called it back.
+
+      - id: blocked_call
+        type: capability_probe
+        agent: writer
+        target_agent: researcher
+        capability: research.query
+        expect_status: 403
+        input_template: "{{ inputs.topic }}"
+        description: >
+          Writer retries with the same held TCT. Researcher's deny-set
+          contains the jti; rejection happens before any signature check.
