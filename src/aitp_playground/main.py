@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from .api import agents as agents_api
 from .api import health as health_api
+from .api import metrics as metrics_api
 from .api import registry as registry_api
 from .api import runs as runs_api
 from .api import telemetry as telemetry_api
@@ -76,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runs_api.router)
     app.include_router(agents_api.router)
     app.include_router(telemetry_api.router)
+    app.include_router(metrics_api.router)
 
     return app
 

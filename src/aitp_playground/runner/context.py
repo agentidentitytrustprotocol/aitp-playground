@@ -47,3 +47,14 @@ class RunContext:
         self.events.append(event)
         if self.store is not None:
             self.store.append_event(self.run_id, event.model_dump())
+        # Side-effect: record into the metrics registry. Importing here
+        # (rather than at module top) keeps the runner package free of a
+        # hard dependency on the observability package — if a downstream
+        # ever wants to vendor the runner without metrics, the import
+        # can be guarded.
+        try:
+            from ..observability.metrics import record_event
+            record_event(event.model_dump())
+        except Exception:  # noqa: BLE001
+            # Metrics must never break a run.
+            pass
