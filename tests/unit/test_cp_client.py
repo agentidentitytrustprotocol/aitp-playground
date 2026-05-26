@@ -182,3 +182,75 @@ async def test_fetch_revocation_list_degrades_on_error() -> None:
     finally:
         _clear_transport()
     assert out == []
+
+
+# ── fetch_events_history ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_events_history_disabled_returns_empty() -> None:
+    cp = CpClient(Settings(cp_base_url=""))
+    assert await cp.fetch_events_history(run_id="r1") == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_events_history_passes_filters_and_unwraps_envelope() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"events": [
+            {"type": "run.complete", "run_id": "r1"},
+            {"type": "trust.established", "run_id": "r1"},
+        ]})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler), api_key="k")
+        events = await cp.fetch_events_history(
+            run_id="r1", aid="aid:pubkey:x", type_="run.complete", limit=50,
+        )
+    finally:
+        _clear_transport()
+    assert "run_id=r1" in captured["url"]
+    assert "aid=aid%3Apubkey%3Ax" in captured["url"]  # url-encoded colon
+    assert "type=run.complete" in captured["url"]
+    assert "limit=50" in captured["url"]
+    assert len(events) == 2
+
+
+# ── fetch_sessions ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_sessions_unwraps_envelope_and_passes_status() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"sessions": [
+            {"session_id": "s1", "status": "completed", "run_id": "r1"},
+        ]})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        sessions = await cp.fetch_sessions(run_id="r1", status="completed")
+    finally:
+        _clear_transport()
+    assert "status=completed" in captured["url"]
+    assert sessions[0]["session_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_fetch_sessions_degrades_on_failure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.fetch_sessions(run_id="r1")
+    finally:
+        _clear_transport()
+    assert out == []

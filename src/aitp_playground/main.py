@@ -69,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.runner = runner
     app.state.run_store = run_store
     app.state.supervisor = supervisor
+    app.state.cp = cp
 
     install_handlers(app)
 

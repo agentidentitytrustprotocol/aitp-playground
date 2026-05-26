@@ -11,11 +11,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..cp_client.client import CpClient
 from ..errors import RunNotFoundError
 from ..hosting.supervisor import AgentSupervisor
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
-from ._deps import get_run_store, get_runner, get_supervisor
+from ._deps import get_cp_client, get_run_store, get_runner, get_supervisor
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -124,6 +125,73 @@ def get_run(run_id: str, store: RunStore = Depends(get_run_store)) -> RunRespons
         events=list(record.get("events") or []),
         error=record.get("error"),
         created_at=record.get("created_at"),
+    )
+
+
+class CpAuditResponse(BaseModel):
+    run_id: str
+    cp_enabled: bool
+    events: list[dict[str, Any]] = []
+    event_types: list[str] = []
+    count: int = 0
+
+
+class CpSessionsResponse(BaseModel):
+    run_id: str
+    cp_enabled: bool
+    sessions: list[dict[str, Any]] = []
+    count: int = 0
+
+
+@router.get("/{run_id}/cp-audit", response_model=CpAuditResponse)
+async def get_run_cp_audit(
+    run_id: str,
+    type: Optional[str] = None,
+    limit: int = 200,
+    store: RunStore = Depends(get_run_store),
+    cp: CpClient = Depends(get_cp_client),
+) -> CpAuditResponse:
+    """Proxy the slice of the Control Plane audit log that belongs to this run.
+
+    The CP-side query is ``GET /api/events/history?run_id={id}`` with the
+    optional ``type=`` filter passed through. When CP isn't configured the
+    response is ``cp_enabled=false`` with an empty list — callers can
+    branch on this without having to know CP wiring.
+    """
+    if store.get(run_id) is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    if not cp.enabled:
+        return CpAuditResponse(run_id=run_id, cp_enabled=False)
+    events = await cp.fetch_events_history(run_id=run_id, type_=type, limit=limit)
+    return CpAuditResponse(
+        run_id=run_id,
+        cp_enabled=True,
+        events=events,
+        event_types=sorted({e.get("type") for e in events if e.get("type")}),
+        count=len(events),
+    )
+
+
+@router.get("/{run_id}/cp-sessions", response_model=CpSessionsResponse)
+async def get_run_cp_sessions(
+    run_id: str,
+    status: Optional[str] = None,
+    limit: int = 200,
+    store: RunStore = Depends(get_run_store),
+    cp: CpClient = Depends(get_cp_client),
+) -> CpSessionsResponse:
+    """Proxy the Control Plane's handshake-session records for this run.
+
+    The CP-side query is ``GET /api/sessions?run_id={id}`` with the
+    optional ``status=`` filter passed through.
+    """
+    if store.get(run_id) is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    if not cp.enabled:
+        return CpSessionsResponse(run_id=run_id, cp_enabled=False)
+    sessions = await cp.fetch_sessions(run_id=run_id, status=status, limit=limit)
+    return CpSessionsResponse(
+        run_id=run_id, cp_enabled=True, sessions=sessions, count=len(sessions),
     )
 
 
