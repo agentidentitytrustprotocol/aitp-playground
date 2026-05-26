@@ -53,6 +53,51 @@ def test_cancel_unknown_run_is_404() -> None:
     assert r.status_code == 404
 
 
+def test_cp_audit_proxy_disabled_when_cp_unset(monkeypatch) -> None:
+    """With no CP_BASE_URL the proxy must return cp_enabled=False and
+    an empty events list — callers branch on cp_enabled instead of
+    silently treating the lack of CP as a successful query."""
+    monkeypatch.setenv("CP_BASE_URL", "")
+    monkeypatch.setenv("CP_API_KEY", "")
+    from aitp_playground import config
+    monkeypatch.setattr(config, "_settings", None)
+    c = TestClient(create_app())
+    posted = c.post("/runs", json={
+        "scenario_ref": "intra-org/trust-gate@1.0.0",
+        "inputs": {"topic": "demo"},
+    }).json()
+    rid = posted["run_id"]
+    r = c.get(f"/runs/{rid}/cp-audit")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["cp_enabled"] is False
+    assert body["events"] == []
+    assert body["count"] == 0
+
+
+def test_cp_audit_proxy_404_for_unknown_run() -> None:
+    r = _client().get("/runs/does-not-exist/cp-audit")
+    assert r.status_code == 404
+
+
+def test_cp_sessions_proxy_disabled_when_cp_unset(monkeypatch) -> None:
+    monkeypatch.setenv("CP_BASE_URL", "")
+    monkeypatch.setenv("CP_API_KEY", "")
+    from aitp_playground import config
+    monkeypatch.setattr(config, "_settings", None)
+    c = TestClient(create_app())
+    posted = c.post("/runs", json={
+        "scenario_ref": "intra-org/trust-gate@1.0.0",
+        "inputs": {"topic": "demo"},
+    }).json()
+    rid = posted["run_id"]
+    r = c.get(f"/runs/{rid}/cp-sessions")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["cp_enabled"] is False
+    assert body["sessions"] == []
+
+
 def test_new_scenarios_are_loadable() -> None:
     """trust-gate, scoped-capabilities, and revocation-demo all register."""
     c = _client()

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -58,3 +58,182 @@ class CpClient:
                 await client.post(url, json=payload, headers=self._headers())
         except Exception as exc:  # noqa: BLE001
             logger.warning("CP ingest_events failed (degraded): %s", exc)
+
+    async def publish_revocation(self, jti: str, reason: str = "") -> bool:
+        """POST /api/revocation/entries — record a TCT jti as revoked.
+
+        Returns True on a 2xx, False when CP is disabled or the call failed.
+        Idempotent on the CP side; re-posting an existing jti is a no-op.
+        """
+        if not self.enabled or not jti:
+            return False
+        url = f"{self.settings.cp_base_url.rstrip('/')}/api/revocation/entries"
+        body: dict[str, Any] = {"jti": jti}
+        if reason:
+            body["reason"] = reason
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.post(url, json=body, headers=self._headers())
+                r.raise_for_status()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP publish_revocation failed (degraded): %s", exc)
+            return False
+
+    async def fetch_events_history(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        aid: Optional[str] = None,
+        type_: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """GET /api/events/history — query CP audit events.
+
+        Filter parameters mirror the CP route's query string. Returns
+        the raw list of event dicts (or [] when CP is disabled or the
+        call fails); callers shape the response.
+        """
+        if not self.enabled:
+            return []
+        url = f"{self.settings.cp_base_url.rstrip('/')}/api/events/history"
+        params: dict[str, Any] = {"limit": limit}
+        if run_id:
+            params["run_id"] = run_id
+        if aid:
+            params["aid"] = aid
+        if type_:
+            params["type"] = type_
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.get(url, params=params, headers=self._headers())
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP fetch_events_history failed (degraded): %s", exc)
+            return []
+        if isinstance(data, dict):
+            return list(data.get("events") or [])
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def fetch_sessions(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        aid: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """GET /api/sessions — query CP handshake-session records."""
+        if not self.enabled:
+            return []
+        url = f"{self.settings.cp_base_url.rstrip('/')}/api/sessions"
+        params: dict[str, Any] = {"limit": limit}
+        if run_id:
+            params["run_id"] = run_id
+        if aid:
+            params["aid"] = aid
+        if status:
+            params["status"] = status
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.get(url, params=params, headers=self._headers())
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP fetch_sessions failed (degraded): %s", exc)
+            return []
+        if isinstance(data, dict):
+            return list(data.get("sessions") or [])
+        if isinstance(data, list):
+            return data
+        return []
+
+    async def create_webhook(
+        self,
+        *,
+        url: str,
+        events: list[str] | None = None,
+        secret: Optional[str] = None,
+        active: bool = True,
+    ) -> Optional[dict[str, Any]]:
+        """POST /api/webhooks — subscribe to CP audit events.
+
+        ``events=[]`` (or ``None``) means *all* deliverable event types
+        on the CP side. Returns the full created record including the
+        webhook ``id`` and ``secret`` (CP autogenerates the secret when
+        the caller doesn't supply one). Returns ``None`` when CP is
+        disabled or the call failed — callers branch on truthiness.
+        """
+        if not self.enabled or not url:
+            return None
+        body: dict[str, Any] = {"url": url, "events": events or [], "active": active}
+        if secret:
+            body["secret"] = secret
+        target = f"{self.settings.cp_base_url.rstrip('/')}/api/webhooks"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.post(target, json=body, headers=self._headers())
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP create_webhook failed (degraded): %s", exc)
+            return None
+        if isinstance(data, dict):
+            return data
+        return None
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        """DELETE /api/webhooks/{id}. Idempotent — a 404 is treated as success."""
+        if not self.enabled or not webhook_id:
+            return False
+        target = (
+            f"{self.settings.cp_base_url.rstrip('/')}/api/webhooks/{webhook_id}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.delete(target, headers=self._headers())
+                if r.status_code == 404:
+                    return True
+                r.raise_for_status()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP delete_webhook failed (degraded): %s", exc)
+            return False
+
+    async def fetch_revocation_list(self) -> list[str]:
+        """GET /.well-known/aitp-revocation-list — return the list of revoked
+        jtis from the signed envelope. Returns [] when CP is disabled or the
+        call failed.
+
+        The well-known endpoint is public on the CP; no bearer header is
+        sent. The signed-envelope body has the shape
+        ``{"revocation_list": {"entries": [{"jti": ...}, ...]}}`` — we
+        extract just the jtis since the playground's local deny-set is
+        keyed on jti.
+        """
+        if not self.enabled:
+            return []
+        url = f"{self.settings.cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP fetch_revocation_list failed (degraded): %s", exc)
+            return []
+        # Tolerate either {"entries": [...]} at the root or a wrapping
+        # envelope; CP's exact field shape may evolve, so probe both.
+        entries: list[Any] = []
+        if isinstance(data, dict):
+            inner = data.get("revocation_list") or data
+            if isinstance(inner, dict):
+                entries = list(inner.get("entries") or [])
+        return [
+            (e.get("jti") if isinstance(e, dict) else str(e))
+            for e in entries
+            if (isinstance(e, dict) and e.get("jti")) or isinstance(e, str)
+        ]

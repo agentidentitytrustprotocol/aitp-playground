@@ -1,0 +1,74 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: webhook-subscription
+  version: 1.0.0
+  name: CP Webhook Subscription — Reverse Fan-Out
+  summary: >
+    Demonstrates the reverse direction of the Control Plane integration.
+    The playground registers a webhook against CP pointing at its own
+    /webhooks/cp/{run_id} receiver; CP then fans matched audit events
+    back to the playground. The scenario subscribes, performs an
+    explicit handshake (which CP records as handshake.complete and
+    dispatches), then issues research/write capability calls. Inspect
+    deliveries via `GET /runs/{id}/cp-deliveries`. Requires CP_BASE_URL
+    to be set — the subscribe step gracefully skips when CP is offline.
+  tags: [webhooks, cp-integration, reverse-fan-out, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AITP webhook fan-out"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    # Drive the handshake explicitly so CP sees the handshake.complete
+    # event and has something concrete to dispatch.
+    eager: false
+
+  workflow:
+    steps:
+      - id: subscribe
+        type: cp_subscribe_webhook
+        # Empty events list = subscribe to every deliverable audit type
+        # CP knows how to emit (agent.registered, handshake.complete,
+        # tct.revoked, etc.).
+        events: []
+        description: >
+          Register a webhook with CP whose URL points back at this run's
+          /webhooks/cp/{run_id} receiver. CP returns the webhook id and a
+          secret; the playground stores the secret on the run record so
+          subsequent deliveries can be HMAC-verified.
+
+      - id: handshake
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: >
+          Explicit handshake — CP records the handshake.complete audit
+          event and fans it out to the webhook we just registered.
+
+      - id: research
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+
+      - id: write
+        agent: writer
+        capability: write.content
+        input_from: research

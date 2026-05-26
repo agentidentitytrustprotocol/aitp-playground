@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 from telemetry import emit_event
 
 CapabilityHandler = Callable[[Any], Awaitable[Any]]
+ManifestProvider = Callable[[], str]
 
 
 def build_admin_router(
@@ -29,6 +30,7 @@ def build_admin_router(
     held_tcts: dict[int, str],                   # peer_port -> tct_json (mutated in place)
     revoked_jtis: set[str],                      # mutated in place by /admin/revoke-tct
     capabilities: Optional[dict[str, CapabilityHandler]] = None,
+    manifest_provider: Optional[Callable[[], str]] = None,
 ) -> APIRouter:
     """Build the /admin router. ``capabilities`` maps capability name to an
     async handler invoked by ``/admin/self-execute``. The handler receives the
@@ -37,6 +39,12 @@ def build_admin_router(
     ``revoked_jtis`` is the same set referenced by ``AitpServer`` so that
     revoking a TCT via ``/admin/revoke-tct`` makes subsequent capability calls
     that present that TCT fail with 403.
+
+    ``manifest_provider``, when set, returns the current ManifestEnvelope
+    JSON string for this agent (typically a closure over ``AitpServer``'s
+    ``manifest_json`` field, so that a key rotation is observable through
+    /admin/enroll-with-cp without restarting the agent). Required for the
+    /admin/enroll-with-cp route.
     """
     router = APIRouter(prefix="/admin")
     caps: dict[str, CapabilityHandler] = dict(capabilities or {})
@@ -247,14 +255,178 @@ def build_admin_router(
         Subsequent capability calls that present a TCT with this jti are
         rejected by ``AitpServer.verify_capability_tct`` before any signature
         check. This is the demo flow for RFC-AITP-0008 fail-closed behavior;
-        full conformance would publish a signed revocation list, which the
-        playground doesn't need.
+        the optional CP propagation (see /admin/refresh-revocations) lets a
+        peer pick up the same jti from a signed revocation list.
         """
         body = await request.json()
         jti: str = body["jti"]
         revoked_jtis.add(jti)
         await emit_event("tct.revoked", bootstrap, jti=jti)
         return {"revoked": jti, "total_revoked": len(revoked_jtis)}
+
+    @router.post("/enroll-with-cp")
+    async def enroll_with_cp(request: Request) -> dict[str, Any]:
+        """Self-enroll this agent into the Control Plane registry.
+
+        Two-step CP flow per aitp-control-plane:
+
+          1. POST /api/registry/enroll with the agent's ManifestEnvelope
+             JSON to mint a short-lived (5 min) enrollment token. This
+             endpoint is public.
+          2. POST /api/registry/agents with the same manifest and
+             Authorization: Bearer <token> from step 1 to register
+             (or re-register) the agent.
+
+        Body (optional override):
+          - cp_base_url: explicit override; falls back to
+            bootstrap['cp']['base_url'].
+
+        We pass the agent's *current* manifest JSON (held by AitpServer
+        and threaded into the admin router by the worker's main module
+        — see ``manifest_provider`` argument on ``build_admin_router``).
+
+        Returns the resulting registry entry shape, the enrollment-token
+        ttl, and the agent's AID for cross-checking.
+        """
+        body = await request.json() if await request.body() else {}
+        cp_base_url = body.get("cp_base_url") or (
+            bootstrap.get("cp", {}).get("base_url") if isinstance(bootstrap.get("cp"), dict) else None
+        )
+        if not cp_base_url:
+            raise HTTPException(
+                status_code=412,
+                detail="No CP base_url available (set CP_BASE_URL or pass cp_base_url in body)",
+            )
+        if manifest_provider is None:
+            raise HTTPException(
+                status_code=500,
+                detail="agent worker did not wire manifest_provider into build_admin_router",
+            )
+
+        manifest_json = manifest_provider()
+        base = cp_base_url.rstrip("/")
+        # Step 1 — enroll, get a one-time token.
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            enroll = await client.post(
+                f"{base}/api/registry/enroll",
+                content=manifest_json,
+                headers={"Content-Type": "application/json"},
+            )
+            if not enroll.is_success:
+                await emit_event(
+                    "cp.enroll_failed", bootstrap,
+                    stage="enroll", status_code=enroll.status_code,
+                    body=enroll.text,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"CP /enroll returned {enroll.status_code}: {enroll.text}",
+                )
+            enroll_resp = enroll.json()
+            token = enroll_resp.get("token")
+            if not token:
+                raise HTTPException(
+                    status_code=502, detail=f"CP /enroll returned no token: {enroll_resp}",
+                )
+
+            # Step 2 — register the manifest using the token.
+            register = await client.post(
+                f"{base}/api/registry/agents",
+                content=manifest_json,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+            if not register.is_success:
+                await emit_event(
+                    "cp.enroll_failed", bootstrap,
+                    stage="register", status_code=register.status_code,
+                    body=register.text,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"CP /agents returned {register.status_code}: {register.text}",
+                )
+            registered = register.json()
+
+        await emit_event(
+            "cp.enroll_succeeded", bootstrap,
+            aid=registered.get("aid"),
+            registered_at=registered.get("registeredAt"),
+        )
+        return {
+            "enrolled": True,
+            "aid": registered.get("aid"),
+            "registered_at": registered.get("registeredAt"),
+            "token_expires_in": enroll_resp.get("expiresIn"),
+        }
+
+    @router.post("/refresh-revocations")
+    async def refresh_revocations(request: Request) -> dict[str, Any]:
+        """Pull the Control Plane's signed revocation list and merge every
+        jti into this agent's local deny-set.
+
+        This is how a TCT holder learns that its token was revoked: the
+        original issuer marks the jti on the CP (via /api/revocation/entries),
+        and any peer that consults the CP list will then short-circuit any
+        capability call that presents that jti — without ever asking the
+        issuer.
+
+        Body (all optional):
+          - cp_base_url: explicit override. When omitted, the agent uses
+            ``bootstrap['cp']['base_url']`` (set by the playground supervisor
+            from CP_BASE_URL at spawn time).
+          - cp_api_key: bearer token for gated CP routes. The well-known
+            revocation list is public so this is rarely needed, but we
+            accept it for forward-compat.
+
+        Returns the count of jtis now in the local deny set, plus how many
+        new entries this refresh added.
+        """
+        body = await request.json() if await request.body() else {}
+        cp_base_url = body.get("cp_base_url") or (
+            bootstrap.get("cp", {}).get("base_url") if isinstance(bootstrap.get("cp"), dict) else None
+        )
+        cp_api_key = body.get("cp_api_key") or (
+            bootstrap.get("cp", {}).get("api_key") if isinstance(bootstrap.get("cp"), dict) else None
+        )
+        if not cp_base_url:
+            return {"revoked_count": len(revoked_jtis), "added": 0, "skipped": "no cp configured"}
+
+        url = f"{cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
+        headers = {"Authorization": f"Bearer {cp_api_key}"} if cp_api_key else {}
+        added = 0
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            await emit_event(
+                "revocation.refresh_failed", bootstrap, error=str(exc),
+            )
+            return {"revoked_count": len(revoked_jtis), "added": 0, "error": str(exc)}
+
+        # Same envelope-tolerant parse as the playground's CpClient: accept
+        # either {"revocation_list": {"entries": [...]}} or
+        # {"entries": [...]} at the top level.
+        entries: list[Any] = []
+        if isinstance(data, dict):
+            inner = data.get("revocation_list") or data
+            if isinstance(inner, dict):
+                entries = list(inner.get("entries") or [])
+        for entry in entries:
+            jti_val = entry.get("jti") if isinstance(entry, dict) else entry
+            if isinstance(jti_val, str) and jti_val and jti_val not in revoked_jtis:
+                revoked_jtis.add(jti_val)
+                added += 1
+
+        await emit_event(
+            "revocation.list_fetched", bootstrap,
+            jti_count=len(entries), added=added,
+        )
+        return {"revoked_count": len(revoked_jtis), "added": added}
 
     @router.post("/self-execute")
     async def self_execute(request: Request) -> Any:

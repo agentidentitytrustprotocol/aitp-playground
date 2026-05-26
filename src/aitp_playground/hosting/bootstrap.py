@@ -28,7 +28,13 @@ class BootstrapBuilder:
         seed_hex = derive_seed_hex(run_id, agent_spec.id, org=agent_spec.org)
         handshake_ep = f"http://localhost:{port}/aitp/handshake/hello"
 
-        return {
+        cp_block: dict[str, Any] = {}
+        if self.settings.cp_base_url:
+            cp_block["base_url"] = self.settings.cp_base_url
+        if self.settings.cp_api_key:
+            cp_block["api_key"] = self.settings.cp_api_key
+
+        bootstrap: dict[str, Any] = {
             "run_id": run_id,
             "agent_id": agent_spec.id,
             "port": port,
@@ -47,6 +53,9 @@ class BootstrapBuilder:
             },
             "inputs": dict(inputs),
         }
+        if cp_block:
+            bootstrap["cp"] = cp_block
+        return bootstrap
 
     def write(self, bootstrap: dict[str, Any]) -> str:
         tmpdir = Path(tempfile.gettempdir()) / "aitp-bootstrap"

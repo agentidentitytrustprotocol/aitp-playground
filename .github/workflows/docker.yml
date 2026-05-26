@@ -1,0 +1,159 @@
+name: Docker
+
+# Builds the playground container and (on main) runs the full docker-compose
+# e2e stack — postgres + control plane + playground + tests.
+#
+# Layout note: the Dockerfile expects build context = parent directory so the
+# sibling aitp-rs/ source tree is visible (the aitp Python SDK is compiled
+# from Rust via maturin at build time). We reproduce that layout in the
+# runner by checking out each repo into its own sibling path under
+# $GITHUB_WORKSPACE, then running docker commands from the workspace root.
+#
+#   $GITHUB_WORKSPACE/
+#     aitp-playground/   ← this repo
+#     aitp-rs/           ← sibling, needed by Dockerfile
+#     aitp-cp/           ← sibling, needed by Dockerfile.cp-e2e (e2e job only)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # Cancel superseded runs on the same ref to keep the queue tidy.
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }} # agentidentitytrustprotocol/aitp-playground
+
+jobs:
+  build-and-push:
+    name: Build & push playground image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout aitp-playground
+        uses: actions/checkout@v4
+        with:
+          path: aitp-playground
+
+      - name: Checkout sibling aitp-rs (needed by Dockerfile)
+        uses: actions/checkout@v4
+        with:
+          repository: agentidentitytrustprotocol/aitp-rs
+          path: aitp-rs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # Only push on main + tags. PRs build to validate the Dockerfile but
+        # skip auth + push.
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build (and push on main / tags)
+        uses: docker/build-push-action@v6
+        with:
+          # Context is the workspace root, which now contains both
+          # aitp-playground/ and aitp-rs/ as siblings — matching the layout
+          # the Dockerfile (and its dockerignore) was written against.
+          context: .
+          file: ./aitp-playground/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # linux/amd64 only for now. The SDK stage compiles a Rust extension
+          # via maturin; cross-building to arm64 under QEMU adds ~10 min per
+          # build. Add linux/arm64 here once that cost is worth paying.
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  e2e:
+    name: docker-compose e2e
+    # Only run the heavy stack on main pushes — PRs already validate the
+    # Dockerfile build in build-and-push, and the unit suite in ci.yml.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout aitp-playground
+        uses: actions/checkout@v4
+        with:
+          path: aitp-playground
+
+      - name: Checkout sibling aitp-rs
+        uses: actions/checkout@v4
+        with:
+          repository: agentidentitytrustprotocol/aitp-rs
+          path: aitp-rs
+
+      - name: Checkout sibling aitp-control-plane (as aitp-cp)
+        # docker-compose.test.yml + Dockerfile.cp-e2e reference the CP repo
+        # under the path "aitp-cp" (its historical short name). The repo on
+        # GitHub is "aitp-control-plane", so we check it out and rename via
+        # the `path` input.
+        uses: actions/checkout@v4
+        with:
+          repository: agentidentitytrustprotocol/aitp-control-plane
+          path: aitp-cp
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Materialize .env for compose
+        # docker-compose.test.yml reads aitp-playground/.env for OPENAI_API_KEY
+        # and a couple of provider knobs. Without the key the LLM tests
+        # self-skip (see tests/integration/test_llm_e2e.py:95); the protocol
+        # e2e tests run either way.
+        working-directory: aitp-playground
+        run: |
+          cp .env.example .env
+          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
+            printf '\nOPENAI_API_KEY=%s\n' '${{ secrets.OPENAI_API_KEY }}' >> .env
+          else
+            echo "::warning::OPENAI_API_KEY secret not set — LLM e2e assertions will be skipped (protocol e2e still runs)."
+          fi
+
+      - name: Bring up the stack and run tests
+        working-directory: aitp-playground
+        run: |
+          docker compose -f docker-compose.test.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from tests
+
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: aitp-playground
+        run: docker compose -f docker-compose.test.yml logs --no-color --tail=500
+
+      - name: Tear down
+        if: always()
+        working-directory: aitp-playground
+        run: docker compose -f docker-compose.test.yml down -v --remove-orphans

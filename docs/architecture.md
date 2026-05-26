@@ -112,7 +112,11 @@ large scenarios. The registry is read-only at runtime; set
   fans out to `RunStore` so SSE subscribers see it live.
 - `store.py` — in-memory pub/sub with per-run event queues. The SSE
   endpoint (`GET /runs/{id}/events`) replays the backlog then streams
-  live events with 1s heartbeats.
+  live events with 1s heartbeats. When `RUN_HISTORY_DB=<path>` is set,
+  the store is a `SqliteRunStore` that mirrors every write to that
+  SQLite file and rehydrates the in-memory cache from it on startup
+  — runs survive a process restart. Empty (the default) is in-memory
+  only.
 - `result.py` — `RunResult` returned to background-task callers.
 
 ### Trust (`src/aitp_playground/trust/`)

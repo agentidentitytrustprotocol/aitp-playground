@@ -1,0 +1,114 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: delegation-multihop
+  version: 1.0.0
+  name: Multi-Hop Delegation (RFC-AITP-0011)
+  summary: >
+    Demonstrates a two-hop delegation chain on top of the single-hop
+    primitives. Researcher handshakes with writer and receives a TCT
+    granting write.content. Researcher delegates that grant to
+    sub-researcher, who redeems it for its own fresh TCT (bound to
+    sub-researcher's key). Sub-researcher then delegates further to an
+    analyst, who redeems for *its* own TCT and finally invokes
+    writer.write.content with it.
+
+    The chain is implicit in the TCT identities, not encoded in the
+    DelegationToken envelope — each redemption produces a TCT whose
+    issuer is the original resource server (writer). The SDK enforces the
+    scope-narrowing invariant at every hop: a delegatee can never receive
+    grants its delegator did not hold.
+  tags: [delegation, multi-hop, rfc-0011, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "Multi-hop trust chains"
+      required: [topic]
+
+  agents:
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 0
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 1
+    - id: sub-researcher
+      ref: _shared/agents/researcher
+      port_offset: 2
+    - id: analyst
+      ref: _shared/agents/researcher
+      port_offset: 3
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: trust_researcher_writer
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: >
+          Researcher initiates handshake with writer; writer issues
+          researcher a TCT granting write.content.
+
+      - id: delegate_to_sub
+        type: delegate
+        delegator: researcher
+        delegatee: sub-researcher
+        via_peer: writer
+        scope: [write.content]
+        ttl_secs: 600
+        description: >
+          Researcher mints a DelegationToken for sub-researcher,
+          delegating its held writer-TCT's write.content grant.
+
+      - id: redeem_sub
+        type: redeem_delegation
+        delegatee: sub-researcher
+        target: writer
+        via_delegation: delegate_to_sub
+        description: >
+          Sub-researcher presents the delegation to writer's
+          /aitp/delegation/redeem. Writer mints a fresh TCT bound to
+          sub-researcher's key. Sub-researcher now holds a writer-issued
+          TCT in its own name.
+
+      - id: delegate_to_analyst
+        type: delegate
+        delegator: sub-researcher
+        delegatee: analyst
+        via_peer: writer
+        scope: [write.content]
+        ttl_secs: 600
+        description: >
+          Sub-researcher uses its freshly-redeemed TCT to mint a second
+          DelegationToken, this time for analyst. This is the second hop
+          — analyst's right to call writer flows through sub-researcher
+          and originally through researcher.
+
+      - id: redeem_analyst
+        type: redeem_delegation
+        delegatee: analyst
+        target: writer
+        via_delegation: delegate_to_analyst
+        description: >
+          Analyst presents the second-hop delegation to writer's redeem
+          endpoint. Writer mints a third TCT bound to analyst's key.
+
+      - id: analyst_writes
+        agent: analyst
+        capability: write.content
+        input_template: "Analyst at hop 2 writes about {{ inputs.topic }}"
+        description: >
+          Analyst invokes writer.write.content with the redeemed TCT.
+          Success here proves the two-hop delegation chain was honored
+          end-to-end.
