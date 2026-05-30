@@ -3,6 +3,10 @@
 These verify that the playground side compiles + exercises the SDK
 methods correctly without actually spawning agent subprocesses. The
 full e2e behavior is covered by docker-compose integration tests.
+
+Both ``aitp`` (the Rust-backed wheel built from sibling ``aitp-rs``)
+and ``cryptography`` are needed; the module skips cleanly when CI
+runs without them per the convention in `.github/workflows/test.yml`.
 """
 from __future__ import annotations
 
@@ -12,7 +16,19 @@ import time
 
 import pytest
 
-import aitp
+aitp = pytest.importorskip(
+    "aitp", reason="aitp SDK wheel not installed", exc_type=ImportError,
+)
+pytest.importorskip(
+    "cryptography", reason="cryptography not installed", exc_type=ImportError,
+)
+
+# Surfaces that depend on Cargo features the wheel may have been built
+# without — skip individual tests rather than fail collection.
+_HAS_BUNDLE = hasattr(aitp, "SessionBundleBuilder")
+_HAS_PINNING = hasattr(aitp, "SpkiPinVerifier")
+_HAS_RENEWAL = hasattr(aitp.AitpAgent, "build_renewal_request")
+_HAS_OIDC = hasattr(aitp, "JwksProvider")
 
 
 # ── P-256 suite ─────────────────────────────────────────────────────────────
@@ -45,6 +61,7 @@ def test_unknown_signing_suite_rejected() -> None:
 # ── TCT renewal ─────────────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(not _HAS_RENEWAL, reason="aitp built without experimental-renewal")
 def test_tct_renewal_round_trip() -> None:
     """Build a TCT via a full handshake, renew it, and confirm the new
     envelope has a different jti but identical subject + grants."""
@@ -89,6 +106,7 @@ def _participant_handshake(participant, coordinator, coord_manifest):
     return sess.complete(commit_ack)
 
 
+@pytest.mark.skipif(not _HAS_BUNDLE, reason="aitp built without experimental-bundle")
 def test_session_bundle_export_and_verify() -> None:
     """RFC-0010 bundle round-trip: coordinator is the issuer
     (responder), participants are initiators. The coordinator-issued
@@ -132,12 +150,14 @@ _TEST_CERT_DER_B64 = (
 _TEST_CERT_SPKI_B64 = "oFCDfYUHBYLM9zlLCYiEfMMSy4glm4lImfbyOc8XkaU="
 
 
+@pytest.mark.skipif(not _HAS_PINNING, reason="aitp built without experimental-pinning")
 def test_compute_spki_hash_is_deterministic() -> None:
     der = base64.b64decode(_TEST_CERT_DER_B64)
     computed = bytes(aitp.compute_spki_hash(der))
     assert base64.b64encode(computed).decode() == _TEST_CERT_SPKI_B64
 
 
+@pytest.mark.skipif(not _HAS_PINNING, reason="aitp built without experimental-pinning")
 def test_spki_pin_verifier_matches_and_rejects() -> None:
     der = base64.b64decode(_TEST_CERT_DER_B64)
     matching_pin = base64.b64decode(_TEST_CERT_SPKI_B64)
@@ -151,6 +171,7 @@ def test_spki_pin_verifier_matches_and_rejects() -> None:
 # ── OIDC mock issuer ────────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(not _HAS_OIDC, reason="aitp built without OIDC JwksProvider")
 def test_oidc_run_issuer_produces_valid_jwk() -> None:
     """The playground's per-run issuer should produce a JWK that the
     SDK's JwksProvider accepts without complaint."""
@@ -160,6 +181,7 @@ def test_oidc_run_issuer_produces_valid_jwk() -> None:
     assert issuer.issuer_url in provider.issuers()
 
 
+@pytest.mark.skipif(not _HAS_OIDC, reason="aitp built without OIDC JwksProvider")
 def test_oidc_handshake_p256_initiator() -> None:
     """Cross-suite OIDC handshake: P-256 initiator + Ed25519 responder.
     Mirrors what the oidc-identity scenario's p256-suite template
@@ -200,6 +222,7 @@ def test_oidc_handshake_p256_initiator() -> None:
     assert b.verify_tct(b_held, "demo.x").peer_aid == a.aid
 
 
+@pytest.mark.skipif(not _HAS_OIDC, reason="aitp built without OIDC JwksProvider")
 def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
     """One agent identifies via OIDC, peer is pinned-key; the SDK
     completes the handshake when JwksProvider + trust_anchors are
