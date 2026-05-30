@@ -103,6 +103,22 @@ class ScenarioRunner:
         resolved_manifests = {
             a.id: self.registry.get_agent_manifest(a.ref) for a in scenario.spec.agents
         }
+
+        # If any agent uses OIDC identity, mint a per-run mock issuer
+        # (Ed25519 keypair + JWK) so every OIDC agent shares the same
+        # trust anchor. Pinned-key-only runs leave run_oidc=None.
+        run_oidc = None
+        if any(
+            resolved_manifests[a.id].spec.aitp.identity_type == "oidc"
+            for a in scenario.spec.agents
+        ):
+            from ..trust.oidc_issuer import RunOidcIssuer
+            run_oidc = RunOidcIssuer.generate()
+            ctx.emit(RunEvent(
+                type="oidc.issuer_minted",
+                result={"issuer_url": run_oidc.issuer_url, "kid": run_oidc.kid},
+            ))
+
         bootstrap_files: dict[str, str] = {}
         for agent_spec in scenario.spec.agents:
             placeholder_peers = {
@@ -119,6 +135,7 @@ class ScenarioRunner:
                 port=ports[agent_spec.id],
                 peers=placeholder_peers,
                 inputs=inputs,
+                oidc=run_oidc,
             )
             bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
 
@@ -524,6 +541,150 @@ class ScenarioRunner:
                 "url": url,
                 "events": list(step.events or []),
             }
+            return
+
+        if step_type == "renew_tct":
+            # RFC-AITP-0005 §10: holder presents the held TCT to the
+            # issuer, who mints a fresh envelope with a new jti +
+            # expiry. The held TCT is swapped in-place on the holder's
+            # /admin side.
+            if not step.agent or not step.via_peer:
+                raise PlaygroundError(
+                    f"step {step.id}: renew_tct requires agent (holder) and via_peer (issuer)"
+                )
+            holder_ra = running[step.agent]
+            issuer_ra = running[step.via_peer]
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(
+                    f"http://localhost:{holder_ra.port}/admin/renew-tct",
+                    json={"peer_port": issuer_ra.port},
+                )
+                r.raise_for_status()
+                data = r.json()
+            step_outputs[step.id] = data
+            ctx.emit(RunEvent(
+                type="tct.renewed",
+                step_id=step.id,
+                agent_id=step.agent,
+                target=step.via_peer,
+                jti=data.get("jti"),
+                result={"expires_at": data.get("expires_at")},
+            ))
+            ctx.emit(RunEvent(
+                type="step.complete", step_id=step.id, result=data,
+            ))
+            return
+
+        if step_type == "export_session_bundle":
+            if not step.coordinator or not step.participants:
+                raise PlaygroundError(
+                    f"step {step.id}: export_session_bundle requires "
+                    f"coordinator and participants"
+                )
+            coord_ra = running[step.coordinator]
+            participant_ports = {
+                p_id: running[p_id].port for p_id in step.participants
+            }
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(
+                    f"http://localhost:{coord_ra.port}/admin/export-session-bundle",
+                    json={"participants": participant_ports},
+                )
+                r.raise_for_status()
+                data = r.json()
+            step_outputs[step.id] = data
+            ctx.emit(RunEvent(
+                type="session.bundle.exported",
+                step_id=step.id,
+                agent_id=step.coordinator,
+                result={
+                    "participant_aids": data.get("participant_aids", []),
+                    "session_id": data.get("session_id"),
+                },
+            ))
+            ctx.emit(RunEvent(
+                type="step.complete", step_id=step.id, result=data,
+            ))
+            return
+
+        if step_type == "verify_session_bundle":
+            if not step.verifier or not step.via_step:
+                raise PlaygroundError(
+                    f"step {step.id}: verify_session_bundle requires "
+                    f"verifier and via_step"
+                )
+            prior = step_outputs.get(step.via_step) or {}
+            bundle_envelope = prior.get("bundle_envelope")
+            if not bundle_envelope:
+                raise PlaygroundError(
+                    f"step {step.id}: via_step {step.via_step!r} did not "
+                    f"produce a bundle_envelope"
+                )
+            verifier_ra = running[step.verifier]
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(
+                    f"http://localhost:{verifier_ra.port}/admin/verify-session-bundle",
+                    json={"bundle_envelope": bundle_envelope},
+                )
+                r.raise_for_status()
+                data = r.json()
+            step_outputs[step.id] = data
+            ctx.emit(RunEvent(
+                type="session.bundle.verified",
+                step_id=step.id,
+                agent_id=step.verifier,
+                result={
+                    "kind": data.get("kind"),
+                    "active_aids": data.get("active_aids", []),
+                    "dropped_aids": data.get("dropped_aids", []),
+                },
+            ))
+            ctx.emit(RunEvent(
+                type="step.complete", step_id=step.id, result=data,
+            ))
+            return
+
+        if step_type == "spki_pin_check":
+            # Pure-SDK exercise: compute_spki_hash + SpkiPinVerifier.
+            # No agent involved — the playground runs the SDK directly so
+            # the demo doesn't have to stand up TLS infrastructure.
+            import base64
+            import aitp
+
+            if not step.cert_der_b64 or step.pins is None:
+                raise PlaygroundError(
+                    f"step {step.id}: spki_pin_check requires cert_der_b64 and pins"
+                )
+            cert_der = base64.b64decode(step.cert_der_b64)
+            pin_bytes = [base64.b64decode(p) for p in step.pins]
+            computed_hash = aitp.compute_spki_hash(cert_der)
+            verifier = aitp.SpkiPinVerifier(pin_bytes)
+            is_pinned = verifier.is_pinned(cert_der)
+            expected = step.expect_status  # repurposed: 1 = expect pinned, 0 = expect not-pinned
+            result = {
+                "computed_hash_b64": base64.b64encode(bytes(computed_hash)).decode(),
+                "pin_count": verifier.len,
+                "is_pinned": is_pinned,
+            }
+            step_outputs[step.id] = result
+            ctx.emit(RunEvent(
+                type="spki.pin.checked",
+                step_id=step.id,
+                result=result,
+            ))
+            if expected is not None and bool(expected) != is_pinned:
+                ctx.emit(RunEvent(
+                    type="step.unexpected_status",
+                    step_id=step.id,
+                    result={"expected_pinned": bool(expected), "actual": is_pinned},
+                ))
+                raise PlaygroundError(
+                    f"step {step.id}: spki_pin_check expected_pinned="
+                    f"{bool(expected)} but got {is_pinned}"
+                )
+            ctx.emit(RunEvent(
+                type="step.complete", step_id=step.id, result=result,
+            ))
             return
 
         if step_type == "rotate_keys":

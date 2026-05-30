@@ -73,6 +73,7 @@ app.include_router(build_admin_router(
     revoked_jtis=_revoked_jtis,
     capabilities={"write.content": do_write},
     manifest_provider=lambda: server.manifest_json,
+    issued_tcts=server._issued_tcts,
 ))
 
 

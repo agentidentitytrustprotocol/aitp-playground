@@ -28,6 +28,11 @@ class AgentSpec(BaseModel):
     org: Literal["internal", "external"] = "internal"
     cloud: Optional[str] = None
     did_web_host: Optional[str] = None
+    # Per-agent overrides of the manifest defaults. ``signing_suite``
+    # selects the signing algorithm passed to ``AitpAgent.from_seed``
+    # (Ed25519 by default; ``"p256"`` for the ECDSA suite). When unset
+    # the manifest's ``spec.aitp.signing_suite`` wins.
+    signing_suite: Optional[Literal["ed25519", "p256"]] = None
 
 
 class TrustSpec(BaseModel):
@@ -50,6 +55,10 @@ WorkflowStepType = Literal[
     "rotate_keys",                       # agent replaces its keypair + republishes manifest
     "enroll_with_cp",                    # agent self-enrolls via CP /api/registry/enroll
     "cp_subscribe_webhook",              # register a CP webhook pointing at the run's receiver
+    "renew_tct",                         # RFC-AITP-0005 §10 in-band TCT renewal
+    "export_session_bundle",             # RFC-AITP-0010 build a SessionBundleEnvelope
+    "verify_session_bundle",             # RFC-AITP-0010 verify a SessionBundleEnvelope
+    "spki_pin_check",                    # compute_spki_hash + SpkiPinVerifier exercise
 ]
 
 
@@ -112,6 +121,28 @@ class WorkflowStep(BaseModel):
     # Empty (or omitted) means "all deliverable event types" on the CP side
     # (agent.registered, handshake.complete, tct.revoked, etc.).
     events: Optional[list[str]] = None
+    # renew_tct:
+    # ``holder`` already lives in the standard agent / target_agent pair —
+    # we use ``agent`` (holder) + ``via_peer`` (issuer) for symmetry with
+    # the rest of the engine. Optional ``new_ttl_secs`` overrides the
+    # issuer's default.
+    new_ttl_secs: Optional[int] = None
+    # export_session_bundle:
+    # ``coordinator`` is the agent that builds the bundle from its issued
+    # TCTs; ``participants`` lists the agents whose TCTs go into it.
+    coordinator: Optional[str] = None
+    participants: Optional[list[str]] = None
+    # verify_session_bundle:
+    # ``verifier`` is the agent verifying; ``via_step`` references an
+    # earlier export_session_bundle step whose output we re-present.
+    verifier: Optional[str] = None
+    via_step: Optional[str] = None
+    # spki_pin_check:
+    # ``cert_der_b64`` is a base64-encoded leaf certificate; the step
+    # computes its SPKI hash and asserts is_pinned against the inline
+    # ``pins`` list (also base64-encoded 32-byte values).
+    cert_der_b64: Optional[str] = None
+    pins: Optional[list[str]] = None
     # Fault injection (applies to handshake / workflow / capability_probe).
     # When set, the runner mutates the call's target before issuing it
     # so the step exercises a failure path, and records the outcome in
@@ -198,7 +229,17 @@ class ScenarioTemplate(BaseModel):
 class AitpAgentSpec(BaseModel):
     offered_caps: list[str]
     display_name: str
-    identity_type: Literal["pinned_key"] = "pinned_key"
+    identity_type: Literal["pinned_key", "oidc"] = "pinned_key"
+    # When identity_type == "oidc" the manifest is built with
+    # IdentityHintKind::Oidc; the bootstrap JSON carries ``issuer`` /
+    # ``subject`` so the agent can mint ID tokens via the in-process
+    # mock issuer. Ignored for pinned_key.
+    oidc_issuer: Optional[str] = None
+    oidc_subject: Optional[str] = None
+    # RFC-AITP-0001 §5.4 algorithm selector. Default Ed25519; ``"p256"``
+    # selects the ECDSA suite. Per-scenario ``AgentSpec.signing_suite``
+    # overrides this default.
+    signing_suite: Literal["ed25519", "p256"] = "ed25519"
     ttl_secs: int = 3600
 
 

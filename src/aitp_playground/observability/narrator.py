@@ -148,6 +148,30 @@ def narrate_event(event: Mapping[str, Any]) -> str:
     if etype == "cp.enroll_succeeded":
         return f"[cp]    registered {agent_id}"
 
+    # OIDC, TCT renewal, session bundles, SPKI pinning.
+    if etype == "oidc.issuer_minted":
+        url = result.get("issuer_url") if isinstance(result, dict) else ""
+        return f"[oidc]  per-run issuer minted  url={url}"
+    if etype == "tct.renewed":
+        return (
+            f"[renew] {agent_id} <- {target}  "
+            f"new_jti={_short(event.get('jti'), 14)}"
+        )
+    if etype == "session.bundle.exported":
+        parts = result.get("participant_aids") if isinstance(result, dict) else []
+        sid = result.get("session_id") if isinstance(result, dict) else ""
+        return (
+            f"[bundle] exported  session={_short(sid, 14)}  "
+            f"participants={len(parts or [])}"
+        )
+    if etype == "session.bundle.verified":
+        kind = result.get("kind") if isinstance(result, dict) else ""
+        active = result.get("active_aids") if isinstance(result, dict) else []
+        return f"[bundle] verified  kind={kind}  active={len(active or [])}"
+    if etype == "spki.pin.checked":
+        pinned = result.get("is_pinned") if isinstance(result, dict) else None
+        return f"[spki]  pin checked  is_pinned={pinned}"
+
     # CP webhook fan-out.
     if etype == "cp.webhook.subscribed":
         wid = result.get("id") if isinstance(result, dict) else ""

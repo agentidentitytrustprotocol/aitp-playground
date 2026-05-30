@@ -1,0 +1,64 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: spki-pinning
+  version: 1.0.0
+  name: SPKI Client Cert Pinning — Compute + Verify
+  summary: >
+    Exercises the experimental-pinning SDK surface (compute_spki_hash +
+    SpkiPinVerifier). The playground's intra-process agents talk plain
+    HTTP, so this scenario does not pin a live TLS handshake — instead
+    it computes the SPKI hash of a hard-coded test certificate, asserts
+    is_pinned() returns true when the matching pin is supplied, then
+    asserts the same verifier rejects an unrelated pin. Designed to be
+    a no-network demo that proves the SDK surface works end-to-end and
+    matches a known-good pin computed offline.
+  tags: [spki-pinning, experimental, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "SPKI pin"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    # The pin checks below don't need a peer; the agent only spawns so
+    # the registry / engine path is exercised.
+    eager: false
+
+  workflow:
+    steps:
+      - id: pin_matches
+        type: spki_pin_check
+        # Self-signed Ed25519 cert (CN=aitp-playground-test), DER-encoded.
+        cert_der_b64: >-
+          MIHqMIGdoAMCAQICAQEwBQYDK2VwMB8xHTAbBgNVBAMMFGFpdHAtcGxheWdyb3VuZC10ZXN0MB4XDTI1MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowHzEdMBsGA1UEAwwUYWl0cC1wbGF5Z3JvdW5kLXRlc3QwKjAFBgMrZXADIQADoQe/884Qvh1w3RjnS8CZZ+TWMJulDV8d3IZkElUxuDAFBgMrZXADQQBf7eAcMWnzNUS7/K6nk22d1fJX7vE/2e0EnW6KEb7LCBrIwvavlKomxu5oNStataOrBnnsS4PgKTMU/ItJlPUP
+        pins:
+          - "oFCDfYUHBYLM9zlLCYiEfMMSy4glm4lImfbyOc8XkaU="
+        expect_status: 1
+        description: >
+          Compute the SPKI hash and assert SpkiPinVerifier.is_pinned()
+          returns true when the matching pin is supplied.
+
+      - id: pin_mismatch
+        type: spki_pin_check
+        cert_der_b64: >-
+          MIHqMIGdoAMCAQICAQEwBQYDK2VwMB8xHTAbBgNVBAMMFGFpdHAtcGxheWdyb3VuZC10ZXN0MB4XDTI1MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowHzEdMBsGA1UEAwwUYWl0cC1wbGF5Z3JvdW5kLXRlc3QwKjAFBgMrZXADIQADoQe/884Qvh1w3RjnS8CZZ+TWMJulDV8d3IZkElUxuDAFBgMrZXADQQBf7eAcMWnzNUS7/K6nk22d1fJX7vE/2e0EnW6KEb7LCBrIwvavlKomxu5oNStataOrBnnsS4PgKTMU/ItJlPUP
+        pins:
+          # A wholly unrelated 32-byte pin — verifier must reject.
+          - "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+        expect_status: 0
+        description: >
+          Same cert against a non-matching pin — is_pinned() returns false.
