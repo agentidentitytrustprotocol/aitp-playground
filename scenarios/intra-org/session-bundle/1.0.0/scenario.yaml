@@ -1,0 +1,66 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: session-bundle
+  version: 1.0.0
+  name: Session Trust Bundle — Export + Verify
+  summary: >
+    Demonstrates RFC-AITP-0010 (experimental) session trust bundles.
+    A coordinator agent (researcher) handshakes with two participants
+    (writer and analyzer), then exports a SessionBundleEnvelope from
+    the TCTs it now holds. A third agent (the same writer, in this
+    one-process demo) verifies the bundle and receives a BundleOutcome
+    listing the active participant AIDs. Gated by the experimental-
+    bundle Cargo feature on the aitp-py wheel.
+  tags: [session-bundle, rfc-aitp-0010, experimental, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "Session bundle demo"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+    - id: analyzer
+      ref: _shared/agents/analyzer
+      port_offset: 2
+
+  trust:
+    boundary: intra_org
+    discovery: static
+
+  workflow:
+    steps:
+      - id: trust
+        description: >
+          Eager pairwise handshakes — researcher ends up holding TCTs
+          issued by both writer and analyzer, which become the bundle
+          participants.
+
+      - id: export
+        type: export_session_bundle
+        coordinator: researcher
+        participants: [writer, analyzer]
+        description: >
+          Researcher builds a SessionBundleEnvelope containing the two
+          held TCTs and signs it under its own key (the coordinator).
+
+      - id: verify
+        type: verify_session_bundle
+        verifier: writer
+        via_step: export
+        description: >
+          Writer verifies the bundle. The SDK returns a BundleOutcome
+          with kind=clear and active_aids covering both participants
+          (writer also self-verifies its own TCT entry).

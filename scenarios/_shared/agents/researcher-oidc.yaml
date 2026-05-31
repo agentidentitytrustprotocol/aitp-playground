@@ -1,0 +1,23 @@
+apiVersion: aitp.dev/v1
+kind: AgentManifest
+metadata:
+  id: researcher-oidc
+  name: Research Analyst (OIDC)
+  framework: crewai
+  version: 1.0.0
+spec:
+  entrypoint:
+    type: python_module
+    value: researcher.main
+  host:
+    python: /Users/ajitkoti/code/agentIdenitytrustprotocol/aitp-playground/.venv/bin/python
+    cwd: agents/researcher
+    startupTimeoutMs: 30000
+  aitp:
+    offered_caps: [research.query]
+    display_name: Research Analyst (OIDC)
+    identity_type: oidc
+    oidc_issuer: https://idp.aitp-playground.local/
+    oidc_subject: researcher
+    ttl_secs: 3600
+  did_web: false

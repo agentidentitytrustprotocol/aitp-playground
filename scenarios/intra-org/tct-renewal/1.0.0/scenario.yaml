@@ -1,0 +1,74 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: tct-renewal
+  version: 1.0.0
+  name: TCT Renewal — In-Band Refresh
+  summary: >
+    Demonstrates RFC-AITP-0005 §10 in-band TCT renewal. The researcher
+    handshakes with the writer, performs a research call, then renews
+    the TCT issued by the writer without replaying the full handshake.
+    The renewal request is signed under the holder's subject key (proof
+    of possession) and the issuer mints a fresh envelope with a new
+    jti + expires_at. A second research call with the renewed TCT
+    proves the swap took effect. Gated by the experimental-renewal
+    Cargo feature on the aitp-py wheel.
+  tags: [tct-renewal, rfc-aitp-0005, experimental, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "TCT renewal demo"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+
+  workflow:
+    steps:
+      - id: trust
+        description: All agents perform AITP mutual handshake.
+
+      - id: research_first
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: Researcher uses its held TCT to produce findings.
+
+      - id: renew
+        type: renew_tct
+        agent: researcher
+        via_peer: writer
+        description: >
+          Researcher (holder) presents the held TCT to writer
+          (issuer); writer mints a fresh envelope. The held TCT
+          referenced by subsequent steps is automatically swapped.
+
+      - id: research_after_renewal
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: >
+          Same capability call, now backed by the renewed TCT. The peer's
+          verify_tct succeeds because the new jti has a fresh signature
+          under the same issuer key and the audience binding is preserved.
+
+      - id: write
+        agent: writer
+        capability: write.content
+        input_from: research_after_renewal
+        description: Writer turns the post-renewal findings into a paragraph.

@@ -183,6 +183,10 @@ A step's `type` defaults sensibly when omitted:
 | `rotate_keys` | `agent` | The named agent replaces its keypair, rebuilds its manifest under the new AID, and clears in-flight handshake sessions. Subsequent capability calls that present TCTs issued under the old AID are rejected by `verify_capability_tct`'s issuer-AID guard — see `intra-org/key-rotation`. |
 | `enroll_with_cp` | `agent` | The named agent posts its current manifest to the Control Plane's `/api/registry/enroll` to mint a one-time bearer token, then re-posts to `/api/registry/agents` with that token to register. When `CP_BASE_URL` is unset the step skips. See `intra-org/external-enrollment`. |
 | `cp_subscribe_webhook` | optional `events` | Register a webhook on the Control Plane whose URL points back at this run's `POST /webhooks/cp/{run_id}` receiver. CP returns the webhook id and a secret; the playground stores the secret on the run record so subsequent deliveries can be HMAC-verified (`X-Aitp-Signature: sha256=<hex>`). `events: []` (or omitted) subscribes to every deliverable CP type. When `CP_BASE_URL` is unset the step skips. See `intra-org/webhook-subscription`. |
+| `renew_tct` | `agent` (holder), `via_peer` (issuer) | RFC-AITP-0005 §10 in-band TCT renewal. Holder POSTs to its own `/admin/renew-tct` with the issuer's port; the holder calls `AitpAgent.build_renewal_request` against its held TCT, hands the request to the issuer's `/admin/process-renewal`, which calls `process_renewal_request` and returns a fresh `TctEnvelope`. The holder swaps its held TCT in-place. Gated by the SDK's `experimental-renewal` Cargo feature. See `intra-org/tct-renewal`. |
+| `export_session_bundle` | `coordinator`, `participants` | RFC-AITP-0010 session-bundle issuance. The coordinator (responder side of prior handshakes) packages the TCTs it has issued to each participant into a `SessionBundleEnvelope` signed under its own key. Output includes `bundle_envelope` for downstream `verify_session_bundle` steps. Gated by `experimental-bundle`. See `intra-org/session-bundle`. |
+| `verify_session_bundle` | `verifier`, `via_step` | Verify a previously-exported bundle. The verifier's `/admin/verify-session-bundle` calls the SDK's `verify_session_bundle` and returns a `BundleOutcome` (`{kind: clear|degraded, active_aids, dropped_aids}`). Gated by `experimental-bundle`. |
+| `spki_pin_check` | `cert_der_b64`, `pins`, optional `expect_status` | Pure-SDK exercise of `compute_spki_hash` + `SpkiPinVerifier`. Computes the SHA-256 over the given leaf cert's `SubjectPublicKeyInfo` and asserts `is_pinned` matches `expect_status` (`1` = pin must match, `0` = must not match). Gated by `experimental-pinning`. See `intra-org/spki-pinning`. |
 | `meta` | — | No-op; records `step.skipped`. |
 
 ### Fault injection
@@ -418,6 +422,10 @@ see [agents.md](agents.md).
 | `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
 | `intra-org/external-enrollment@1.0.0` | Agent self-enrolls via `POST /api/registry/enroll` then `POST /api/registry/agents` with the issued bearer token. |
 | `intra-org/webhook-subscription@1.0.0` | Playground registers a CP webhook and CP fans `handshake.complete` / other audit events back via `POST /webhooks/cp/{run_id}`; inspect deliveries with `GET /runs/{id}/cp-deliveries`. |
+| `intra-org/oidc-identity@1.0.0` | RFC-AITP-0002 OIDC identity binding — researcher mints a JWT signed by the per-run mock issuer; writer verifies via the SDK's `JwksProvider`. Template variant `p256-suite` runs the same flow with a P-256 researcher (cross-suite). |
+| `intra-org/tct-renewal@1.0.0` | RFC-AITP-0005 §10 in-band TCT renewal: handshake → call → renew → call-with-new-jti. |
+| `intra-org/session-bundle@1.0.0` | RFC-AITP-0010 session trust bundle export + verify. Coordinator-issued TCTs packaged into a signed envelope; verifier returns BundleOutcome. |
+| `intra-org/spki-pinning@1.0.0` | Pure-SDK demo of `compute_spki_hash` + `SpkiPinVerifier` against a hard-coded self-signed cert. |
 | `cross-cloud/distributed-review@1.0.0` | Three agents; did:web discovery. |
 | `cross-org/federated-analysis@1.0.0` | CP-registry discovery for an external agent (falls back to static). |
 

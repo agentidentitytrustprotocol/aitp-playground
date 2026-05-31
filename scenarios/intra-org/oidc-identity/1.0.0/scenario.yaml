@@ -1,0 +1,64 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: oidc-identity
+  version: 1.0.0
+  name: OIDC Identity Binding — Alternative to Pinned-Key
+  summary: >
+    Demonstrates RFC-AITP-0002 OIDC identity proofs in the handshake.
+    The researcher's manifest declares identity_type=oidc with an
+    issuer URL and subject; during the four-message handshake it
+    presents a short-lived JWT minted by the per-run mock issuer the
+    playground spawns automatically. The writer (pinned-key) verifies
+    the JWT via the SDK's JwksProvider preloaded with the issuer's
+    public key, then completes the handshake exactly as in the
+    pinned-key case. End state: both agents hold TCTs and capability
+    calls succeed.
+  tags: [oidc, rfc-aitp-0002, identity, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "OIDC identity binding"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher-oidc
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    # Trust is established by the eager pairwise handshake — that is
+    # the step where the OIDC JWT is presented + verified.
+    eager: true
+
+  workflow:
+    steps:
+      - id: trust
+        description: >
+          Researcher (OIDC) → Writer (pinned-key) handshake. The
+          researcher's HELLO carries the JWT; the writer's verify_oidc
+          succeeds because the per-run mock issuer is in its JwksProvider
+          and trust_anchors.
+
+      - id: research
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+        description: OIDC-identified researcher produces findings.
+
+      - id: write
+        agent: writer
+        capability: write.content
+        input_from: research
+        description: Writer turns findings into a paragraph.

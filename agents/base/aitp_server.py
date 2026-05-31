@@ -13,6 +13,7 @@ from typing import Any, Optional
 import aitp
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from oidc import OidcContext, peer_aid_from_hello_envelope
 from telemetry import emit_event
 
 
@@ -50,7 +51,23 @@ class AitpServer:
         # mutate it and verify_capability_tct will see the change.
         self.revoked_jtis: set[str] = revoked_jtis if revoked_jtis is not None else set()
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
+        # Issued-TCT log keyed by peer AID. Populated when a responder
+        # session completes — gives /admin/export-session-bundle access
+        # to the TCTs we (the coordinator) handed out.
+        self._issued_tcts: dict[str, str] = {}
+        self.oidc = OidcContext(bootstrap)
         self.router = self._build_router()
+
+    def _new_responder(self):
+        """Construct a ResponderSession with the OIDC verifier wired in
+        when the run has an OIDC issuer configured. Plain pinned-key
+        runs leave both kwargs at their None defaults."""
+        if self.oidc.enabled:
+            return self.agent.new_responder(
+                jwks=self.oidc.jwks,
+                trust_anchors=self.oidc.trust_anchors,
+            )
+        return self.agent.new_responder()
 
     def _build_router(self) -> APIRouter:
         router = APIRouter()
@@ -78,14 +95,20 @@ class AitpServer:
             old_aid = self.agent.aid
             old_manifest = self.manifest_json
 
-            new_agent = aitp.AitpAgent.generate()
             cfg = self.bootstrap.get("aitp", {})
-            new_manifest = new_agent.build_manifest(
-                display_name=cfg.get("display_name", ""),
-                handshake_endpoint=cfg.get("handshake_endpoint", ""),
-                offered_caps=list(cfg.get("offered_caps", [])),
-                ttl_secs=int(cfg.get("ttl_secs", 3600)),
-            )
+            suite = cfg.get("signing_suite", "ed25519")
+            new_agent = aitp.AitpAgent.generate(suite=suite)
+            manifest_kwargs: dict[str, Any] = {
+                "display_name": cfg.get("display_name", ""),
+                "handshake_endpoint": cfg.get("handshake_endpoint", ""),
+                "offered_caps": list(cfg.get("offered_caps", [])),
+                "ttl_secs": int(cfg.get("ttl_secs", 3600)),
+            }
+            if cfg.get("identity_type") == "oidc":
+                manifest_kwargs["identity_type"] = "oidc"
+                manifest_kwargs["oidc_issuer"] = cfg.get("oidc_issuer")
+                manifest_kwargs["oidc_subject"] = cfg.get("oidc_subject")
+            new_manifest = new_agent.build_manifest(**manifest_kwargs)
             self.agent = new_agent
             self.manifest_json = new_manifest
             self._sessions.clear()
@@ -121,9 +144,20 @@ class AitpServer:
         @router.post("/aitp/handshake/hello")
         async def hello(request: Request) -> Response:
             hello_json = (await request.body()).decode()
-            responder = self.agent.new_responder()
+            responder = self._new_responder()
+            # If this agent is OIDC-typed, mint its JWT bound to the
+            # initiator's AID extracted from the hello envelope so the
+            # initiator's verify_oidc sees aud == its own AID.
+            mint_cb = None
+            if self.oidc.identity_type == "oidc":
+                peer_aid = peer_aid_from_hello_envelope(hello_json) or ""
+                mint_cb = self.oidc.mint_jwt_for(
+                    audience=peer_aid, agent=self.agent,
+                )
             try:
-                ack_json, session_id = responder.process_hello(hello_json)
+                ack_json, session_id = responder.process_hello(
+                    hello_json, oidc_mint_jwt=mint_cb,
+                )
             except Exception as exc:  # noqa: BLE001
                 await emit_event("handshake.failed", self.bootstrap, error=str(exc))
                 return Response(
@@ -202,6 +236,12 @@ class AitpServer:
                     media_type="application/json",
                 )
             tct = json.loads(tct_json)
+            # Record the TCT we just issued so /admin/export-session-bundle
+            # can attach it to the bundle. Keyed by the recipient AID
+            # (the subject in TCT terms).
+            recipient_aid = tct["tct"].get("subject") or ""
+            if recipient_aid:
+                self._issued_tcts[recipient_aid] = tct_json
             await emit_event(
                 "handshake.complete", self.bootstrap,
                 session_id=session_id,

@@ -1,0 +1,23 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioTemplate
+metadata:
+  name: p256-suite
+  summary: >
+    Cross-suite OIDC handshake — researcher is born with a P-256
+    ECDSA key (aid:pubkey:p256:<44>) and identifies via OIDC, writer
+    stays Ed25519 + pinned-key. The SDK's algorithm-agile verifier
+    handles the mixed handshake; both agents end up holding TCTs.
+    Proves RFC-AITP-0001 §5.4.3 P-256 signing end-to-end. (Pinned-key
+    + P-256 is not a valid combination in v0.1 because the manifest's
+    identity_hint.public_key embeds Ed25519 bytes — hence the OIDC
+    base scenario.)
+
+spec:
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher-oidc
+      port_offset: 0
+      signing_suite: p256
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1

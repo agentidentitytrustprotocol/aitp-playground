@@ -96,6 +96,7 @@ app.include_router(build_admin_router(
     bootstrap=bootstrap,
     held_tcts=_held_tcts,
     revoked_jtis=_revoked_jtis,
+    issued_tcts=server._issued_tcts,
     capabilities={
         "research.query": do_research,
         "research.deep": do_deep_research,

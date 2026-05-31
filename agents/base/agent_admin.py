@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from oidc import OidcContext
 from telemetry import emit_event
 
 CapabilityHandler = Callable[[Any], Awaitable[Any]]
@@ -31,6 +32,7 @@ def build_admin_router(
     revoked_jtis: set[str],                      # mutated in place by /admin/revoke-tct
     capabilities: Optional[dict[str, CapabilityHandler]] = None,
     manifest_provider: Optional[Callable[[], str]] = None,
+    issued_tcts: Optional[dict[str, str]] = None,  # peer_aid -> tct_json (responder-side)
 ) -> APIRouter:
     """Build the /admin router. ``capabilities`` maps capability name to an
     async handler invoked by ``/admin/self-execute``. The handler receives the
@@ -48,6 +50,12 @@ def build_admin_router(
     """
     router = APIRouter(prefix="/admin")
     caps: dict[str, CapabilityHandler] = dict(capabilities or {})
+    oidc = OidcContext(bootstrap)
+
+    def _new_session():
+        if oidc.enabled:
+            return agent.new_session(jwks=oidc.jwks, trust_anchors=oidc.trust_anchors)
+        return agent.new_session()
 
     @router.post("/initiate-handshake")
     async def initiate_handshake(request: Request) -> dict[str, Any]:
@@ -55,7 +63,7 @@ def build_admin_router(
         peer_manifest_url: str = body["peer_manifest_url"]
         requested_grants: Optional[list[str]] = body.get("requested_grants")
 
-        session = agent.new_session()
+        session = _new_session()
         async with httpx.AsyncClient(timeout=15.0) as client:
             manifest_res = await client.get(peer_manifest_url)
             manifest_res.raise_for_status()
@@ -69,7 +77,11 @@ def build_admin_router(
             else:
                 grants = list(requested_grants)
 
-            hello = session.build_hello(peer_manifest_json, grants)
+            mint_cb = None
+            if oidc.identity_type == "oidc":
+                peer_aid = peer_manifest.get("aid", "")
+                mint_cb = oidc.mint_jwt_for(audience=peer_aid, agent=agent)
+            hello = session.build_hello(peer_manifest_json, grants, oidc_mint_jwt=mint_cb)
             hello_ep = peer_manifest["handshake_endpoint"]
             r1 = await client.post(
                 hello_ep,
@@ -157,6 +169,164 @@ def build_admin_router(
             "status_code": r.status_code,
             "body": inner_body,
         }
+
+    @router.post("/renew-tct")
+    async def renew_tct(request: Request) -> dict[str, Any]:
+        """Holder side of RFC-AITP-0005 §10 TCT renewal.
+
+        Body:
+          - ``peer_port``: the issuer's port; we look up our held TCT in
+            ``held_tcts[peer_port]``, build a renewal request via the
+            SDK, POST it to the issuer's ``/admin/process-renewal``, and
+            swap our held TCT to the freshly issued envelope.
+
+        Returns the new TCT's ``{jti, expires_at}`` so the runner can
+        emit a structured event.
+        """
+        body = await request.json()
+        peer_port = int(body["peer_port"])
+
+        current_tct_json = held_tcts.get(peer_port)
+        if not current_tct_json:
+            raise HTTPException(
+                status_code=412,
+                detail=f"No TCT held for port {peer_port} — run handshake first",
+            )
+
+        request_payload = agent.build_renewal_request(current_tct_json)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"http://localhost:{peer_port}/admin/process-renewal",
+                content=request_payload,
+                headers={"Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+        new_tct_envelope = r.text
+        held_tcts[peer_port] = new_tct_envelope
+
+        new_tct = json.loads(new_tct_envelope)["tct"]
+        await emit_event(
+            "tct.renewal.requested", bootstrap,
+            jti=new_tct.get("jti"),
+            peer_port=peer_port,
+        )
+        return {
+            "jti": new_tct.get("jti"),
+            "expires_at": new_tct.get("expires_at"),
+            "issuer": new_tct.get("issuer"),
+            "subject": new_tct.get("subject"),
+        }
+
+    @router.post("/export-session-bundle")
+    async def export_session_bundle(request: Request) -> dict[str, Any]:
+        """RFC-AITP-0010 coordinator side. Build a SessionBundleEnvelope
+        from the TCTs this agent has issued to the listed participants.
+
+        Body:
+          - ``participants``: ``{agent_id: peer_port}``. We map peer_port
+            back to a held TCT via this agent's outbound-handshake
+            records — but in the bundle the *issued* TCTs are the
+            relevant ones. Each participant must have completed an
+            inbound handshake with us first (so we know the AID + held
+            TCT); the responder records these in ``self._sessions`` on
+            ``AitpServer``. To keep this admin route framework-light,
+            the test fixture instead passes ``participant_tcts``
+            directly when the responder cache isn't reachable.
+          - ``participant_tcts`` (optional): ``[{aid, tct_envelope}]`` —
+            if provided, skip the responder-cache lookup.
+
+        Returns ``{bundle_envelope, session_id, participant_aids}``.
+        """
+        import time
+        import uuid
+
+        import aitp
+
+        body = await request.json()
+        provided_tcts: list[dict[str, Any]] = list(
+            body.get("participant_tcts") or []
+        )
+
+        # Default path: derive participants from issued_tcts. RFC-0010
+        # bundles require each participant TCT to have been *issued by*
+        # the coordinator — i.e., the coordinator is the responder
+        # (issuer) side of the handshake. We populate issued_tcts on
+        # commit (see AitpServer); the playground engine drives
+        # handshakes such that the coordinator is the responder.
+        if not provided_tcts and issued_tcts:
+            for recipient_aid, tct_json in issued_tcts.items():
+                provided_tcts.append({
+                    "aid": recipient_aid,
+                    "tct_envelope": tct_json,
+                })
+
+        if not provided_tcts:
+            raise HTTPException(
+                status_code=412,
+                detail="no participants — handshake first or pass participant_tcts",
+            )
+
+        builder = aitp.SessionBundleBuilder(agent)
+        session_id = str(uuid.uuid4())
+        builder.session_id(session_id)
+        builder.issued_at(int(time.time()))
+        participant_aids: list[str] = []
+        for p in provided_tcts:
+            builder.participant(p["aid"], p["tct_envelope"])
+            participant_aids.append(p["aid"])
+        bundle_envelope = builder.build()
+        await emit_event(
+            "session.bundle.exported", bootstrap,
+            session_id=session_id,
+            participant_count=len(participant_aids),
+        )
+        return {
+            "bundle_envelope": bundle_envelope,
+            "session_id": session_id,
+            "participant_aids": participant_aids,
+        }
+
+    @router.post("/verify-session-bundle")
+    async def verify_session_bundle_endpoint(request: Request) -> dict[str, Any]:
+        """Verifier side of RFC-AITP-0010. Returns the BundleOutcome dict
+        (``{kind, active_aids, dropped_aids}``) from the SDK so the
+        playground engine can attach it as the step result.
+        """
+        import aitp
+
+        body = await request.json()
+        envelope: str = body["bundle_envelope"]
+        outcome = aitp.verify_session_bundle(envelope, agent.aid)
+        await emit_event(
+            "session.bundle.verified", bootstrap,
+            kind=outcome.get("kind"),
+            active_count=len(outcome.get("active_aids", [])),
+        )
+        return outcome
+
+    @router.post("/process-renewal")
+    async def process_renewal(request: Request) -> Response:
+        """Issuer side of TCT renewal. Verifies the renewal request and
+        mints a fresh TctEnvelope JSON. The manifest-expiry bound is
+        derived from this agent's manifest TTL.
+        """
+        import time
+
+        request_payload = (await request.body()).decode("utf-8")
+        cfg = bootstrap.get("aitp", {})
+        ttl_secs = int(cfg.get("ttl_secs", 3600))
+        manifest_exp = int(time.time()) + ttl_secs
+        new_tct_envelope_json = agent.process_renewal_request(
+            request_payload, manifest_exp, ttl_secs,
+        )
+        new_tct = json.loads(new_tct_envelope_json)["tct"]
+        await emit_event(
+            "tct.renewal.issued", bootstrap,
+            jti=new_tct.get("jti"),
+            subject=new_tct.get("subject"),
+        )
+        return Response(new_tct_envelope_json, media_type="application/json")
 
     @router.post("/delegate")
     async def issue_delegation(request: Request) -> dict[str, Any]:
