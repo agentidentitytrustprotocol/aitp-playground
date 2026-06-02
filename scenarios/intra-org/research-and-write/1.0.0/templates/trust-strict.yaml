@@ -1,0 +1,43 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioTemplate
+metadata:
+  name: trust-strict
+  summary: >
+    Variant of research-and-write where trust is NOT pre-established.
+    The researcher probes writer.write.content first and observes a 403,
+    then both agents perform an explicit AITP handshake before the real
+    research → write sequence runs. Demonstrates capability gating
+    against the same base participants without writing a new scenario.
+
+spec:
+  trust:
+    eager: false
+
+  workflow:
+    steps:
+      - id: probe_no_tct
+        type: capability_call_no_trust
+        agent: researcher
+        target_agent: writer
+        capability: write.content
+        expect_status: 403
+        description: >
+          Researcher invokes writer.write.content without a TCT. Writer's
+          verify_capability_tct() rejects, returning 403.
+
+      - id: trust
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: AITP mutual 4-message handshake establishes trust.
+
+      - id: research
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+
+      - id: write
+        agent: writer
+        capability: write.content
+        input_from: research
+        description: With a valid TCT the same write.content call succeeds.

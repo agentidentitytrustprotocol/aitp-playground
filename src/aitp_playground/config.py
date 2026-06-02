@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     log_level: str = "INFO"
+    # When set, persist run records + events to this SQLite file so they
+    # survive a service restart. Empty (the default) keeps the in-memory
+    # RunStore — fast, ephemeral, no I/O.
+    run_history_db: str = ""
 
     @property
     def scenarios_path(self) -> Path:

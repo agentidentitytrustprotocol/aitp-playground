@@ -69,6 +69,7 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | _(empty)_ | Required for real LLM output |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Override |
+| `RUN_HISTORY_DB` | _(empty)_ | When set, persist runs + events to this SQLite file so they survive a restart. Empty = in-memory only. |
 | `LOG_LEVEL` | `INFO` | Standard logging level |
 
 See [llm-providers.md](llm-providers.md) for provider details.
@@ -121,10 +122,12 @@ curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
 | `GET  /scenarios` | List all scenarios with refs |
 | `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed |
 | `POST /runs` | Start a run (async; returns run_id immediately) |
-| `GET  /runs` | List recent runs (in-memory) |
+| `GET  /runs` | List recent runs (in-memory by default; `RUN_HISTORY_DB` makes them durable) |
 | `GET  /runs/{id}` | Full run record incl. outputs and events |
 | `GET  /runs/{id}/status` | Just status + event count |
 | `GET  /runs/{id}/events` | SSE event stream (replay + live) |
+| `GET  /runs/{id}/cp-deliveries` | CP webhook deliveries this run has received (requires a prior `cp_subscribe_webhook` step) |
+| `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified) |
 | `POST /runs/{id}/cancel` | Kill agent subprocesses, mark cancelled |
 | `GET  /agents` | List currently-running agent processes |
 | `POST /internal/telemetry` | Sink for agents — not for external use |

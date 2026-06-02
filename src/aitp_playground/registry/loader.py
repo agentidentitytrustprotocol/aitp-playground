@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from ..errors import RegistryValidationError
 from .include_resolver import load_yaml
-from .models import AgentManifest, Pack, ScenarioVersion
+from .models import AgentManifest, Pack, ScenarioTemplate, ScenarioVersion
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ class LoadedRegistry:
     scenarios: dict[str, ScenarioVersion] = field(default_factory=dict)
     # key: ref relative to scenarios_dir without trailing .yaml (e.g. "_shared/agents/researcher")
     agents: dict[str, AgentManifest] = field(default_factory=dict)
+    # key: "pack/scenario@version" -> {template_name: ScenarioTemplate}
+    templates: dict[str, dict[str, ScenarioTemplate]] = field(default_factory=dict)
 
 
 class FileRegistryLoader:
@@ -64,8 +66,35 @@ class FileRegistryLoader:
                     sv = self._load_scenario_version(sv_yaml)
                     key = f"{sv.metadata.pack}/{sv.metadata.scenario}@{sv.metadata.version}"
                     reg.scenarios[key] = sv
+                    templates = self._load_templates(version_dir)
+                    if templates:
+                        reg.templates[key] = templates
 
         return reg
+
+    def _load_templates(self, version_dir: Path) -> dict[str, ScenarioTemplate]:
+        templates_dir = version_dir / "templates"
+        if not templates_dir.exists():
+            return {}
+        out: dict[str, ScenarioTemplate] = {}
+        for p in sorted(templates_dir.glob("*.yaml")):
+            data = load_yaml(p)
+            if not isinstance(data, dict) or data.get("kind") != "ScenarioTemplate":
+                logger.warning(
+                    "skipping non-template file under templates/: %s "
+                    "(missing kind: ScenarioTemplate)", p,
+                )
+                continue
+            try:
+                tpl = ScenarioTemplate.model_validate(data)
+            except ValidationError as exc:
+                raise RegistryValidationError(f"{p}: {exc}") from exc
+            if tpl.metadata.name in out:
+                raise RegistryValidationError(
+                    f"{p}: duplicate template name {tpl.metadata.name!r}"
+                )
+            out[tpl.metadata.name] = tpl
+        return out
 
     def _ref_for_agent_file(self, path: Path) -> str:
         rel = path.relative_to(self.scenarios_dir).with_suffix("")

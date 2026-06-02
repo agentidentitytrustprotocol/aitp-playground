@@ -1,0 +1,45 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioTemplate
+metadata:
+  name: revoking
+  summary: >
+    Variant of research-and-write that exercises mid-run revocation.
+    After the first research+write succeeds, the writer revokes the
+    researcher's TCT and a subsequent research.query call is rejected
+    with 403. Pure-local revocation — no Control Plane required.
+
+spec:
+  workflow:
+    steps:
+      - id: trust
+        description: All agents perform AITP mutual handshake.
+
+      - id: research
+        agent: researcher
+        capability: research.query
+        input_template: "{{ inputs.topic }}"
+
+      - id: write
+        agent: writer
+        capability: write.content
+        input_from: research
+
+      - id: revoke
+        type: revoke_tct
+        issuer: writer
+        audience: researcher
+        reason: variant-demo
+        description: >
+          Writer revokes the TCT it issued to researcher. Subsequent
+          research.query calls from researcher targeting writer now fail.
+
+      - id: probe_after_revoke
+        type: capability_probe
+        agent: researcher
+        target_agent: writer
+        capability: write.content
+        expect_status: 403
+        input_template: "{{ inputs.topic }}"
+        description: >
+          Researcher tries write.content with the revoked TCT — writer's
+          verify_capability_tct rejects with 403.

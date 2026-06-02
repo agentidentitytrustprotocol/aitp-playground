@@ -220,6 +220,46 @@ def _check_delegation_multihop(body: dict) -> None:
         )
 
 
+def _check_external_enrollment(body: dict) -> None:
+    """The agent's self-enrollment must report enrolled=True with the
+    AID returned by the CP, and a cp.enroll_complete event must appear
+    in the run log."""
+    out = _step(body, "self_enroll")
+    assert isinstance(out, dict), f"external-enrollment: not a dict: {out!r}"
+    assert out.get("enrolled") is True, (
+        f"external-enrollment: expected enrolled=True, got {out!r}"
+    )
+    assert out.get("aid"), (
+        f"external-enrollment: enrollment returned no AID: {out!r}"
+    )
+
+    event_types = {e.get("type") for e in (body.get("events") or [])}
+    assert "cp.enroll_complete" in event_types, (
+        f"external-enrollment: cp.enroll_complete missing: {sorted(event_types)}"
+    )
+
+
+def _check_fault_injection(body: dict) -> None:
+    """First handshake succeeds; the two fault-injected steps must
+    record fault_injected=True with a non-empty error, and the run as a
+    whole must complete (faults do not bubble out)."""
+    assert _step(body, "handshake_ok") == {"trust": "established"}
+
+    for fault_id in ("handshake_manifest_404", "call_peer_offline"):
+        out = _step(body, fault_id)
+        assert isinstance(out, dict), f"fault-injection[{fault_id}]: not a dict: {out!r}"
+        assert out.get("fault_injected") is True, (
+            f"fault-injection[{fault_id}]: missing fault_injected=true: {out!r}"
+        )
+        assert out.get("error"), (
+            f"fault-injection[{fault_id}]: fault produced no error: {out!r}"
+        )
+
+    event_types = [e.get("type") for e in (body.get("events") or [])]
+    assert event_types.count("step.fault_injected") == 2
+    assert event_types.count("step.fault_complete") == 2
+
+
 def _check_key_rotation(body: dict) -> None:
     """Pre-rotation call succeeds; rotate emits old/new AID; post-rotation
     probe with the stale TCT observes a 403 because the TCT's declared
@@ -308,6 +348,16 @@ SCENARIOS: list[ProtocolCase] = [
         ref="intra-org/key-rotation@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_key_rotation,
+    ),
+    ProtocolCase(
+        ref="intra-org/fault-injection@1.0.0",
+        inputs={"topic": "AITP self-test"},
+        check=_check_fault_injection,
+    ),
+    ProtocolCase(
+        ref="intra-org/external-enrollment@1.0.0",
+        inputs={"topic": "AITP self-test"},
+        check=_check_external_enrollment,
     ),
 ]
 

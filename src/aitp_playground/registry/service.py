@@ -7,7 +7,8 @@ from typing import Iterable
 from ..config import Settings
 from ..errors import AgentManifestNotFoundError, ScenarioNotFoundError
 from .loader import FileRegistryLoader, LoadedRegistry
-from .models import AgentManifest, Pack, ScenarioVersion
+from .models import AgentManifest, Pack, ScenarioTemplate, ScenarioVersion
+from .templates import apply_template
 
 
 class RegistryService:
@@ -42,6 +43,33 @@ class RegistryService:
         if sv is None:
             raise ScenarioNotFoundError(f"scenario not found: {ref}")
         return sv
+
+    def list_templates(self, ref: str) -> list[ScenarioTemplate]:
+        """Return the templates declared under ``<ref>/templates/`` (may be empty)."""
+        reg = self._maybe_reload()
+        # Force a load-time existence check so callers get ScenarioNotFoundError
+        # for typos rather than an empty list.
+        self.get_scenario(ref)
+        return list(reg.templates.get(ref, {}).values())
+
+    def get_template(self, ref: str, name: str) -> ScenarioTemplate:
+        reg = self._maybe_reload()
+        self.get_scenario(ref)
+        tpl = reg.templates.get(ref, {}).get(name)
+        if tpl is None:
+            raise ScenarioNotFoundError(
+                f"template {name!r} not found for scenario {ref}"
+            )
+        return tpl
+
+    def get_scenario_resolved(
+        self, ref: str, template: str | None = None
+    ) -> ScenarioVersion:
+        """Return the scenario, optionally merged with a named template."""
+        base = self.get_scenario(ref)
+        if template is None:
+            return base
+        return apply_template(base, self.get_template(ref, template))
 
     def get_agent_manifest(self, ref: str) -> AgentManifest:
         """ref is a path relative to scenarios_dir (no .yaml suffix), e.g. '_shared/agents/researcher'."""

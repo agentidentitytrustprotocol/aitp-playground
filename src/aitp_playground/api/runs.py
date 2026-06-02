@@ -8,14 +8,16 @@ import uuid
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
+from ..cp_client.client import CpClient
 from ..errors import RunNotFoundError
 from ..hosting.supervisor import AgentSupervisor
+from ..observability.narrator import narrate_events
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
-from ._deps import get_run_store, get_runner, get_supervisor
+from ._deps import get_cp_client, get_run_store, get_runner, get_supervisor
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -25,6 +27,11 @@ class RunRequest(BaseModel):
     scenario_ref: str
     inputs: dict[str, Any] = {}
     run_label: Optional[str] = None
+    # Optional template variant declared under
+    # ``scenarios/<pack>/<scenario>/<version>/templates/<template>.yaml``.
+    # When set, the runner merges it on top of the base scenario before
+    # executing — same scenario_ref, different workflow / trust posture.
+    template: Optional[str] = None
 
 
 class RunCreated(BaseModel):
@@ -91,6 +98,7 @@ async def _run_in_background(runner: ScenarioRunner, run_id: str, body: RunReque
             scenario_ref=body.scenario_ref,
             inputs=body.inputs,
             run_label=body.run_label,
+            template=body.template,
         )
     except Exception:  # noqa: BLE001
         logger.exception("Background run %s crashed", run_id)
@@ -125,6 +133,142 @@ def get_run(run_id: str, store: RunStore = Depends(get_run_store)) -> RunRespons
         error=record.get("error"),
         created_at=record.get("created_at"),
     )
+
+
+class CpAuditResponse(BaseModel):
+    run_id: str
+    cp_enabled: bool
+    events: list[dict[str, Any]] = []
+    event_types: list[str] = []
+    count: int = 0
+
+
+class CpSessionsResponse(BaseModel):
+    run_id: str
+    cp_enabled: bool
+    sessions: list[dict[str, Any]] = []
+    count: int = 0
+
+
+@router.get("/{run_id}/cp-audit", response_model=CpAuditResponse)
+async def get_run_cp_audit(
+    run_id: str,
+    type: Optional[str] = None,
+    limit: int = 200,
+    store: RunStore = Depends(get_run_store),
+    cp: CpClient = Depends(get_cp_client),
+) -> CpAuditResponse:
+    """Proxy the slice of the Control Plane audit log that belongs to this run.
+
+    The CP-side query is ``GET /api/events/history?run_id={id}`` with the
+    optional ``type=`` filter passed through. When CP isn't configured the
+    response is ``cp_enabled=false`` with an empty list — callers can
+    branch on this without having to know CP wiring.
+    """
+    if store.get(run_id) is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    if not cp.enabled:
+        return CpAuditResponse(run_id=run_id, cp_enabled=False)
+    events = await cp.fetch_events_history(run_id=run_id, type_=type, limit=limit)
+    return CpAuditResponse(
+        run_id=run_id,
+        cp_enabled=True,
+        events=events,
+        event_types=sorted({e.get("type") for e in events if e.get("type")}),
+        count=len(events),
+    )
+
+
+class CpDeliveriesResponse(BaseModel):
+    run_id: str
+    subscribed: bool
+    webhook: Optional[dict[str, Any]] = None
+    deliveries: list[dict[str, Any]] = []
+    count: int = 0
+
+
+@router.get("/{run_id}/cp-deliveries", response_model=CpDeliveriesResponse)
+def get_run_cp_deliveries(
+    run_id: str,
+    event_type: Optional[str] = None,
+    store: RunStore = Depends(get_run_store),
+) -> CpDeliveriesResponse:
+    """List CP webhook deliveries this run has received.
+
+    Deliveries come from CP's audit fan-out into ``POST /webhooks/cp/{run_id}``;
+    each one is also visible in the main event log as
+    ``cp.webhook.delivered``. This endpoint surfaces just those rows so a
+    CLI / dashboard doesn't have to filter the full event list itself.
+    Pass ``event_type=`` to filter to a single CP event class
+    (``handshake.complete``, ``tct.revoked``, etc.).
+    """
+    record = store.get(run_id)
+    if record is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    cp_webhook = record.get("cp_webhook")
+    events = [
+        e for e in (record.get("events") or [])
+        if e.get("type") == "cp.webhook.delivered"
+        and (event_type is None or e.get("event_type") == event_type)
+    ]
+    # Strip the run-secret from the webhook block before exposing.
+    webhook_view = None
+    if cp_webhook:
+        webhook_view = {k: v for k, v in cp_webhook.items() if k != "secret"}
+    return CpDeliveriesResponse(
+        run_id=run_id,
+        subscribed=bool(cp_webhook),
+        webhook=webhook_view,
+        deliveries=events,
+        count=len(events),
+    )
+
+
+@router.get("/{run_id}/cp-sessions", response_model=CpSessionsResponse)
+async def get_run_cp_sessions(
+    run_id: str,
+    status: Optional[str] = None,
+    limit: int = 200,
+    store: RunStore = Depends(get_run_store),
+    cp: CpClient = Depends(get_cp_client),
+) -> CpSessionsResponse:
+    """Proxy the Control Plane's handshake-session records for this run.
+
+    The CP-side query is ``GET /api/sessions?run_id={id}`` with the
+    optional ``status=`` filter passed through.
+    """
+    if store.get(run_id) is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    if not cp.enabled:
+        return CpSessionsResponse(run_id=run_id, cp_enabled=False)
+    sessions = await cp.fetch_sessions(run_id=run_id, status=status, limit=limit)
+    return CpSessionsResponse(
+        run_id=run_id, cp_enabled=True, sessions=sessions, count=len(sessions),
+    )
+
+
+@router.get("/{run_id}/narrate", response_class=PlainTextResponse)
+def get_run_narrate(
+    run_id: str,
+    store: RunStore = Depends(get_run_store),
+) -> PlainTextResponse:
+    """Return a human-readable narration of this run's event log.
+
+    Each protocol step (handshake, delegate, redeem, revoke, rotate,
+    enroll, fault) becomes a single short line. Unknown event types are
+    dropped — the raw log is still available via ``GET /runs/{id}``.
+    Useful for live tail (``curl -N`` over a long run) and for the
+    ``aitp-playground trace`` CLI subcommand.
+    """
+    record = store.get(run_id)
+    if record is None:
+        raise RunNotFoundError(f"Run {run_id} not found")
+    events = list(record.get("events") or [])
+    lines = narrate_events(events)
+    # Add a trailing summary line so the output is self-contained.
+    status = record.get("status") or "unknown"
+    lines.append(f"[run] status={status}  events={len(events)}  narrated={len(lines)-0}")
+    return PlainTextResponse("\n".join(lines) + "\n")
 
 
 @router.get("/{run_id}/status", response_model=RunStatus)

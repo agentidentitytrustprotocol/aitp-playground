@@ -1,0 +1,52 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: external-enrollment
+  version: 1.0.0
+  name: External Agent Enrollment (CP self-enroll flow)
+  summary: >
+    Demonstrates an agent self-enrolling with the Control Plane using
+    the two-step token flow:
+
+      1. POST /api/registry/enroll with the agent's ManifestEnvelope
+         → mint a short-lived (5 min) bearer token.
+      2. POST /api/registry/agents with the same manifest and
+         Authorization: Bearer <token> → register.
+
+    After enrollment, the agent is discoverable via
+    GET /api/registry/agents?aid=<aid>. This scenario does not perform
+    that discovery query itself — it's the enrollment write that
+    matters for the demo. When CP_BASE_URL is unset the step skips
+    with a structured "no cp" outcome so the run still completes.
+  tags: [enrollment, control-plane, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "Self-enrollment lifecycle"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: self_enroll
+        type: enroll_with_cp
+        agent: researcher
+        description: >
+          Researcher posts its current manifest to the CP, gets a
+          one-time enrollment token, then registers itself against
+          /api/registry/agents using that token.
