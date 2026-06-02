@@ -543,6 +543,86 @@ class ScenarioRunner:
             }
             return
 
+        if step_type == "cp_provision_trust_anchor":
+            # Push trust configuration to the Control Plane: register the
+            # agent's pinned Ed25519 key (from its published manifest) and,
+            # when ``issuer`` is set, an OIDC trust anchor. Then read both
+            # registries back to confirm the registration landed.
+            if not step.agent:
+                raise PlaygroundError(
+                    f"step {step.id}: cp_provision_trust_anchor requires agent"
+                )
+            if not self.cp.enabled:
+                ctx.emit(RunEvent(
+                    type="step.skipped", step_id=step.id,
+                    notes="CP not configured (CP_BASE_URL unset)",
+                ))
+                step_outputs[step.id] = {"provisioned": False, "skipped": "no cp"}
+                return
+            ra = running[step.agent]
+            namespace = step.namespace or scenario.metadata.pack
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                mr = await client.get(ra.manifest_url)
+                mr.raise_for_status()
+                manifest = mr.json().get("manifest", {})
+            pubkey = (manifest.get("identity_hint") or {}).get("public_key")
+            pinned = None
+            if pubkey:
+                pinned = await self.cp.upsert_pinned_key(
+                    aid=ra.aid, pubkey=pubkey, namespace=namespace, label=step.agent,
+                )
+            anchor = None
+            if step.issuer_url:
+                anchor = await self.cp.upsert_trust_anchor(
+                    issuer_url=step.issuer_url, namespace=namespace, label=step.agent,
+                )
+            pinned_keys = await self.cp.list_pinned_keys(namespace=namespace)
+            anchors = await self.cp.list_trust_anchors(namespace=namespace)
+            result = {
+                "provisioned": True,
+                "namespace": namespace,
+                "pinned_key": pinned,
+                "trust_anchor": anchor,
+                "pinned_key_count": len(pinned_keys),
+                "trust_anchor_count": len(anchors),
+            }
+            step_outputs[step.id] = result
+            ctx.emit(RunEvent(
+                type="cp.trust_anchor.provisioned",
+                step_id=step.id, agent_id=step.agent, result=result,
+            ))
+            ctx.emit(RunEvent(type="step.complete", step_id=step.id, result=result))
+            return
+
+        if step_type == "cp_delegation_tree":
+            # Walk a delegator's delegation chain as the CP observed it
+            # (projected from delegation.issued / delegation.redeemed events).
+            if not step.agent:
+                raise PlaygroundError(
+                    f"step {step.id}: cp_delegation_tree requires agent"
+                )
+            if not self.cp.enabled:
+                ctx.emit(RunEvent(
+                    type="step.skipped", step_id=step.id,
+                    notes="CP not configured (CP_BASE_URL unset)",
+                ))
+                step_outputs[step.id] = {"delegations": [], "skipped": "no cp"}
+                return
+            ra = running[step.agent]
+            chain = await self.cp.fetch_delegations(delegator=ra.aid)
+            result = {
+                "delegator": ra.aid,
+                "delegations": chain,
+                "count": len(chain),
+            }
+            step_outputs[step.id] = result
+            ctx.emit(RunEvent(
+                type="cp.delegation.tree",
+                step_id=step.id, agent_id=step.agent, result=result,
+            ))
+            ctx.emit(RunEvent(type="step.complete", step_id=step.id, result=result))
+            return
+
         if step_type == "renew_tct":
             # RFC-AITP-0005 §10: holder presents the held TCT to the
             # issuer, who mints a fresh envelope with a new jti +
@@ -569,6 +649,33 @@ class ScenarioRunner:
                 target=step.via_peer,
                 jti=data.get("jti"),
                 result={"expires_at": data.get("expires_at")},
+            ))
+            ctx.emit(RunEvent(
+                type="step.complete", step_id=step.id, result=data,
+            ))
+            return
+
+        if step_type == "tct_cache_stats":
+            # Read an agent's RFC-AITP-0005 verification-cache counters. The
+            # tct-cache-perf scenario invokes a capability repeatedly, then
+            # reads stats here to show repeat presentations hitting the cache.
+            if not step.agent:
+                raise PlaygroundError(
+                    f"step {step.id}: tct_cache_stats requires agent"
+                )
+            target_ra = running[step.agent]
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(
+                    f"http://localhost:{target_ra.port}/admin/tct-cache-stats"
+                )
+                r.raise_for_status()
+                data = r.json()
+            step_outputs[step.id] = data
+            ctx.emit(RunEvent(
+                type="tct.cache.stats",
+                step_id=step.id,
+                agent_id=step.agent,
+                result=data,
             ))
             ctx.emit(RunEvent(
                 type="step.complete", step_id=step.id, result=data,

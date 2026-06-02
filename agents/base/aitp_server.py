@@ -55,6 +55,14 @@ class AitpServer:
         # session completes — gives /admin/export-session-bundle access
         # to the TCTs we (the coordinator) handed out.
         self._issued_tcts: dict[str, str] = {}
+        # RFC-AITP-0005 hot-path cache. When the installed wheel exposes
+        # ``TctStore``, repeat presentations of a byte-identical, still-valid
+        # TCT skip the signature check (cheap policy checks still run). Older
+        # wheels (or one built without the cache) leave this None and fall
+        # back to plain ``verify_tct``. Sized for demo-scale runs.
+        self._tct_store = aitp.TctStore(256) if hasattr(aitp, "TctStore") else None
+        self._tct_cache_hits = 0
+        self._tct_cache_misses = 0
         self.oidc = OidcContext(bootstrap)
         self.router = self._build_router()
 
@@ -192,8 +200,24 @@ class AitpServer:
             """
             body = await request.json()
             token_json: str = body["delegation_token"]
+            # Opt-in draft RFC-AITP-0011 multi-hop verification. When the
+            # scenario sets ``aitp.allow_multihop_delegation`` AND the wheel
+            # was built with the ``experimental-multihop-delegation`` feature,
+            # accept a chained token up to ``max_delegation_hops``. Otherwise
+            # fall back to strict v0.1 single-hop, which rejects any non-empty
+            # chain with DELEGATION_MULTIHOP_NOT_SUPPORTED.
+            cfg = self.bootstrap.get("aitp", {})
+            allow_multihop = bool(cfg.get("allow_multihop_delegation"))
+            max_hops = int(cfg.get("max_delegation_hops", 3))
             try:
-                verified = aitp.verify_delegation(token_json, self.agent.aid)
+                if allow_multihop and hasattr(
+                    aitp, "verify_delegation_experimental_multihop"
+                ):
+                    verified = aitp.verify_delegation_experimental_multihop(
+                        token_json, self.agent.aid, max_hops,
+                    )
+                else:
+                    verified = aitp.verify_delegation(token_json, self.agent.aid)
             except (RuntimeError, ValueError) as exc:
                 await emit_event(
                     "delegation.rejected", self.bootstrap, error=str(exc),
@@ -251,6 +275,24 @@ class AitpServer:
             )
             return Response(ack_json, media_type="application/json")
 
+        @router.get("/admin/tct-cache-stats")
+        def tct_cache_stats() -> Response:
+            """Report this agent's RFC-AITP-0005 verification-cache counters.
+
+            ``enabled`` is False when the installed wheel lacks ``TctStore``
+            (every call verifies fresh). Used by the ``tct-cache-perf``
+            scenario to show repeat presentations hitting the cache.
+            """
+            return Response(
+                json.dumps({
+                    "enabled": self._tct_store is not None,
+                    "hits": self._tct_cache_hits,
+                    "misses": self._tct_cache_misses,
+                    "size": self._tct_store.len() if self._tct_store is not None else 0,
+                }),
+                media_type="application/json",
+            )
+
         return router
 
     def verify_capability_tct(self, tct_json: str, required_grant: str) -> "aitp.TctIdentity":
@@ -292,6 +334,22 @@ class AitpServer:
             )
         declared_audience = tct_obj.get("audience")
         try:
+            if self._tct_store is not None:
+                before = self._tct_store.len()
+                identity = self.agent.verify_tct_cached(
+                    tct_json,
+                    required_grant,
+                    self._tct_store,
+                    expected_audience=declared_audience,
+                )
+                # len-delta hit/miss heuristic: a miss inserts a new entry,
+                # a hit reuses an existing one. Exact while size < max_entries
+                # (no eviction), which holds for demo-scale runs.
+                if self._tct_store.len() > before:
+                    self._tct_cache_misses += 1
+                else:
+                    self._tct_cache_hits += 1
+                return identity
             return self.agent.verify_tct(
                 tct_json, required_grant, expected_audience=declared_audience,
             )

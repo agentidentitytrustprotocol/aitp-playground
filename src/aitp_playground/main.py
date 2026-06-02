@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .api import agents as agents_api
+from .api import cp as cp_api
+from .api import dashboard as dashboard_api
 from .api import health as health_api
 from .api import metrics as metrics_api
 from .api import registry as registry_api
@@ -81,6 +83,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(telemetry_api.router)
     app.include_router(metrics_api.router)
     app.include_router(webhooks_api.router)
+    app.include_router(cp_api.router)
+    app.include_router(dashboard_api.router)
 
     return app
 

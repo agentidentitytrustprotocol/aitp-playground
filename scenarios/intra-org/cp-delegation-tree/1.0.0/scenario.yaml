@@ -1,0 +1,71 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: cp-delegation-tree
+  version: 1.0.0
+  name: CP Delegation Tree (RFC-AITP-0006)
+  summary: >
+    Builds a single-hop delegation (writer → researcher → sub-researcher), then
+    walks the resulting chain as the Control Plane observed it. The
+    cp_delegation_tree step queries GET /api/delegations filtered by the
+    researcher's AID, surfacing the delegation rows the CP projected from the
+    delegation.issued / delegation.redeemed events emitted during the run.
+
+    When no Control Plane is configured the tree step skips cleanly; the
+    delegation flow itself runs entirely peer-to-peer and is unaffected.
+  tags: [delegation, control-plane, rfc-0006, observability, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "delegation observability"
+      required: []
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+    - id: sub-researcher
+      ref: _shared/agents/researcher
+      port_offset: 2
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: trust_researcher_writer
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: writer issues researcher a TCT granting write.content
+      - id: delegate
+        type: delegate
+        delegator: researcher
+        delegatee: sub-researcher
+        via_peer: writer
+        scope: [write.content]
+        ttl_secs: 600
+        description: researcher delegates write.content to sub-researcher
+      - id: redeem
+        type: redeem_delegation
+        delegatee: sub-researcher
+        target: writer
+        via_delegation: delegate
+        description: sub-researcher redeems the delegation for a fresh TCT
+      - id: delegation_tree
+        type: cp_delegation_tree
+        agent: researcher
+        description: >
+          Walk the researcher's delegation chain via the Control Plane's
+          GET /api/delegations projection.

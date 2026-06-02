@@ -419,6 +419,51 @@ def cmd_lint(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_conformance(args: argparse.Namespace) -> int:
+    """Catalog the RFC conformance fixtures and report which ones the
+    installed aitp wheel could execute. Exits non-zero on a metadata
+    violation so CI can gate on a malformed corpus."""
+    from .conformance import build_report, default_fixtures_dir
+
+    if args.fixtures_dir:
+        fixtures_dir = Path(args.fixtures_dir).resolve()
+    else:
+        located = default_fixtures_dir()
+        if located is None:
+            print(
+                "FAIL  could not locate the specs-repo conformance fixtures; "
+                "pass --fixtures-dir <path>",
+                file=sys.stderr,
+            )
+            return 2
+        fixtures_dir = located
+    if not fixtures_dir.is_dir():
+        print(f"FAIL  fixtures dir not found: {fixtures_dir}", file=sys.stderr)
+        return 2
+
+    report = build_report(fixtures_dir)
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0 if report["valid"] else 1
+
+    sdk = (
+        f"aitp {report['sdk_version']}" if report["sdk_available"] else "no aitp wheel"
+    )
+    print(f"Conformance corpus: {report['fixtures_dir']}")
+    print(f"  installed SDK: {sdk}")
+    print(f"  fixtures: {report['total']}  (required for v0.1: {report['required_for_v0_1']})")
+    print(f"  by RFC:   {report['by_rfc']}")
+    print(f"  by tier:  {report['by_tier']}")
+    print(f"  wheel readiness: {report['by_readiness']}")
+    if report["metadata_errors"]:
+        print(f"FAIL  {len(report['metadata_errors'])} metadata violation(s):")
+        for e in report["metadata_errors"]:
+            print(f"  - {e}")
+        return 1
+    print("ok  fixture metadata valid")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="aitp-playground")
     sub = p.add_subparsers(required=True, dest="command")
@@ -474,6 +519,19 @@ def main(argv: list[str] | None = None) -> int:
         help="how long to wait for the run to reach a terminal status",
     )
     pt.set_defaults(func=cmd_trace)
+
+    pc = sub.add_parser(
+        "conformance",
+        help="catalog RFC conformance fixtures + report installed-wheel readiness",
+    )
+    pc.add_argument(
+        "--fixtures-dir",
+        default=None,
+        dest="fixtures_dir",
+        help="path to specs-repo schemas/conformance/ (default: sibling checkout)",
+    )
+    pc.add_argument("--json", action="store_true", help="emit the raw report as JSON")
+    pc.set_defaults(func=cmd_conformance)
 
     args = p.parse_args(argv)
     return int(args.func(args) or 0)
