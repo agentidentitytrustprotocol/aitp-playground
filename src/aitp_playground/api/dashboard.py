@@ -205,9 +205,14 @@ async function metrics(){
 async function cp(){
   try{const d=await api('/cp/dashboard');const box=$('#cp');
     if(!d.cp_enabled){box.innerHTML='<span class="cpstat">not configured — set CP_BASE_URL</span>';return}
-    const o=d.data||{};box.innerHTML='<span class="cpstat on">● connected</span>'+
-      Object.entries(o).filter(([,v])=>typeof v!=='object').map(([k,v])=>
-        `<div class="met"><span>${k}</span><b>${v}</b></div>`).join('');
+    const o=d.data||{};
+    // The CP overview nests its counters under `kpis`; fall back to any
+    // scalar top-level fields if that shape ever changes.
+    const kpis=(o.kpis&&typeof o.kpis==='object')?o.kpis
+      :Object.fromEntries(Object.entries(o).filter(([,v])=>typeof v!=='object'));
+    const rows=Object.entries(kpis).map(([k,v])=>
+      `<div class="met"><span>${k.replace(/([A-Z])/g,' $1').toLowerCase()}</span><b>${v}</b></div>`).join('');
+    box.innerHTML='<span class="cpstat on">● connected</span>'+(rows||'<div class="met"><span>no data</span></div>');
   }catch(e){$('#cp').innerHTML='<span class="cpstat">unreachable</span>'}
 }
 caps();scenarios();runs();metrics();cp();

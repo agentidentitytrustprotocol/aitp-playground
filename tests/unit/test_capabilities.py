@@ -72,6 +72,22 @@ def test_probe_detects_features_from_a_fake_sdk(monkeypatch) -> None:
     assert f[caps.FEATURE_MULTIHOP_DELEGATION] is False
 
 
+def test_version_falls_back_to_distribution_metadata(monkeypatch) -> None:
+    """The compiled wheel has no __version__; the probe should fall back to
+    importlib.metadata so /capabilities still reports a real version."""
+    import importlib.metadata as md
+
+    fake = types.ModuleType("aitp")  # intentionally no __version__
+    fake.AitpAgent = type("A", (), {})
+    monkeypatch.setitem(sys.modules, "aitp", fake)
+    monkeypatch.setattr(md, "version", lambda name: "9.9.9" if name == "aitp" else "")
+    caps.get_capabilities.cache_clear()
+
+    report = caps.get_capabilities()
+    assert report["sdk_available"] is True
+    assert report["version"] == "9.9.9"
+
+
 def test_capabilities_endpoint_returns_probe() -> None:
     client = TestClient(_app_with_health())
     resp = client.get("/capabilities")
