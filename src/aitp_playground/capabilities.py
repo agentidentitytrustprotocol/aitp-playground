@@ -54,6 +54,17 @@ def _probe() -> dict[str, Any]:
             "features": {name: False for name in ALL_FEATURES},
         }
 
+    # The compiled wheel doesn't set ``__version__``; fall back to the
+    # installed distribution metadata so /capabilities reports a real version.
+    version = getattr(aitp, "__version__", None)
+    if version is None:
+        try:
+            import importlib.metadata as _md
+
+            version = _md.version("aitp")
+        except Exception:
+            version = None
+
     agent = getattr(aitp, "AitpAgent", None)
     features = {
         FEATURE_OIDC: hasattr(aitp, "JwksProvider"),
@@ -68,7 +79,7 @@ def _probe() -> dict[str, Any]:
     }
     return {
         "sdk_available": True,
-        "version": getattr(aitp, "__version__", None),
+        "version": version,
         "features": features,
     }
 
