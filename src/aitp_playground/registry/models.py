@@ -59,6 +59,9 @@ WorkflowStepType = Literal[
     "export_session_bundle",             # RFC-AITP-0010 build a SessionBundleEnvelope
     "verify_session_bundle",             # RFC-AITP-0010 verify a SessionBundleEnvelope
     "spki_pin_check",                    # compute_spki_hash + SpkiPinVerifier exercise
+    "tct_cache_stats",                   # read an agent's RFC-AITP-0005 verify-cache counters
+    "cp_provision_trust_anchor",         # push an OIDC issuer + pinned key to the CP, read back
+    "cp_delegation_tree",                # walk a delegator's chain via CP /api/delegations
 ]
 
 
@@ -143,6 +146,13 @@ class WorkflowStep(BaseModel):
     # ``pins`` list (also base64-encoded 32-byte values).
     cert_der_b64: Optional[str] = None
     pins: Optional[list[str]] = None
+    # cp_provision_trust_anchor:
+    # ``namespace`` scopes the CP trust-anchor / pinned-key registration
+    # (defaults to the pack slug). ``issuer_url`` is the OIDC issuer URL to
+    # register as a trust anchor, when set (distinct from ``issuer``, which
+    # the linter resolves as an agent id for revoke_tct).
+    namespace: Optional[str] = None
+    issuer_url: Optional[str] = None
     # Fault injection (applies to handshake / workflow / capability_probe).
     # When set, the runner mutates the call's target before issuing it
     # so the step exercises a failure path, and records the outcome in

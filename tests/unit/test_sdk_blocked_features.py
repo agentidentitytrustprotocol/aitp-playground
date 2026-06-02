@@ -29,6 +29,8 @@ _HAS_BUNDLE = hasattr(aitp, "SessionBundleBuilder")
 _HAS_PINNING = hasattr(aitp, "SpkiPinVerifier")
 _HAS_RENEWAL = hasattr(aitp.AitpAgent, "build_renewal_request")
 _HAS_OIDC = hasattr(aitp, "JwksProvider")
+_HAS_TCT_CACHE = hasattr(aitp, "TctStore")
+_HAS_MULTIHOP = hasattr(aitp, "verify_delegation_experimental_multihop")
 
 
 # ── P-256 suite ─────────────────────────────────────────────────────────────
@@ -89,6 +91,37 @@ def test_tct_renewal_round_trip() -> None:
     # Within the same wall-clock second the renewed expiry may equal the
     # original — the load-bearing assertion is the fresh jti.
     assert new_tct["expires_at"] >= orig["expires_at"]
+
+
+# ── TCT verification cache (RFC-AITP-0005 hot path) ─────────────────────────
+
+
+@pytest.mark.skipif(not _HAS_TCT_CACHE, reason="aitp built without TctStore")
+def test_tct_cache_hit_miss_len_delta() -> None:
+    """AitpServer's hit/miss accounting relies on store.len() growing on a
+    miss and staying flat on a byte-identical hit. Pin that contract against
+    the real SDK so the heuristic in verify_capability_tct stays valid."""
+    holder = aitp.AitpAgent.generate()
+    issuer = aitp.AitpAgent.generate()
+    holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
+    i_m = issuer.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
+    sh = holder.new_session()
+    si = issuer.new_responder()
+    hello = sh.build_hello(i_m, ["demo.y"])
+    ack, sid = si.process_hello(hello)
+    commit = sh.process_hello_ack(ack, sid)
+    commit_ack, _ = si.process_commit(commit)
+    held = sh.complete(commit_ack)
+    audience = json.loads(held)["tct"]["audience"]
+
+    store = aitp.TctStore(256)
+    assert store.len() == 0
+    id1 = issuer.verify_tct_cached(held, "demo.y", store, expected_audience=audience)
+    assert store.len() == 1  # miss: a new entry was inserted
+    id2 = issuer.verify_tct_cached(held, "demo.y", store, expected_audience=audience)
+    assert store.len() == 1  # hit: no new entry
+    assert id1.peer_aid == id2.peer_aid
+    assert id1.jti == id2.jti
 
 
 # ── Session bundle ──────────────────────────────────────────────────────────

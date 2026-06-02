@@ -1,0 +1,63 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: tct-cache-perf
+  version: 1.0.0
+  name: TCT Verification Cache
+  summary: >
+    Demonstrates the RFC-AITP-0005 hot-path verification cache. The researcher
+    handshakes once with the writer, then invokes write.content three times
+    presenting the same held TCT. The writer verifies the first presentation in
+    full (a cache miss) and skips the signature check on the byte-identical
+    repeats (cache hits). The final step reads the writer's cache counters.
+
+    When the installed aitp wheel lacks TctStore, the writer falls back to
+    verifying every call fresh and the stats step reports enabled=false.
+  tags: [tct, cache, performance, rfc-0005]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "cache warm-up"
+      required: []
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+
+  trust:
+    boundary: intra_org
+    discovery: static
+
+  workflow:
+    steps:
+      - id: trust
+        description: researcher and writer perform AITP mutual handshake (one TCT issued)
+      - id: write-1
+        description: first invocation — writer verifies the TCT in full (cache miss)
+        agent: researcher
+        capability: write.content
+        input_template: "Draft one about {{ inputs.topic }}"
+      - id: write-2
+        description: second invocation — byte-identical TCT, signature check skipped (cache hit)
+        agent: researcher
+        capability: write.content
+        input_template: "Draft two about {{ inputs.topic }}"
+      - id: write-3
+        description: third invocation — another cache hit
+        agent: researcher
+        capability: write.content
+        input_template: "Draft three about {{ inputs.topic }}"
+      - id: cache-stats
+        description: read the writer's RFC-AITP-0005 verification-cache counters
+        type: tct_cache_stats
+        agent: writer

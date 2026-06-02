@@ -79,8 +79,13 @@ subsequent rebuilds are seconds thanks to BuildKit cache mounts.
 
 ```bash
 # 1. Build the aitp-py extension into your active venv (one-time).
+#    Add `--features experimental` to enable the post-v0.1 surfaces
+#    (TCT renewal, session bundles, SPKI pinning, the TCT verification
+#    cache, multi-hop delegation verify). Scenarios needing a feature the
+#    wheel was built without degrade cleanly — check GET /capabilities to
+#    see what the installed wheel exposes.
 cd ../aitp-rs/bindings/aitp-py
-maturin develop --release
+maturin develop --release --features experimental
 
 # 2. Install the service.
 cd ../../../aitp-playground

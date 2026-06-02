@@ -336,3 +336,189 @@ async def test_fetch_sessions_degrades_on_failure() -> None:
     finally:
         _clear_transport()
     assert out == []
+
+
+# ── fetch_tcts / fetch_delegations (observability projections) ───────────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_tcts_disabled_returns_empty() -> None:
+    cp = CpClient(Settings(cp_base_url=""))
+    assert await cp.fetch_tcts(issuer="aid:x") == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_tcts_passes_filters_and_unwraps() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"tcts": [{"jti": "t1"}, {"jti": "t2"}]})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.fetch_tcts(capability="write.content", active=True, limit=10)
+    finally:
+        _clear_transport()
+    assert "capability=write.content" in captured["url"]
+    assert "active=true" in captured["url"]  # bool mapped to "true", not "True"
+    assert "/api/tcts" in captured["url"]
+    assert [t["jti"] for t in out] == ["t1", "t2"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_tcts_omits_none_filters() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"tcts": []})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        await cp.fetch_tcts(issuer="aid:i")
+    finally:
+        _clear_transport()
+    # active is None → must not appear; only issuer + limit do.
+    assert "active=" not in captured["url"]
+    assert "subject=" not in captured["url"]
+    assert "issuer=aid%3Ai" in captured["url"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_delegations_walks_root_jti() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"delegations": [{"jti": "d1", "parent_jti": None}]})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.fetch_delegations(root_jti="root-1")
+    finally:
+        _clear_transport()
+    assert "root_jti=root-1" in captured["url"]
+    assert out[0]["jti"] == "d1"
+
+
+@pytest.mark.asyncio
+async def test_replay_session_empty_session_id_returns_empty() -> None:
+    cp = _client(httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    assert await cp.replay_session("") == []
+
+
+@pytest.mark.asyncio
+async def test_replay_session_hits_replay_path() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"events": [{"type": "handshake.started"}]})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.replay_session("s-9", limit=50)
+    finally:
+        _clear_transport()
+    assert "/api/sessions/s-9/replay" in captured["url"]
+    assert out[0]["type"] == "handshake.started"
+
+
+# ── dashboards ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dashboard_overview_disabled_returns_empty_dict() -> None:
+    cp = CpClient(Settings(cp_base_url=""))
+    assert await cp.fetch_dashboard_overview() == {}
+
+
+@pytest.mark.asyncio
+async def test_dashboard_overview_passes_window_and_returns_dict() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"agents": 3, "handshakes": 12})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.fetch_dashboard_overview(window="7d")
+    finally:
+        _clear_transport()
+    assert "window=7d" in captured["url"]
+    assert out["handshakes"] == 12
+
+
+@pytest.mark.asyncio
+async def test_dashboard_overview_degrades_to_empty_dict() -> None:
+    _set_transport(httpx.MockTransport(lambda r: httpx.Response(500)))
+    try:
+        cp = _client(httpx.MockTransport(lambda r: httpx.Response(500)))
+        assert await cp.fetch_dashboard_overview() == {}
+    finally:
+        _clear_transport()
+
+
+# ── trust-anchor / pinned-key upsert (write) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upsert_trust_anchor_disabled_returns_none() -> None:
+    cp = CpClient(Settings(cp_base_url=""))
+    assert await cp.upsert_trust_anchor(issuer_url="https://issuer") is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_trust_anchor_posts_camelcase_body() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = request.read().decode()
+        return httpx.Response(201, json={"id": "ta-1", "issuerUrl": "https://issuer"})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler), api_key="k")
+        out = await cp.upsert_trust_anchor(
+            issuer_url="https://issuer", namespace="demo", label="demo-oidc",
+        )
+    finally:
+        _clear_transport()
+    assert out is not None and out["id"] == "ta-1"
+    assert captured["url"].endswith("/api/trust-anchors")
+    assert '"issuerUrl":"https://issuer"' in captured["body"]
+    assert '"namespace":"demo"' in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_pinned_key_requires_aid_and_pubkey() -> None:
+    cp = _client(httpx.MockTransport(lambda r: httpx.Response(201, json={})))
+    assert await cp.upsert_pinned_key(aid="", pubkey="abc") is None
+    assert await cp.upsert_pinned_key(aid="aid:x", pubkey="") is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_pinned_key_posts_body() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(201, json={"aid": "aid:x"})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        out = await cp.upsert_pinned_key(aid="aid:x", pubkey="pk43", namespace="demo")
+    finally:
+        _clear_transport()
+    assert out is not None
+    assert '"aid":"aid:x"' in captured["body"]
+    assert '"pubkey":"pk43"' in captured["body"]
