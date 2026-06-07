@@ -119,8 +119,13 @@ COPY --from=builder /workspace/aitp-cp/next.config.ts /app/next.config.ts
 # config file). Bring that too.
 COPY --from=builder /workspace/aitp-cp/tsconfig.json /app/tsconfig.json
 # The aitp package is `file:../aitp-rs/bindings/aitp-node` in CP's
-# package.json; preserve that relative path so resolution still works.
-COPY --from=builder /workspace/aitp-rs/bindings/aitp-node /workspace/aitp-rs/bindings/aitp-node
+# package.json, which npm materializes as the symlink
+#   /app/node_modules/aitp -> ../../aitp-rs/bindings/aitp-node
+# Because the runner WORKDIR is /app (not /workspace/aitp-cp as in the
+# builder stage), that relative symlink resolves to /aitp-rs/bindings/
+# aitp-node — NOT /workspace/... So the binding must land there, or
+# `next start` fails at runtime with "Cannot find module 'aitp'".
+COPY --from=builder /workspace/aitp-rs/bindings/aitp-node /aitp-rs/bindings/aitp-node
 
 EXPOSE 4000
 CMD ["npx", "next", "start", "--port", "4000"]
