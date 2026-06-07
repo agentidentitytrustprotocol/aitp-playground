@@ -70,6 +70,13 @@ services:
       DATABASE_URL: "postgres://postgres:postgres@cp-postgres:5432/aitp_cp"
       # Required (>=32 chars). Test-only constant — never use outside this stack.
       ENROLLMENT_SECRET: "test-enrollment-secret-do-not-use-in-prod-0123456789"
+      # `next start` forces NODE_ENV=production, where cp-agent.ts REQUIRES a
+      # 32-byte (64-hex-char) seed for the CP's own Ed25519 identity — it signs
+      # the public revocation list (/api/well-known/aitp-revocation-list) and
+      # the CP manifest. Without it the revocation-list endpoint throws and the
+      # revocation-via-cp scenario's audience pulls zero entries. Test-only
+      # constant — never use outside this stack.
+      CP_AID_SEED_HEX: "1111111111111111111111111111111111111111111111111111111111111111"
       # `next start` forces NODE_ENV=production regardless of what we pass
       # below, so the CP's auth middleware enforces API_KEYS on non-public
       # routes (e.g. /api/events, /api/events/history). Provide a test key
