@@ -8,15 +8,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "aenum"
-version = "3.1.17"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/07/e9/8b283567c1fef7c24d1f390b37daede8b61593d8cdaffb8e95d571699e83/aenum-3.1.17.tar.gz", hash = "sha256:a969a4516b194895de72c875ece355f17c0d272146f7fda346ef74f93cf4d5ba", size = 137648, upload-time = "2026-03-20T20:43:29.846Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/8d/1fe30c6fd8999b9d462547c4a1bb6690bda24af38f2913c4bec7decb81f2/aenum-3.1.17-py3-none-any.whl", hash = "sha256:8b883a37a04e74cc838ac442bdd28c266eae5bbf13e1342c7ef123ed25230139", size = 165560, upload-time = "2026-03-20T20:43:27.681Z" },
-]
-
-[[package]]
 name = "aiofiles"
 version = "24.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -178,26 +169,11 @@ wheels = [
 ]
 
 [[package]]
-name = "aitp"
-version = "0.0.10"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aenum" },
-    { name = "pydantic" },
-    { name = "python-dateutil" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4c/9d/09d3568423af62733fca8decd79bcb3103e324058c447e45c21077b617ab/aitp-0.0.10.tar.gz", hash = "sha256:e766fb772e733f33bf62660e125f9ffa0ca811fcece5f7f411378dd8cd9a1ebe", size = 19075, upload-time = "2025-04-01T15:11:15.969Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/f7/86ab373ae24eaf957b3ad4c40463b8a52dd0439eaf936bb0467cf8aa9ed7/aitp-0.0.10-py3-none-any.whl", hash = "sha256:fb90320ddfb3020d1a4e51b212376e08f3d10476065adee309b7dab0945256a0", size = 1144, upload-time = "2025-04-01T15:11:14.802Z" },
-]
-
-[[package]]
 name = "aitp-playground"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aitp" },
+    { name = "aitp-sdk" },
     { name = "anyio" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -251,7 +227,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aitp" },
+    { name = "aitp-sdk" },
     { name = "anyio", specifier = ">=4.7" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.6" },
     { name = "crewai", marker = "extra == 'all-agents'", specifier = ">=0.70" },
@@ -290,6 +266,18 @@ dev = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.6" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+]
+
+[[package]]
+name = "aitp-sdk"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/99/2d8c235568d45a177472204d1506797d3e13acb60d423f8b775bafb8d6d0/aitp_sdk-0.2.0.tar.gz", hash = "sha256:7916212f1848a6505bfffe5f303dcbb9d4693843ecf055a3763f91f7d4ac1aa4", size = 166294, upload-time = "2026-06-09T05:13:17.468Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/17/180a6d886bb1e1851edac2aea83954af12b9222328bc8eed2f06243d2bfc/aitp_sdk-0.2.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:cc53820848f4dcccde05bccee2f836897a66d4b1b99337be7d7acece383dff92", size = 1167052, upload-time = "2026-06-09T05:13:10.887Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/69/42e7d12da038bac76a3d3f57a817eab2fb204f61be9688fbe0062bcdef68/aitp_sdk-0.2.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:3edda49c2d7994f33f73b8258cae4ecf8af654bcb6b220a9ff5b64fdb885aaa8", size = 1095567, upload-time = "2026-06-09T05:13:12.849Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/4a/f01bd6398cb7713e012bc8f03c30d9beff8dfdae69b7ba183f1830155ef1/aitp_sdk-0.2.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f5b39d7f70155c0db94dd4483328fd66302f05333c2ff57a0f7b68b7e6d08f23", size = 1150329, upload-time = "2026-06-09T05:13:14.259Z" },
+    { url = "https://files.pythonhosted.org/packages/63/06/95a7f779faba31d99eed0f24b704c624df1db36f02fec577dda5c5f1ce3f/aitp_sdk-0.2.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e1ce335c07489680edb3dd3298e1553ad21b6b2a9b719fe9a0f512fc5d33f860", size = 1219655, upload-time = "2026-06-09T05:13:15.992Z" },
 ]
 
 [[package]]

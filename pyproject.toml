@@ -4,14 +4,18 @@ version = "0.1.0"
 description = "AITP scenario demonstration service"
 requires-python = ">=3.11"
 dependencies = [
-  # The AITP SDK (v0.2.x). This is NOT the unrelated PyPI package "aitp";
-  # it is the Rust-backed wheel compiled from the sibling
+  # The AITP SDK (v0.2.x), distribution name "aitp-sdk", import name "aitp".
+  # NOTE: depend on "aitp-sdk", NOT "aitp" — the latter is an unrelated
+  # placeholder package on PyPI that pip would otherwise pull in (the SDK was
+  # renamed aitp -> aitp-sdk).
+  # It is the Rust-backed wheel compiled from the sibling
   # ../aitp-rs/bindings/aitp-py via `maturin develop` (native) or built into
-  # the Docker image. Left unpinned so CI (`pip install -e . --no-deps`) and
-  # the maturin path both resolve. For full scenario coverage, build the wheel
-  # with experimental features (`maturin ... --features experimental`); the
-  # service detects what's available at runtime via GET /capabilities.
-  "aitp",
+  # the Docker image (and also published to PyPI as aitp-sdk). Left unpinned so
+  # CI (`pip install -e . --no-deps`) and the maturin path both resolve. For
+  # full scenario coverage, build the wheel with experimental features
+  # (`maturin ... --features experimental`); the service detects what's
+  # available at runtime via GET /capabilities.
+  "aitp-sdk",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "pydantic>=2.10",
