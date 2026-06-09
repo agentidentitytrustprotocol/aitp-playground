@@ -69,7 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (e.g. "all-agents" for the LLM e2e tests; "all-agents,dev" for tests).
 ARG INSTALL_EXTRAS=""
 
-COPY --from=sdk-builder /wheels/aitp-*.whl /tmp/wheels/
+COPY --from=sdk-builder /wheels/aitp_sdk-*.whl /tmp/wheels/
 
 COPY aitp-playground/pyproject.toml ./
 COPY aitp-playground/src/ ./src/
@@ -77,7 +77,7 @@ COPY aitp-playground/agents/ ./agents/
 COPY aitp-playground/scenarios/ ./scenarios/
 
 RUN pip install --upgrade pip && \
-    pip install /tmp/wheels/aitp-*.whl && \
+    pip install /tmp/wheels/aitp_sdk-*.whl && \
     if [ -n "$INSTALL_EXTRAS" ]; then \
         pip install -e ".[$INSTALL_EXTRAS]"; \
     else \

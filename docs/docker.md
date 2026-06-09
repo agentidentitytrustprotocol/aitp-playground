@@ -70,12 +70,12 @@ FROM python:3.12-slim AS runtime
 WORKDIR /app
 RUN apt-get install curl ca-certificates build-essential
 ARG INSTALL_EXTRAS=""
-COPY --from=sdk-builder /wheels/aitp-*.whl /tmp/wheels/
+COPY --from=sdk-builder /wheels/aitp_sdk-*.whl /tmp/wheels/
 COPY aitp-playground/pyproject.toml ./
 COPY aitp-playground/src/ ./src/
 COPY aitp-playground/agents/ ./agents/
 COPY aitp-playground/scenarios/ ./scenarios/
-RUN pip install /tmp/wheels/aitp-*.whl && \
+RUN pip install /tmp/wheels/aitp_sdk-*.whl && \
     if [ -n "$INSTALL_EXTRAS" ]; then pip install -e ".[$INSTALL_EXTRAS]"; \
     else pip install -e .; fi
 ENV PYTHONPATH=/app/src:/app/agents/base
@@ -171,7 +171,7 @@ edits don't require a rebuild.
 - **First build is huge / slow** → expected. Rust cold compile of the
   SDK is several minutes on Apple Silicon. Subsequent builds reuse
   cache mounts and finish in seconds for source-only changes.
-- **`could not find aitp-*.whl`** → stage 1 failed; scroll up past the
+- **`could not find aitp_sdk-*.whl`** → stage 1 failed; scroll up past the
   failed COPY for the maturin error. Usually a missing system lib
   during the Rust compile.
 - **Tests container exits 0 instantly** → check `AITP_LLM_E2E=1` and

@@ -1,0 +1,16 @@
+# Override file used by the aitp-ui-console integration test to publish
+# the playground + control-plane container ports to the host. Layer on
+# top of docker-compose.test.yml:
+#
+#   docker compose -f docker-compose.test.yml -f docker-compose.host-ports.yml up -d playground aitp-cp
+#
+# Safe to remove afterwards — re-up without this file restores the
+# original "internal only" port topology.
+
+services:
+  playground:
+    ports:
+      - "8000:8000"
+  aitp-cp:
+    ports:
+      - "4000:4000"
