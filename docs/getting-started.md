@@ -10,7 +10,7 @@ Local dev loop, common commands, and a first scenario run.
   venv. The Dockerized flow builds it for you; for native dev you'll
   build it once with `maturin`.
 
-> Prefer Docker? Skip to [docker.md](docker.md) — `docker compose -f
+> Prefer Docker? Skip to [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md) — `docker compose -f
 > docker-compose.test.yml up --build --abort-on-container-exit` runs the
 > service plus the e2e suite end-to-end with no host toolchain.
 
@@ -63,8 +63,9 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `AGENT_BASE_PORT` | `8100` | First port handed to spawned agents |
 | `AGENT_PYTHON` | `python3` | Interpreter for agent subprocesses |
 | `PLAYGROUND_BASE_URL` | `http://localhost:8000` | Where agents POST telemetry |
-| `CP_BASE_URL` | _(empty)_ | Optional Control Plane base URL |
+| `CP_BASE_URL` | _(empty)_ | Optional Control Plane base URL ([control-plane.md](control-plane.md)) |
 | `CP_API_KEY` | _(empty)_ | Optional CP bearer |
+| `CP_TIMEOUT_MS` | `5000` | Per-request timeout for CP calls |
 | `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | _(empty)_ | Required for real LLM output |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |
@@ -72,7 +73,7 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `RUN_HISTORY_DB` | _(empty)_ | When set, persist runs + events to this SQLite file so they survive a restart. Empty = in-memory only. |
 | `LOG_LEVEL` | `INFO` | Standard logging level |
 
-See [llm-providers.md](llm-providers.md) for provider details.
+See [llm-providers.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/llm-providers.md) for provider details.
 
 ## Run the service
 
@@ -118,18 +119,23 @@ curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
 | Endpoint | What |
 | --- | --- |
 | `GET  /healthz` | Liveness |
+| `GET  /capabilities` | Installed `aitp` wheel + which experimental features it exposes ([capabilities.md](capabilities.md)) |
 | `GET  /packs` | List loaded scenario packs |
 | `GET  /scenarios` | List all scenarios with refs |
-| `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed |
-| `POST /runs` | Start a run (async; returns run_id immediately) |
+| `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed (+ template list) |
+| `POST /runs` | Start a run (async; returns run_id immediately). Body accepts `template` to run a variant. |
 | `GET  /runs` | List recent runs (in-memory by default; `RUN_HISTORY_DB` makes them durable) |
 | `GET  /runs/{id}` | Full run record incl. outputs and events |
 | `GET  /runs/{id}/status` | Just status + event count |
 | `GET  /runs/{id}/events` | SSE event stream (replay + live) |
+| `GET  /runs/{id}/narrate` | Human-readable narration of the event log (text/plain) |
 | `GET  /runs/{id}/cp-deliveries` | CP webhook deliveries this run has received (requires a prior `cp_subscribe_webhook` step) |
 | `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified) |
 | `POST /runs/{id}/cancel` | Kill agent subprocesses, mark cancelled |
 | `GET  /agents` | List currently-running agent processes |
+| `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |
+| `GET  /dashboard` | Single-page trust console (HTML) |
+| `GET  /cp/*` | Read-only Control Plane observability projections ([control-plane.md](control-plane.md)) |
 | `POST /internal/telemetry` | Sink for agents — not for external use |
 
 OpenAPI is at `http://localhost:8000/docs` while the server runs.
@@ -152,6 +158,19 @@ uv run python -m aitp_playground.cli dry-run intra-org/research-and-write@1.0.0 
 the trust mode, agent list, and workflow steps without spawning
 anything. Useful for catching typos before you wait for spawns.
 
+The CLI has a few more subcommands:
+
+```bash
+uv run python -m aitp_playground.cli new intra-org/my-scenario@1.0.0   # scaffold on disk
+uv run python -m aitp_playground.cli lint                              # cross-scenario refs + step graph
+uv run python -m aitp_playground.cli trace intra-org/research-and-write@1.0.0 \
+  --inputs '{"topic":"AI agents"}'                                     # run against a live server + narrate
+uv run python -m aitp_playground.cli conformance                      # RFC fixture catalog + wheel readiness
+```
+
+`trace` drives a run against a running playground and streams the
+narration; `conformance` is covered in [capabilities.md](capabilities.md).
+
 ## Common dev loops
 
 | You're working on… | Run |
@@ -161,7 +180,7 @@ anything. Useful for catching typos before you wait for spawns.
 | Agent worker | Restart the uvicorn server so it re-spawns subprocesses with your changes. |
 | Real LLM behavior | Set `OPENAI_API_KEY` and either run a scenario or `AITP_LLM_E2E=1 uv run pytest tests/integration/test_llm_e2e.py`. |
 
-See [testing.md](testing.md) for the full test layout.
+See [testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md) for the full test layout.
 
 ## Troubleshooting
 

@@ -32,6 +32,9 @@ ScenarioRunner.run
 │       allocate port (port_offset honored, else monotonic)
 │       resolve manifest
 │       build placeholder peers (localhost URLs)
+│   if any agent is identity_type: oidc:
+│       mint a per-run RunOidcIssuer (Ed25519 keypair)
+│       emit oidc.issuer_minted; share it via each bootstrap
 │       write bootstrap.json to tmpdir
 ├─ 4. Per agent (sequential):
 │       adapter.validate(manifest)
@@ -186,6 +189,47 @@ The delegatee stores the resulting TCT in its `held_tcts[target_port]`,
 so a subsequent `workflow` step where `delegatee` calls a capability
 on `target` will present the redeemed TCT.
 
+### Identity, renewal, and bundle steps
+
+These dispatch the same way — resolve the named agent(s), POST the
+matching `/admin/*` route, emit a domain event then `step.complete`. Most
+are gated behind an SDK `experimental-*` feature and degrade cleanly when
+the wheel lacks it (see [capabilities.md](../docs/capabilities.md)). Field-level
+reference lives in [scenarios.md](../docs/scenarios.md#workflow-steps); the engine
+behavior:
+
+| `type` | Drives | Emits |
+| --- | --- | --- |
+| `rotate_keys` | agent's `/admin/rotate-keys` — new keypair + republished manifest; old-AID TCTs then fail the issuer-AID guard | `identity.key.rotated` |
+| `renew_tct` | holder's `/admin/renew-tct` → issuer's `/admin/process-renewal`; held TCT swapped in place | `tct.renewed` |
+| `tct_cache_stats` | agent's `/admin/tct-cache-stats` | `tct.cache.stats` |
+| `export_session_bundle` | coordinator's `/admin/export-session-bundle` over participants' issued TCTs | `session.bundle.exported` |
+| `verify_session_bundle` | verifier's `/admin/verify-session-bundle` on a prior export | `session.bundle.verified` |
+| `spki_pin_check` | pure-SDK `compute_spki_hash` + `SpkiPinVerifier` (no agent involved) | `spki.pin.checked` |
+
+### Control-plane steps
+
+These only do CP work and emit `step.skipped` when `CP_BASE_URL` is unset.
+See [control-plane.md](../docs/control-plane.md#cp-backed-workflow-steps) for the
+full flow.
+
+| `type` | Drives | Emits |
+| --- | --- | --- |
+| `enroll_with_cp` | agent's `/admin/enroll-with-cp` (mint token → register) | `cp.enroll_started`, `cp.enroll_complete` |
+| `cp_subscribe_webhook` | `CpClient.create_webhook` pointing at this run's receiver | `cp.webhook.subscribed` / `…subscribe_failed` |
+| `cp_provision_trust_anchor` | `upsert_pinned_key` + optional `upsert_trust_anchor` | `cp.trust_anchor.provisioned` |
+| `cp_delegation_tree` | `CpClient.fetch_delegations` (recursive `root_jti`) | `cp.delegation.tree` |
+
+### Fault injection
+
+Any `handshake`, `workflow`, or `capability_probe` step can carry a
+`fault:` block (`kind: manifest_404 | peer_offline`). The runner mutates
+the call's target before issuing it, captures the resulting error as a
+structured step output, and **does not** raise — later steps can branch on
+the outcome. Emits `step.fault_injected` then `step.fault_complete`. See
+[scenarios.md](../docs/scenarios.md#fault-injection) and
+`intra-org/fault-injection`.
+
 ## Event stream
 
 Every state change emits a `RunEvent` via `RunContext.emit`. Events
@@ -201,27 +245,65 @@ terminates with `data: {"type":"stream.end"}` once the run is in
 a terminal state and the queue is empty. Subscribers that fall behind
 500 events drop new events (they can backfill via `GET /runs/{id}`).
 
-### Event types emitted by the runner
+### Event types
+
+Runner-emitted events. Agents emit a further set through
+`/internal/telemetry` (`handshake.*`, `llm.*`, `delegation.*`,
+`tct.revoked`, `revocation.list_fetched`, …) that interleave into the same
+log — see [agents.md](agents.md). The narrator
+([observability.md](../docs/observability.md#narration)) renders both sets.
+
+**Lifecycle & setup**
 
 | Type | Carries | When |
 | --- | --- | --- |
 | `run.started` | `scenario_ref` | After scenario load + input validation. |
 | `agent.spawning` | `agent_id`, `port` | Just before `supervisor.launch`. |
 | `agent.ready` | `agent_id`, `aid`, `port` | After `AITP_AGENT_READY` line seen. |
+| `oidc.issuer_minted` | issuer url, kid | When a scenario has any `identity_type: oidc` agent. |
 | `trust.peers_resolved` | `peers: {agent_id: manifest_url}` | After `TrustOrchestrator.resolve_peers`. |
+| `run.complete` | — | Workflow finished cleanly. |
+| `run.failed` | `error` | Exception inside spawn / step. |
+
+**Trust, delegation, revocation, identity**
+
+| Type | Carries | When |
+| --- | --- | --- |
 | `trust.establishing` | `initiator`, `target` | Before `/admin/initiate-handshake`. |
 | `trust.established` | `initiator`, `target`, `grants`, `jti` | After successful handshake. |
+| `delegation.issuing` | `initiator`, `target`, `grants` | `delegate` step. |
+| `delegation.redeeming` | `initiator`, `target` | `redeem_delegation` step. |
+| `revocation.published` | `jti`, `to_cp` | `revoke_tct` with `via_cp`. |
+| `tct.renewed` | new `jti`, `expires_at` | `renew_tct` step. |
+| `tct.cache.stats` | `hits`, `misses`, `size` | `tct_cache_stats` step. |
+| `identity.key.rotated` | `old_aid`, `new_aid` | `rotate_keys` step. |
+| `session.bundle.exported` | `session_id`, `participant_aids` | `export_session_bundle`. |
+| `session.bundle.verified` | `kind`, `active_aids`, `dropped_aids` | `verify_session_bundle`. |
+| `spki.pin.checked` | `computed_hash_b64`, `is_pinned` | `spki_pin_check`. |
+
+**Steps & faults**
+
+| Type | Carries | When |
+| --- | --- | --- |
 | `step.started` | `step_id`, `agent`, `capability` | Workflow step about to run. |
 | `step.complete` | `step_id`, `result` | Step succeeded. |
-| `step.skipped` | `step_id`, `notes` | `meta` step. |
+| `step.skipped` | `step_id`, `notes` | `meta` step / CP step with no CP. |
 | `step.probing_no_trust` | `initiator`, `target`, `capability` | `capability_call_no_trust` step. |
 | `step.probing_with_held_tct` | … | `capability_probe` step. |
 | `step.access_denied` | `target`, `capability`, `result.status_code` | Probe matched expected non-2xx. |
 | `step.unexpected_status` | … | Probe got a status that didn't match `expect_status`. |
-| `delegation.issuing` | `initiator`, `target`, `grants` | `delegate` step. |
-| `delegation.redeeming` | `initiator`, `target` | `redeem_delegation` step. |
-| `run.complete` | — | Workflow finished cleanly. |
-| `run.failed` | `error` | Exception inside spawn / step. |
+| `step.fault_injected` | `target`, `notes` | Fault overlay activated. |
+| `step.fault_complete` | fault details, captured error | Fault step finished without raising. |
+
+**Control plane**
+
+| Type | When |
+| --- | --- |
+| `cp.enroll_started` / `cp.enroll_complete` | `enroll_with_cp` step. |
+| `cp.webhook.subscribed` / `cp.webhook.subscribe_failed` | `cp_subscribe_webhook` step. |
+| `cp.webhook.delivered` | A verified CP webhook delivery arrived (`POST /webhooks/cp/{run_id}`). |
+| `cp.trust_anchor.provisioned` | `cp_provision_trust_anchor` step. |
+| `cp.delegation.tree` | `cp_delegation_tree` step. |
 
 Agents also emit events through `/internal/telemetry` (see
 [agents.md](agents.md) for the agent-emitted event list). Those get
@@ -245,7 +327,7 @@ of the cleanup itself.
 ## Things that look weird but aren't
 
 - **`_find_capability_holder` accepts `prefer=`**. This is the
-  capability-routing fix mentioned in [scenarios.md](scenarios.md).
+  capability-routing fix mentioned in [scenarios.md](../docs/scenarios.md).
   Without it, `agent: sub-researcher, capability: research.query`
   could route to `researcher` simply because it appeared first in
   `spec.agents`.

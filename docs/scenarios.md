@@ -92,10 +92,20 @@ spec:
   aitp:
     offered_caps: [research.query]
     display_name: Research Analyst
-    identity_type: pinned_key   # only value supported today
+    identity_type: pinned_key   # pinned_key (default) | oidc
+    # When identity_type: oidc, also set:
+    #   oidc_issuer: https://idp.example/    # OIDC issuer URL
+    #   oidc_subject: researcher             # subject claim
+    signing_suite: ed25519      # ed25519 (default) | p256
     ttl_secs: 3600
   did_web: false
 ```
+
+`identity_type: oidc` builds the manifest with an OIDC identity hint and
+makes the agent mint ID tokens via the per-run mock issuer at handshake
+time — see `intra-org/oidc-identity` and
+[aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces).
+`signing_suite: p256` selects the ECDSA suite instead of Ed25519.
 
 Key behaviors:
 - `entrypoint.type=python_module` becomes `python3 -m researcher.main`;
@@ -141,6 +151,7 @@ spec:
       org: internal               # internal | external (affects seed namespace)
       cloud: aws-us-east          # informational; never used by the runner
       did_web_host: localhost:8101 # set this to expose did:web for this agent
+      signing_suite: p256         # optional per-agent override of the manifest's suite
 
   trust:
     boundary: intra_org           # intra_org | cross_org | cross_cloud
@@ -167,6 +178,13 @@ defined there is ignored.
 
 ## Workflow steps
 
+Step types are a **playground construct** — they orchestrate the protocol,
+they don't define it. Where a step exercises a protocol behavior the table
+cites the RFC by number; those are in the
+[AITP RFC index](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/README.md),
+and how the playground drives each one is in
+[aitp-integration.md](aitp-integration.md).
+
 A step's `type` defaults sensibly when omitted:
 - Has `agent` + `capability` → `workflow`.
 - Otherwise → `meta` (skipped; useful for narration in the event log).
@@ -187,6 +205,9 @@ A step's `type` defaults sensibly when omitted:
 | `export_session_bundle` | `coordinator`, `participants` | RFC-AITP-0010 session-bundle issuance. The coordinator (responder side of prior handshakes) packages the TCTs it has issued to each participant into a `SessionBundleEnvelope` signed under its own key. Output includes `bundle_envelope` for downstream `verify_session_bundle` steps. Gated by `experimental-bundle`. See `intra-org/session-bundle`. |
 | `verify_session_bundle` | `verifier`, `via_step` | Verify a previously-exported bundle. The verifier's `/admin/verify-session-bundle` calls the SDK's `verify_session_bundle` and returns a `BundleOutcome` (`{kind: clear|degraded, active_aids, dropped_aids}`). Gated by `experimental-bundle`. |
 | `spki_pin_check` | `cert_der_b64`, `pins`, optional `expect_status` | Pure-SDK exercise of `compute_spki_hash` + `SpkiPinVerifier`. Computes the SHA-256 over the given leaf cert's `SubjectPublicKeyInfo` and asserts `is_pinned` matches `expect_status` (`1` = pin must match, `0` = must not match). Gated by `experimental-pinning`. See `intra-org/spki-pinning`. |
+| `tct_cache_stats` | `agent` | Read the named agent's RFC-AITP-0005 verification-cache counters (`{enabled, hits, misses, size}`) and emit `tct.cache.stats`. Pair with repeated capability calls to show hot-path cache hits. Gated by the SDK's `TctStore` (`tct_cache` feature). See `intra-org/tct-cache-perf`. |
+| `cp_provision_trust_anchor` | `agent`, optional `namespace`, optional `issuer_url` | Push the agent's pinned Ed25519 key (and, when `issuer_url` is set, an OIDC issuer trust anchor) to the Control Plane under `namespace` (defaults to the pack slug), then reads both back. When `CP_BASE_URL` is unset the step skips. See `intra-org/cp-trust-anchor-provisioning`. |
+| `cp_delegation_tree` | `agent` | Walk the named delegator's delegation chain as the Control Plane observed it (`GET /api/delegations` with a recursive `root_jti` query) and emit `cp.delegation.tree`. When `CP_BASE_URL` is unset the step skips. See `intra-org/cp-delegation-tree`. |
 | `meta` | — | No-op; records `step.skipped`. |
 
 ### Fault injection
@@ -404,7 +425,7 @@ review what it wrote.
 4. `dry-run` it, then `POST /runs` and check the event log.
 
 If you need a *new* capability, you'll also touch an agent worker —
-see [agents.md](agents.md).
+see [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md).
 
 ## Scenarios in the box
 
@@ -422,6 +443,9 @@ see [agents.md](agents.md).
 | `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
 | `intra-org/external-enrollment@1.0.0` | Agent self-enrolls via `POST /api/registry/enroll` then `POST /api/registry/agents` with the issued bearer token. |
 | `intra-org/webhook-subscription@1.0.0` | Playground registers a CP webhook and CP fans `handshake.complete` / other audit events back via `POST /webhooks/cp/{run_id}`; inspect deliveries with `GET /runs/{id}/cp-deliveries`. |
+| `intra-org/cp-delegation-tree@1.0.0` | RFC-AITP-0006 delegation observed through the CP: delegate + redeem, then walk the chain via `GET /api/delegations`. |
+| `intra-org/cp-trust-anchor-provisioning@1.0.0` | Push an agent's pinned key + OIDC issuer to the CP as trust anchors, then handshake/write against them. |
+| `intra-org/tct-cache-perf@1.0.0` | RFC-AITP-0005 verification cache: repeated capability calls hit the SDK's `TctStore`; `tct_cache_stats` shows hits vs. misses. |
 | `intra-org/oidc-identity@1.0.0` | RFC-AITP-0002 OIDC identity binding — researcher mints a JWT signed by the per-run mock issuer; writer verifies via the SDK's `JwksProvider`. Template variant `p256-suite` runs the same flow with a P-256 researcher (cross-suite). |
 | `intra-org/tct-renewal@1.0.0` | RFC-AITP-0005 §10 in-band TCT renewal: handshake → call → renew → call-with-new-jti. |
 | `intra-org/session-bundle@1.0.0` | RFC-AITP-0010 session trust bundle export + verify. Coordinator-issued TCTs packaged into a signed envelope; verifier returns BundleOutcome. |
