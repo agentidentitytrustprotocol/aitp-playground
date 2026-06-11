@@ -10,23 +10,40 @@ layers are what give the project teeth.
 tests/
 ├── conftest.py                    # sets PYTHONPATH and SCENARIOS_DIR
 ├── unit/                          # fast, in-process, no subprocesses
-│   ├── test_adapters.py
-│   ├── test_api.py
-│   ├── test_bootstrap.py
-│   ├── test_cli.py
-│   ├── test_port_allocator.py
-│   ├── test_registry.py
-│   ├── test_runs_api.py
-│   ├── test_sdk_delegation.py
-│   └── test_trust_resolver.py
+│   ├── test_adapters.py           # adapter validation + launch prep
+│   ├── test_api.py                # route contracts
+│   ├── test_bootstrap.py          # seed derivation + bootstrap shape
+│   ├── test_capabilities.py       # SDK feature probe / GET /capabilities
+│   ├── test_cli.py                # validate / dry-run / lint / conformance
+│   ├── test_conformance.py        # RFC fixture catalog + readiness
+│   ├── test_cp_client.py          # CpClient methods + graceful fallback
+│   ├── test_cp_routes.py          # /cp/* observability proxies
+│   ├── test_cp_scenarios.py       # CP-backed step types
+│   ├── test_cp_webhook_receiver.py# /webhooks/cp/{run_id} HMAC verify
+│   ├── test_dashboard.py          # /dashboard HTML
+│   ├── test_metrics.py            # /metrics exposition
+│   ├── test_narrator.py           # event → narration rendering
+│   ├── test_port_allocator.py     # allocation / recycling
+│   ├── test_registry.py           # Pydantic validation + loader
+│   ├── test_run_store_sqlite.py   # RUN_HISTORY_DB persistence
+│   ├── test_runs_api.py           # run lifecycle routes
+│   ├── test_sdk_blocked_features.py # feature-gated surfaces absent → skip
+│   ├── test_sdk_delegation.py     # SDK delegation behaviors
+│   ├── test_tct_cache_scenario.py # TCT verification cache
+│   ├── test_templates.py          # scenario template merge
+│   └── test_trust_resolver.py     # static / did:web / cp_registry
 ├── integration/
-│   ├── test_runner.py             # spawns real agent subprocesses (gated)
-│   └── test_llm_e2e.py            # real LLM calls under AITP trust (gated)
+│   ├── test_runner.py             # spawns real agent subprocesses (AITP_E2E=1)
+│   ├── test_protocol_e2e.py       # protocol scenarios + CP, no LLM (AITP_PROTOCOL_E2E=1)
+│   └── test_llm_e2e.py            # real LLM calls under AITP trust (AITP_LLM_E2E=1)
 └── scenarios/                     # placeholder; currently skipped
     ├── test_intra_org.py
     ├── test_cross_cloud.py
     └── test_cross_org.py
 ```
+
+Unit tests that touch the SDK use `pytest.importorskip("aitp")` so they
+skip cleanly when the wheel isn't installed (CI runs without it).
 
 `conftest.py` adds `src/` and `agents/base/` to `sys.path` and points
 `SCENARIOS_DIR` at the repo's `scenarios/` so tests don't depend on
@@ -45,6 +62,12 @@ Default test target. Fast, no subprocesses, no network. Exercises:
   discovery.
 - SDK-level delegation behaviors (these `pytest.importorskip("aitp")`
   so they skip cleanly without the SDK installed).
+- The CP surface — `CpClient` fallbacks, `/cp/*` proxies, the webhook
+  receiver's HMAC check, and the CP-backed step types.
+- Observability — `/metrics` exposition, the narrator, the dashboard,
+  and `RUN_HISTORY_DB` SQLite persistence.
+- Feature detection + conformance — `GET /capabilities`, blocked-feature
+  handling, and the fixture catalog.
 
 Run:
 
@@ -81,6 +104,18 @@ AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v
 
 This is the cheapest way to validate the runner without LLM costs. It
 takes ~30-45 seconds because subprocess spawn + handshake is real.
+
+### `test_protocol_e2e.py` — `AITP_PROTOCOL_E2E=1`
+
+Exercises the protocol-heavy scenarios end-to-end against a running
+playground (and, where relevant, a Control Plane) **without** needing LLM
+keys — the stubs supply capability output while the real focus is the AITP
+flow: delegation, revocation, key rotation, renewal, session bundles, SPKI
+pinning, OIDC identity, and the CP-backed steps. Reads `PLAYGROUND_URL`,
+`CP_URL`, and `CP_API_KEY` from the environment. Intended to run inside the
+`tests` container of the Dockerized stack, where `AITP_PROTOCOL_E2E=1` and
+the service URLs are pre-wired — the compose `tests` service runs this file
+alongside `test_llm_e2e.py`.
 
 ### `test_llm_e2e.py` — `AITP_LLM_E2E=1` + `OPENAI_API_KEY`
 
@@ -183,5 +218,6 @@ for spawned agents.
 | --- | --- | --- | --- | --- |
 | `tests/unit/` | default | no | no | seconds |
 | `tests/integration/test_runner.py` | `AITP_E2E=1` | no (stubs) | yes | ~30-45s |
+| `tests/integration/test_protocol_e2e.py` | `AITP_PROTOCOL_E2E=1` | no (stubs) | yes (Docker recommended) | minutes |
 | `tests/integration/test_llm_e2e.py` | `AITP_LLM_E2E=1` | yes | yes (Docker recommended) | minutes |
 | `tests/scenarios/*` | currently skipped | — | — | — |

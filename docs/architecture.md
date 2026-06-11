@@ -29,7 +29,9 @@ HTTP client ───▶ │ aitp-playground (port 8000)          │
                  │                                      │
                  │  ┌──── API (FastAPI routers) ─────┐  │
                  │  │ /runs   /scenarios   /packs    │  │
-                 │  │ /agents /healthz               │  │
+                 │  │ /agents /healthz /capabilities │  │
+                 │  │ /metrics /dashboard  /cp/*     │  │
+                 │  │ /webhooks/cp/{run}   (← CP)    │  │
                  │  │ /internal/telemetry  (← agents)│  │
                  │  └────────────────────────────────┘  │
                  │  ┌──── Runner ────────────────────┐  │
@@ -59,6 +61,9 @@ HTTP client ───▶ │ aitp-playground (port 8000)          │
    │     │   /admin/initiate-handshake  /admin/invoke          │
    │     │   /admin/self-execute        /admin/delegate        │
    │     │   /admin/redeem-delegation   /admin/revoke-tct      │
+   │     │   /admin/rotate-keys         /admin/renew-tct       │
+   │     │   /admin/process-renewal     /admin/enroll-with-cp  │
+   │     │   /admin/export-session-bundle  …/verify-…          │
    │     └─ /capabilities/<name>   (per-agent worker)          │
    │                                                           │
    │   aitp.AitpAgent — identity, handshake, TCT, delegation   │
@@ -107,7 +112,7 @@ large scenarios. The registry is read-only at runtime; set
 - `engine.py` — `ScenarioRunner.run()` is the single entry point. It
   loads the scenario, validates inputs against the inline JSON Schema,
   spawns agents, resolves peers, optionally runs eager pairwise
-  handshakes, then walks `workflow.steps`. See [runner.md](runner.md).
+  handshakes, then walks `workflow.steps`. See [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md).
 - `context.py` — `RunContext` accumulates `RunEvent`s; every emit also
   fans out to `RunStore` so SSE subscribers see it live.
 - `store.py` — in-memory pub/sub with per-run event queues. The SSE
@@ -118,6 +123,14 @@ large scenarios. The registry is read-only at runtime; set
   — runs survive a process restart. Empty (the default) is in-memory
   only.
 - `result.py` — `RunResult` returned to background-task callers.
+
+### Observability (`src/aitp_playground/observability/`)
+Every `RunContext.emit` also feeds `metrics.record_event` and is
+renderable by `narrator`. `metrics.py` is a tiny thread-safe Prometheus
+registry behind `GET /metrics`; `narrator.py` is a pure event→text
+renderer behind `GET /runs/{id}/narrate` and the CLI `trace`. The
+single-file trust console at `GET /dashboard` consumes these plus the JSON
+APIs. See [observability.md](observability.md).
 
 ### Trust (`src/aitp_playground/trust/`)
 `TrustOrchestrator.resolve_peers()` returns `{agent_id: {manifest_url, did}}`
@@ -132,6 +145,13 @@ keyed by the scenario's `discovery` mode:
 The orchestrator only chooses **where** to look. The handshake itself
 is initiated by the runner POSTing `/admin/initiate-handshake` to the
 agent, which uses the SDK.
+
+`oidc_issuer.py` mints a per-run mock OIDC issuer (Ed25519 keypair) when a
+scenario contains an `identity_type: oidc` agent. The issuer's private seed
+and public JWK ride along in each agent's bootstrap so OIDC agents can mint
+ID tokens and every agent can verify OIDC peers. Real deployments would
+point at an external IdP instead — see
+[aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces).
 
 ### Control Plane client (`src/aitp_playground/cp_client/`)
 `CpClient` is fully optional. When `CP_BASE_URL` is empty:
@@ -153,7 +173,7 @@ Per worker the layout is identical:
 5. The worker registers its `/capabilities/<name>` handlers and starts
    uvicorn. The lifespan emits `AITP_AGENT_READY` once the port is bound.
 
-See [agents.md](agents.md) for how to add a new worker.
+See [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md) for how to add a new worker.
 
 ## Data flow for one capability call
 
@@ -195,5 +215,8 @@ run's event log.
 
 - Want to run it? → [getting-started.md](getting-started.md)
 - Want to add a scenario? → [scenarios.md](scenarios.md)
-- Want to know how a step actually executes? → [runner.md](runner.md)
+- Want to know how a step actually executes? → [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md)
 - Want to understand TCTs and handshake? → [aitp-integration.md](aitp-integration.md)
+- Want events / metrics / the dashboard? → [observability.md](observability.md)
+- Wiring the Control Plane? → [control-plane.md](control-plane.md)
+- Which SDK features are installed? → [capabilities.md](capabilities.md)

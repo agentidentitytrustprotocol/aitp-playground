@@ -10,7 +10,7 @@ spec:
     type: python_module
     value: analyzer.main
   host:
-    python: /Users/ajitkoti/code/agentIdenitytrustprotocol/aitp-playground/.venv/bin/python
+    python: python3            # falls back to AGENT_PYTHON; absolute paths that don't exist (e.g. in Docker) fall back too
     cwd: agents/analyzer
     startupTimeoutMs: 30000
   aitp:

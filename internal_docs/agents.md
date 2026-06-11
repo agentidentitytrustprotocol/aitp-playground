@@ -5,6 +5,13 @@ exposes the AITP protocol routes, and registers one or more
 capabilities. Workers live under `agents/`; the playground's hosting
 layer launches them.
 
+> The `aitp.AitpAgent` methods a worker calls (`from_seed`,
+> `build_manifest`, `new_session`/`new_responder`, `verify_tct`,
+> `build_delegation`, …) are documented in
+> [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md).
+> This page covers the **worker scaffolding around them**; for where each
+> call sits in the protocol flow see [aitp-integration.md](../docs/aitp-integration.md).
+
 ## Repository layout
 
 ```
