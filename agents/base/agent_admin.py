@@ -15,9 +15,10 @@ import json
 from typing import Any, Awaitable, Callable, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
+from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
 
 CapabilityHandler = Callable[[Any], Awaitable[Any]]
@@ -28,11 +29,12 @@ def build_admin_router(
     *,
     agent,                                       # aitp.AitpAgent
     bootstrap: dict[str, Any],
-    held_tcts: dict[int, str],                   # peer_port -> tct_json (mutated in place)
+    held_tcts: dict[int, str],                   # peer_port -> tct_token (mutated in place)
     revoked_jtis: set[str],                      # mutated in place by /admin/revoke-tct
     capabilities: Optional[dict[str, CapabilityHandler]] = None,
     manifest_provider: Optional[Callable[[], str]] = None,
-    issued_tcts: Optional[dict[str, str]] = None,  # peer_aid -> tct_json (responder-side)
+    issued_tcts: Optional[dict[str, str]] = None,  # peer_aid -> tct_token (responder-side)
+    held_vouchers: Optional[dict[int, str]] = None,  # peer_port -> grant_voucher token
 ) -> APIRouter:
     """Build the /admin router. ``capabilities`` maps capability name to an
     async handler invoked by ``/admin/self-execute``. The handler receives the
@@ -51,6 +53,12 @@ def build_admin_router(
     router = APIRouter(prefix="/admin")
     caps: dict[str, CapabilityHandler] = dict(capabilities or {})
     oidc = OidcContext(bootstrap)
+    # v0.2 grant vouchers, keyed by the same peer_port as ``held_tcts``. A
+    # delegation is built from the voucher the handshake (or a redemption)
+    # handed us, not from the TCT. Router-local by default so the worker
+    # mains need no extra wiring; persists for the worker's lifetime.
+    if held_vouchers is None:
+        held_vouchers = {}
 
     def _new_session():
         if oidc.enabled:
@@ -103,25 +111,31 @@ def build_admin_router(
             )
             r2.raise_for_status()
 
-        tct_json = session.complete(r2.text)
-        tct = json.loads(tct_json)
+        # v0.2: complete() returns
+        # ``{"tct": "<compact JWS>", "grant_voucher": "<compact JWS>"|null}``.
+        completed = json.loads(session.complete(r2.text))
+        tct_token = completed["tct"]
+        claims = decode_claims(tct_token)
         peer_port = _port_from_url(peer_manifest["handshake_endpoint"])
-        held_tcts[peer_port] = tct_json
+        held_tcts[peer_port] = tct_token
+        if completed.get("grant_voucher"):
+            held_vouchers[peer_port] = completed["grant_voucher"]
 
         await emit_event(
             "handshake.complete",
             bootstrap,
             session_id=session_id,
-            grants=tct["tct"]["grants"],
-            peer_aid=tct["tct"]["issuer"],
+            tct=tct_event(tct_token),
+            grants=claims.get("grants", []),
+            peer_aid=claims.get("iss"),
             role="initiator",
         )
         return {
-            "grants": tct["tct"]["grants"],
+            "grants": claims.get("grants", []),
             "session_id": session_id,
-            "peer_aid": tct["tct"]["issuer"],
+            "peer_aid": claims.get("iss"),
             "peer_port": peer_port,
-            "jti": tct["tct"].get("jti"),
+            "jti": claims.get("jti"),
         }
 
     @router.post("/invoke")
@@ -170,6 +184,23 @@ def build_admin_router(
             "body": inner_body,
         }
 
+    @router.get("/held-tct")
+    async def get_held_tct(peer_port: int) -> dict[str, Any]:
+        """Return the compact-JWS TCT this agent holds for ``peer_port``
+        (the token the peer issued to us during the handshake), plus our own
+        AID. Read-only. Used by the RFC-AITP-0010 coordinator to gather the
+        participant-held, coordinator-issued tokens it needs to build a
+        session bundle — under v0.2 the responder/issuer never receives its
+        own issued token back, so the holders supply them.
+        """
+        token = held_tcts.get(peer_port)
+        if not token:
+            raise HTTPException(
+                status_code=412,
+                detail=f"No TCT held for port {peer_port} — run handshake first",
+            )
+        return {"aid": agent.aid, "peer_port": peer_port, "tct_token": token}
+
     @router.post("/renew-tct")
     async def renew_tct(request: Request) -> dict[str, Any]:
         """Holder side of RFC-AITP-0005 §10 TCT renewal.
@@ -186,14 +217,14 @@ def build_admin_router(
         body = await request.json()
         peer_port = int(body["peer_port"])
 
-        current_tct_json = held_tcts.get(peer_port)
-        if not current_tct_json:
+        current_tct_token = held_tcts.get(peer_port)
+        if not current_tct_token:
             raise HTTPException(
                 status_code=412,
                 detail=f"No TCT held for port {peer_port} — run handshake first",
             )
 
-        request_payload = agent.build_renewal_request(current_tct_json)
+        request_payload = agent.build_renewal_request(current_tct_token)
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.post(
@@ -202,20 +233,25 @@ def build_admin_router(
                 headers={"Content-Type": "application/json"},
             )
             r.raise_for_status()
-        new_tct_envelope = r.text
-        held_tcts[peer_port] = new_tct_envelope
+        # Issuer returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``.
+        renewed = json.loads(r.text)
+        new_token = renewed["tct"]
+        held_tcts[peer_port] = new_token
+        if renewed.get("grant_voucher"):
+            held_vouchers[peer_port] = renewed["grant_voucher"]
 
-        new_tct = json.loads(new_tct_envelope)["tct"]
+        claims = decode_claims(new_token)
         await emit_event(
             "tct.renewal.requested", bootstrap,
-            jti=new_tct.get("jti"),
+            tct=tct_event(new_token),
+            jti=claims.get("jti"),
             peer_port=peer_port,
         )
         return {
-            "jti": new_tct.get("jti"),
-            "expires_at": new_tct.get("expires_at"),
-            "issuer": new_tct.get("issuer"),
-            "subject": new_tct.get("subject"),
+            "jti": claims.get("jti"),
+            "expires_at": claims.get("exp"),
+            "issuer": claims.get("iss"),
+            "subject": claims.get("sub"),
         }
 
     @router.post("/export-session-bundle")
@@ -233,8 +269,10 @@ def build_admin_router(
             ``AitpServer``. To keep this admin route framework-light,
             the test fixture instead passes ``participant_tcts``
             directly when the responder cache isn't reachable.
-          - ``participant_tcts`` (optional): ``[{aid, tct_envelope}]`` —
-            if provided, skip the responder-cache lookup.
+          - ``participant_tcts`` (optional): ``[{aid, tct_token}]`` (the
+            legacy ``tct_envelope`` key is still accepted) — if provided,
+            skip the responder-cache lookup. ``tct_token`` is a v0.2
+            compact-JWS TCT string.
 
         Returns ``{bundle_envelope, session_id, participant_aids}``.
         """
@@ -255,10 +293,10 @@ def build_admin_router(
         # commit (see AitpServer); the playground engine drives
         # handshakes such that the coordinator is the responder.
         if not provided_tcts and issued_tcts:
-            for recipient_aid, tct_json in issued_tcts.items():
+            for recipient_aid, tct_token in issued_tcts.items():
                 provided_tcts.append({
                     "aid": recipient_aid,
-                    "tct_envelope": tct_json,
+                    "tct_token": tct_token,
                 })
 
         if not provided_tcts:
@@ -273,7 +311,7 @@ def build_admin_router(
         builder.issued_at(int(time.time()))
         participant_aids: list[str] = []
         for p in provided_tcts:
-            builder.participant(p["aid"], p["tct_envelope"])
+            builder.participant(p["aid"], p.get("tct_token") or p["tct_envelope"])
             participant_aids.append(p["aid"])
         bundle_envelope = builder.build()
         await emit_event(
@@ -317,14 +355,18 @@ def build_admin_router(
         cfg = bootstrap.get("aitp", {})
         ttl_secs = int(cfg.get("ttl_secs", 3600))
         manifest_exp = int(time.time()) + ttl_secs
+        # Returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``; we hand
+        # the whole envelope back to the holder, who stores both halves.
         new_tct_envelope_json = agent.process_renewal_request(
             request_payload, manifest_exp, ttl_secs,
         )
-        new_tct = json.loads(new_tct_envelope_json)["tct"]
+        new_token = json.loads(new_tct_envelope_json)["tct"]
+        claims = decode_claims(new_token)
         await emit_event(
             "tct.renewal.issued", bootstrap,
-            jti=new_tct.get("jti"),
-            subject=new_tct.get("subject"),
+            tct=tct_event(new_token),
+            jti=claims.get("jti"),
+            subject=claims.get("sub"),
         )
         return Response(new_tct_envelope_json, media_type="application/json")
 
@@ -351,11 +393,18 @@ def build_admin_router(
         scope: list[str] = list(body["scope"])
         ttl_secs = body.get("ttl_secs")
 
-        held_tct_json = held_tcts.get(held_peer_port)
-        if not held_tct_json:
+        # v0.2: a delegation is built from the grant voucher the handshake
+        # handed us alongside the TCT, not from the TCT itself. The
+        # delegatee's key binding is derived from its AID by the SDK, so we
+        # no longer pass its public key.
+        held_voucher = held_vouchers.get(held_peer_port)
+        if not held_voucher:
             raise HTTPException(
                 status_code=412,
-                detail=f"No TCT held for port {held_peer_port} — run handshake first",
+                detail=(
+                    f"No grant voucher held for port {held_peer_port} — "
+                    f"run handshake first"
+                ),
             )
 
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -363,10 +412,9 @@ def build_admin_router(
             r.raise_for_status()
         delegatee_manifest = r.json()["manifest"]
         delegatee_aid = delegatee_manifest["aid"]
-        delegatee_pk_b64u = delegatee_manifest["identity_hint"]["public_key"]
 
         token_json = agent.build_delegation(
-            held_tct_json, delegatee_aid, delegatee_pk_b64u, scope, ttl_secs,
+            held_voucher, delegatee_aid, scope, ttl_secs,
         )
         await emit_event(
             "delegation.issued", bootstrap,
@@ -403,18 +451,24 @@ def build_admin_router(
                 json={"delegation_token": token_json},
             )
             r.raise_for_status()
-        # Peer returns a TctEnvelope JSON.
-        tct_envelope = r.text
-        held_tcts[peer_port] = tct_envelope
+        # Peer returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``: a
+        # fresh TCT bound to our key, plus a voucher so we can re-delegate.
         try:
-            parsed = json.loads(tct_envelope)["tct"]
+            redeemed = json.loads(r.text)
+            tct_token = redeemed["tct"]
+            held_tcts[peer_port] = tct_token
+            if redeemed.get("grant_voucher"):
+                held_vouchers[peer_port] = redeemed["grant_voucher"]
+            claims = decode_claims(tct_token)
             await emit_event(
                 "delegation.redeemed", bootstrap,
-                peer_aid=parsed.get("issuer"),
-                grants=parsed.get("grants"),
-                jti=parsed.get("jti"),
+                tct=tct_event(tct_token),
+                peer_aid=claims.get("iss"),
+                grants=claims.get("grants"),
+                jti=claims.get("jti"),
             )
-        except Exception:  # noqa: BLE001
+        except (ValueError, KeyError):
+            held_tcts[peer_port] = r.text
             await emit_event("delegation.redeemed", bootstrap, peer_port=peer_port)
         return {"ok": True, "peer_port": peer_port}
 
