@@ -1,10 +1,11 @@
 """Runtime probe of the installed ``aitp`` SDK feature surface.
 
 The ``aitp`` wheel is compiled from the sibling ``aitp-rs/bindings/aitp-py``
-repo (it is *not* the unrelated PyPI package of the same name). Several of
-its surfaces are gated behind Cargo ``experimental-*`` features, so a given
-wheel may or may not expose renewal, session bundles, SPKI pinning, the TCT
-verification cache, or multi-hop delegation verification.
+repo (it is *not* the unrelated PyPI package of the same name). As of SDK
+0.4.0 the full surface — renewal, session bundles, SPKI pinning, the TCT
+verification cache, and multi-hop delegation — ships **by default**, but a
+``--no-default-features`` wheel (or an older 0.3.x wheel) may omit some, so
+this probe still reports what the *currently installed* wheel provides.
 
 This module reports what the *currently installed* wheel actually provides so
 that:
@@ -61,7 +62,12 @@ def _probe() -> dict[str, Any]:
         try:
             import importlib.metadata as _md
 
-            version = _md.version("aitp")
+            # Distribution name is "aitp-sdk" (import name "aitp"); fall back
+            # to the bare "aitp" only if the renamed dist isn't found.
+            try:
+                version = _md.version("aitp-sdk")
+            except _md.PackageNotFoundError:
+                version = _md.version("aitp")
         except Exception:
             version = None
 
@@ -74,7 +80,7 @@ def _probe() -> dict[str, Any]:
         and hasattr(agent, "build_renewal_request"),
         FEATURE_TCT_CACHE: hasattr(aitp, "TctStore"),
         FEATURE_MULTIHOP_DELEGATION: hasattr(
-            aitp, "verify_delegation_experimental_multihop"
+            aitp, "verify_delegation_multihop"
         ),
     }
     return {
