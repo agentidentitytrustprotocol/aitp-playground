@@ -14,6 +14,7 @@ import aitp
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext, peer_aid_from_hello_envelope
+from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
 
 
@@ -248,7 +249,7 @@ class AitpServer:
                 )
             commit_json = (await request.body()).decode()
             try:
-                ack_json, tct_json = responder.process_commit(commit_json)
+                ack_json, completed_json = responder.process_commit(commit_json)
             except Exception as exc:  # noqa: BLE001
                 await emit_event(
                     "handshake.failed", self.bootstrap,
@@ -259,18 +260,24 @@ class AitpServer:
                     status_code=400,
                     media_type="application/json",
                 )
-            tct = json.loads(tct_json)
-            # Record the TCT we just issued so /admin/export-session-bundle
-            # can attach it to the bundle. Keyed by the recipient AID
-            # (the subject in TCT terms).
-            recipient_aid = tct["tct"].get("subject") or ""
-            if recipient_aid:
-                self._issued_tcts[recipient_aid] = tct_json
+            # v0.2: process_commit returns
+            # ``{"tct": "<compact JWS>", "grant_voucher": "<compact JWS>"|null}``.
+            # The TCT is an opaque token; claims live in its JWS payload. Note
+            # the returned TCT is the one the PEER issued to us (``iss`` = peer,
+            # ``sub`` = self) — the SDK's ``CompletedHandshake`` hands each side
+            # the token it now holds. We therefore do not have our own issued
+            # token here; RFC-AITP-0010 bundles collect each participant's
+            # held (coordinator-issued) token instead (see the runner's
+            # export_session_bundle step + /admin/held-tct).
+            completed = json.loads(completed_json)
+            tct_token = completed["tct"]
+            claims = decode_claims(tct_token)
             await emit_event(
                 "handshake.complete", self.bootstrap,
                 session_id=session_id,
-                grants=tct["tct"]["grants"],
-                peer_aid=tct["tct"]["issuer"],
+                tct=tct_event(tct_token),
+                grants=claims.get("grants", []),
+                peer_aid=claims.get("iss"),
                 role="responder",
             )
             return Response(ack_json, media_type="application/json")
@@ -295,29 +302,32 @@ class AitpServer:
 
         return router
 
-    def verify_capability_tct(self, tct_json: str, required_grant: str) -> "aitp.TctIdentity":
+    def verify_capability_tct(self, tct_token: str, required_grant: str) -> "aitp.TctIdentity":
         """Verify the X-AITP-TCT header on an incoming capability call.
 
+        Under v0.2 the header carries an opaque compact-JWS TCT token.
+
         Two-stage verification:
-          1. Local revocation short-circuit on the TCT's ``jti``.
+          1. Local revocation short-circuit on the TCT's ``jti`` (read from
+             the unverified claims for a precise 403; the SDK also re-checks
+             ``revoked_jtis`` below, so this is fail-closed either way).
           2. SDK ``verify_tct`` in presented-TCT mode: we pass the TCT's
-             own declared ``audience`` as ``expected_audience``. In v0.1
-             (RFC-AITP-0005) ``audience == subject``, so this asserts
+             own declared ``aud`` as ``expected_audience``. In v0.1/v0.2
+             (RFC-AITP-0005) ``aud`` defaults to ``sub``, so this asserts
              "the TCT identifies this holder" — the holder's identity
              claim. The signature check (against the issuer's pubkey
-             derived from ``tct.issuer``) is the security gate: it
-             proves WE (this resource server) actually issued the TCT.
+             derived from ``iss``) is the security gate: it proves WE
+             (this resource server) actually issued the TCT.
 
-        Any failure produces a 403. The two parse failures (missing
-        token, malformed JSON) are reported distinctly so debugging is
-        easier."""
-        if not tct_json:
+        Any failure produces a 403. Missing/malformed tokens are reported
+        distinctly so debugging is easier."""
+        if not tct_token:
             raise HTTPException(status_code=403, detail="missing X-AITP-TCT")
         try:
-            tct_obj = json.loads(tct_json).get("tct", {})
-        except (json.JSONDecodeError, AttributeError) as exc:
+            claims = decode_claims(tct_token)
+        except ValueError as exc:
             raise HTTPException(status_code=403, detail=f"tct malformed: {exc}") from exc
-        jti = tct_obj.get("jti", "")
+        jti = claims.get("jti", "")
         if jti and jti in self.revoked_jtis:
             raise HTTPException(status_code=403, detail=f"tct revoked: jti={jti}")
         # Issuer-AID check: TCTs we issued must declare us as the issuer.
@@ -326,21 +336,22 @@ class AitpServer:
         # The check is defensive even outside the rotation flow — a peer
         # presenting a TCT signed by some other resource server has no
         # business calling our capability endpoints.
-        declared_issuer = tct_obj.get("issuer")
+        declared_issuer = claims.get("iss")
         if declared_issuer and declared_issuer != self.agent.aid:
             raise HTTPException(
                 status_code=403,
                 detail=f"tct issuer mismatch: {declared_issuer} != {self.agent.aid}",
             )
-        declared_audience = tct_obj.get("audience")
+        declared_audience = claims.get("aud") or claims.get("sub")
         try:
             if self._tct_store is not None:
                 before = self._tct_store.len()
                 identity = self.agent.verify_tct_cached(
-                    tct_json,
+                    tct_token,
                     required_grant,
                     self._tct_store,
                     expected_audience=declared_audience,
+                    revoked_jtis=self.revoked_jtis,
                 )
                 # len-delta hit/miss heuristic: a miss inserts a new entry,
                 # a hit reuses an existing one. Exact while size < max_entries
@@ -351,7 +362,9 @@ class AitpServer:
                     self._tct_cache_hits += 1
                 return identity
             return self.agent.verify_tct(
-                tct_json, required_grant, expected_audience=declared_audience,
+                tct_token, required_grant,
+                expected_audience=declared_audience,
+                revoked_jtis=self.revoked_jtis,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=403, detail=f"tct rejected: {exc}") from exc

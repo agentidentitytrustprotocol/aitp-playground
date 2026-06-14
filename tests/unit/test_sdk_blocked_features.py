@@ -33,6 +33,14 @@ _HAS_TCT_CACHE = hasattr(aitp, "TctStore")
 _HAS_MULTIHOP = hasattr(aitp, "verify_delegation_experimental_multihop")
 
 
+def _claims(token: str) -> dict:
+    """Decode the (unverified) claims of a v0.2 compact-JWS TCT — the SDK's
+    own Python test idiom for inspecting an opaque token's payload."""
+    payload = token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    return json.loads(base64.urlsafe_b64decode(payload))
+
+
 # ── P-256 suite ─────────────────────────────────────────────────────────────
 
 
@@ -77,20 +85,22 @@ def test_tct_renewal_round_trip() -> None:
     ack, sid = si.process_hello(hello)
     commit = sh.process_hello_ack(ack, sid)
     commit_ack, _ = si.process_commit(commit)
-    held = sh.complete(commit_ack)
-    orig = json.loads(held)["tct"]
+    held_tct = json.loads(sh.complete(commit_ack))["tct"]
+    orig = _claims(held_tct)
 
-    request_payload = holder.build_renewal_request(held)
+    request_payload = holder.build_renewal_request(held_tct)
     manifest_exp = int(time.time()) + 3600
-    renewed = issuer.process_renewal_request(request_payload, manifest_exp, 3600)
-    new_tct = json.loads(renewed)["tct"]
+    renewed = json.loads(
+        issuer.process_renewal_request(request_payload, manifest_exp, 3600)
+    )
+    new_tct = _claims(renewed["tct"])
 
     assert new_tct["jti"] != orig["jti"]
-    assert new_tct["subject"] == orig["subject"]
+    assert new_tct["sub"] == orig["sub"]
     assert sorted(new_tct["grants"]) == sorted(orig["grants"])
     # Within the same wall-clock second the renewed expiry may equal the
     # original — the load-bearing assertion is the fresh jti.
-    assert new_tct["expires_at"] >= orig["expires_at"]
+    assert new_tct["exp"] >= orig["exp"]
 
 
 # ── TCT verification cache (RFC-AITP-0005 hot path) ─────────────────────────
@@ -111,14 +121,15 @@ def test_tct_cache_hit_miss_len_delta() -> None:
     ack, sid = si.process_hello(hello)
     commit = sh.process_hello_ack(ack, sid)
     commit_ack, _ = si.process_commit(commit)
-    held = sh.complete(commit_ack)
-    audience = json.loads(held)["tct"]["audience"]
+    held_tct = json.loads(sh.complete(commit_ack))["tct"]
+    claims = _claims(held_tct)
+    audience = claims.get("aud") or claims.get("sub")
 
     store = aitp.TctStore(256)
     assert store.len() == 0
-    id1 = issuer.verify_tct_cached(held, "demo.y", store, expected_audience=audience)
+    id1 = issuer.verify_tct_cached(held_tct, "demo.y", store, expected_audience=audience)
     assert store.len() == 1  # miss: a new entry was inserted
-    id2 = issuer.verify_tct_cached(held, "demo.y", store, expected_audience=audience)
+    id2 = issuer.verify_tct_cached(held_tct, "demo.y", store, expected_audience=audience)
     assert store.len() == 1  # hit: no new entry
     assert id1.peer_aid == id2.peer_aid
     assert id1.jti == id2.jti
@@ -129,14 +140,15 @@ def test_tct_cache_hit_miss_len_delta() -> None:
 
 def _participant_handshake(participant, coordinator, coord_manifest):
     """Participant initiates a handshake against the coordinator (responder).
-    Returns the coordinator-issued TCT the participant now holds."""
+    Returns the coordinator-issued TCT (compact-JWS token) the participant
+    now holds."""
     sess = participant.new_session()
     rsess = coordinator.new_responder()
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
     commit_ack, _ = rsess.process_commit(commit)
-    return sess.complete(commit_ack)
+    return json.loads(sess.complete(commit_ack))["tct"]
 
 
 @pytest.mark.skipif(not _HAS_BUNDLE, reason="aitp built without experimental-bundle")
@@ -249,8 +261,9 @@ def test_oidc_handshake_p256_initiator() -> None:
     hello = sa.build_hello(b_m, ["demo.y"], oidc_mint_jwt=a_mint)
     ack, sid = sb.process_hello(hello)
     commit = sa.process_hello_ack(ack, sid)
-    commit_ack, b_held = sb.process_commit(commit)
-    a_held = sa.complete(commit_ack)
+    commit_ack, b_completed = sb.process_commit(commit)
+    a_held = json.loads(sa.complete(commit_ack))["tct"]
+    b_held = json.loads(b_completed)["tct"]
     assert a.verify_tct(a_held, "demo.y").peer_aid == b.aid
     assert b.verify_tct(b_held, "demo.x").peer_aid == a.aid
 
@@ -292,8 +305,9 @@ def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
     hello = sa.build_hello(b_m, ["demo.y"], oidc_mint_jwt=a_mint)
     ack, sid = sb.process_hello(hello)
     commit = sa.process_hello_ack(ack, sid)
-    commit_ack, b_held = sb.process_commit(commit)
-    a_held = sa.complete(commit_ack)
+    commit_ack, b_completed = sb.process_commit(commit)
+    a_held = json.loads(sa.complete(commit_ack))["tct"]
+    b_held = json.loads(b_completed)["tct"]
 
     assert a.verify_tct(a_held, "demo.y").peer_aid == b.aid
     assert b.verify_tct(b_held, "demo.x").peer_aid == a.aid

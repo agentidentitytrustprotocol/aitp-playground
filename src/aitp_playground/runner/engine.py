@@ -689,13 +689,27 @@ class ScenarioRunner:
                     f"coordinator and participants"
                 )
             coord_ra = running[step.coordinator]
-            participant_ports = {
-                p_id: running[p_id].port for p_id in step.participants
-            }
+            # RFC-AITP-0010 bundles package the coordinator-issued TCTs. Under
+            # aitp v0.2 the coordinator (responder) never receives its own
+            # issued token back from the SDK — each participant holds it. So we
+            # collect each participant's held (coordinator-issued) token and
+            # hand them to the coordinator to sign into the bundle.
             async with httpx.AsyncClient(timeout=15.0) as client:
+                participant_tcts: list[dict[str, Any]] = []
+                for p_id in step.participants:
+                    p_ra = running[p_id]
+                    held = await client.get(
+                        f"http://localhost:{p_ra.port}/admin/held-tct",
+                        params={"peer_port": coord_ra.port},
+                    )
+                    held.raise_for_status()
+                    h = held.json()
+                    participant_tcts.append(
+                        {"aid": h["aid"], "tct_token": h["tct_token"]}
+                    )
                 r = await client.post(
                     f"http://localhost:{coord_ra.port}/admin/export-session-bundle",
-                    json={"participants": participant_ports},
+                    json={"participant_tcts": participant_tcts},
                 )
                 r.raise_for_status()
                 data = r.json()
