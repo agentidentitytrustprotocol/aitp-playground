@@ -203,7 +203,7 @@ class AitpServer:
             token_json: str = body["delegation_token"]
             # Opt-in draft RFC-AITP-0011 multi-hop verification. When the
             # scenario sets ``aitp.allow_multihop_delegation`` AND the wheel
-            # was built with the ``experimental-multihop-delegation`` feature,
+            # was built with multi-hop verification (default in the SDK),
             # accept a chained token up to ``max_delegation_hops``. Otherwise
             # fall back to strict v0.1 single-hop, which rejects any non-empty
             # chain with DELEGATION_MULTIHOP_NOT_SUPPORTED.
@@ -212,9 +212,9 @@ class AitpServer:
             max_hops = int(cfg.get("max_delegation_hops", 3))
             try:
                 if allow_multihop and hasattr(
-                    aitp, "verify_delegation_experimental_multihop"
+                    aitp, "verify_delegation_multihop"
                 ):
-                    verified = aitp.verify_delegation_experimental_multihop(
+                    verified = aitp.verify_delegation_multihop(
                         token_json, self.agent.aid, max_hops,
                     )
                 else:

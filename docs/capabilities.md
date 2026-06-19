@@ -26,7 +26,7 @@ absent (e.g. CI without it), every feature reports `False` and
 | `spki_pinning` | `hasattr(aitp, "SpkiPinVerifier")` | SPKI client-cert pinning |
 | `tct_renewal` | `hasattr(AitpAgent, "build_renewal_request")` | RFC-AITP-0005 §10 in-band renewal |
 | `tct_cache` | `hasattr(aitp, "TctStore")` | RFC-AITP-0005 verification cache |
-| `multihop_delegation` | `hasattr(aitp, "verify_delegation_experimental_multihop")` | RFC-AITP-0011 multi-hop delegation |
+| `multihop_delegation` | `hasattr(aitp, "verify_delegation_multihop")` | RFC-AITP-0011 multi-hop delegation |
 
 The keys are **stable across releases** — scenarios reference them by name
 when declaring a required capability, so don't rename them. The probe is

@@ -4,18 +4,23 @@ version = "0.1.0"
 description = "AITP scenario demonstration service"
 requires-python = ">=3.11"
 dependencies = [
-  # The AITP SDK (v0.2.x), distribution name "aitp-sdk", import name "aitp".
+  # The AITP SDK, distribution name "aitp-sdk", import name "aitp".
   # NOTE: depend on "aitp-sdk", NOT "aitp" — the latter is an unrelated
   # placeholder package on PyPI that pip would otherwise pull in (the SDK was
   # renamed aitp -> aitp-sdk).
   # It is the Rust-backed wheel compiled from the sibling
   # ../aitp-rs/bindings/aitp-py via `maturin develop` (native) or built into
-  # the Docker image (and also published to PyPI as aitp-sdk). Left unpinned so
-  # CI (`pip install -e . --no-deps`) and the maturin path both resolve. For
-  # full scenario coverage, build the wheel with experimental features
+  # the Docker image (and also published to PyPI as aitp-sdk). For full
+  # scenario coverage, build the wheel with experimental features
   # (`maturin ... --features experimental`); the service detects what's
   # available at runtime via GET /capabilities.
-  "aitp-sdk",
+  # Floor pinned to 0.3.0 = the compact-JWS SDK (protocol `aitp/0.2`); the
+  # pre-0.3 (JCS, protocol `aitp/0.1`) wheels are wire-incompatible. To
+  # develop against unreleased SDK source instead of the PyPI wheel, add a
+  # `[tool.uv.sources]` path override (requires a local Rust toolchain):
+  #   [tool.uv.sources]
+  #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
+  "aitp-sdk>=0.4.0",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "pydantic>=2.10",
@@ -57,8 +62,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "agents/base"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",
   "coverage[toml]>=7.6",

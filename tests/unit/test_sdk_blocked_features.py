@@ -30,7 +30,7 @@ _HAS_PINNING = hasattr(aitp, "SpkiPinVerifier")
 _HAS_RENEWAL = hasattr(aitp.AitpAgent, "build_renewal_request")
 _HAS_OIDC = hasattr(aitp, "JwksProvider")
 _HAS_TCT_CACHE = hasattr(aitp, "TctStore")
-_HAS_MULTIHOP = hasattr(aitp, "verify_delegation_experimental_multihop")
+_HAS_MULTIHOP = hasattr(aitp, "verify_delegation_multihop")
 
 
 def _claims(token: str) -> dict:

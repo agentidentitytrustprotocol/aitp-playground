@@ -227,7 +227,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aitp-sdk" },
+    { name = "aitp-sdk", specifier = ">=0.4.0" },
     { name = "anyio", specifier = ">=4.7" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=7.6" },
     { name = "crewai", marker = "extra == 'all-agents'", specifier = ">=0.70" },
@@ -270,14 +270,14 @@ dev = [
 
 [[package]]
 name = "aitp-sdk"
-version = "0.2.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/67/99/2d8c235568d45a177472204d1506797d3e13acb60d423f8b775bafb8d6d0/aitp_sdk-0.2.0.tar.gz", hash = "sha256:7916212f1848a6505bfffe5f303dcbb9d4693843ecf055a3763f91f7d4ac1aa4", size = 166294, upload-time = "2026-06-09T05:13:17.468Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/80/bf073c00a6358b80147a8a06a4fcae4c0cb5e3a4713d0c15a3ffe2ddf2ce/aitp_sdk-0.4.0.tar.gz", hash = "sha256:1e63a36faddf9b66c1bcc813133141d454db631fd1a84076a6ee4d6f595e52ea", size = 185402, upload-time = "2026-06-14T21:40:43.145Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/17/180a6d886bb1e1851edac2aea83954af12b9222328bc8eed2f06243d2bfc/aitp_sdk-0.2.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:cc53820848f4dcccde05bccee2f836897a66d4b1b99337be7d7acece383dff92", size = 1167052, upload-time = "2026-06-09T05:13:10.887Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/69/42e7d12da038bac76a3d3f57a817eab2fb204f61be9688fbe0062bcdef68/aitp_sdk-0.2.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:3edda49c2d7994f33f73b8258cae4ecf8af654bcb6b220a9ff5b64fdb885aaa8", size = 1095567, upload-time = "2026-06-09T05:13:12.849Z" },
-    { url = "https://files.pythonhosted.org/packages/b7/4a/f01bd6398cb7713e012bc8f03c30d9beff8dfdae69b7ba183f1830155ef1/aitp_sdk-0.2.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f5b39d7f70155c0db94dd4483328fd66302f05333c2ff57a0f7b68b7e6d08f23", size = 1150329, upload-time = "2026-06-09T05:13:14.259Z" },
-    { url = "https://files.pythonhosted.org/packages/63/06/95a7f779faba31d99eed0f24b704c624df1db36f02fec577dda5c5f1ce3f/aitp_sdk-0.2.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e1ce335c07489680edb3dd3298e1553ad21b6b2a9b719fe9a0f512fc5d33f860", size = 1219655, upload-time = "2026-06-09T05:13:15.992Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/b9/99207c15b4746992264bafa2c4bc53c6129449c14c76de898c6875c35390/aitp_sdk-0.4.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5b9c01dba40f3ad071ba0845981d8eecae5ed729e03a1d871ae3d599ca3a9884", size = 1357651, upload-time = "2026-06-14T21:40:36.978Z" },
+    { url = "https://files.pythonhosted.org/packages/33/a8/512075e97d1eb8227ef6d6f14865ae3e0d9107e9feaa84f46e098ea12a92/aitp_sdk-0.4.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:10b7b6a9662f2d042e4bb8e14f283cbc166b9b22bd643c32f4af36e114692b4d", size = 1265486, upload-time = "2026-06-14T21:40:38.695Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/62/ed1da9d8e79aeb1408b2d32b3e74f734297c733ff78642c3cf427d17d1ba/aitp_sdk-0.4.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:893643e6855e7ece0733e58fc44e33c00567787eaad97592be9aa9a8d32f4fc7", size = 1323498, upload-time = "2026-06-14T21:40:39.954Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/c7/ff15bcc6bd253a17325708988148957882387f0ee3c1203d9a26692cef45/aitp_sdk-0.4.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c1f68f6d0acd981a1525d9f9b53279f71a9c069fa94f5c564ef5371982c3e6f2", size = 1412610, upload-time = "2026-06-14T21:40:41.31Z" },
 ]
 
 [[package]]

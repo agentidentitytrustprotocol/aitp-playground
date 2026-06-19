@@ -17,7 +17,7 @@ def healthz() -> dict:
 def capabilities() -> dict:
     """Report the feature surface of the installed ``aitp`` SDK wheel.
 
-    Lets clients (and scenarios) discover which experimental SDK features
+    Lets clients (and scenarios) discover which optional SDK features
     are available so missing ones degrade cleanly rather than crashing.
     """
     return get_capabilities()
