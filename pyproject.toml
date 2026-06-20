@@ -29,6 +29,13 @@ dependencies = [
   "jsonschema>=4.23",
   "httpx>=0.27",
   "anyio>=4.7",
+  # Ed25519 keys + serialization, used directly by the trust/OIDC layer
+  # (src/aitp_playground/trust/oidc_issuer.py) and the agent base
+  # (agents/base/oidc.py). Must be a BASE dependency: the runtime image
+  # installs `pip install -e .` with no extras, and cryptography would
+  # otherwise only arrive transitively via the optional *-agents extras,
+  # so agents crash with ModuleNotFoundError when those aren't installed.
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]
