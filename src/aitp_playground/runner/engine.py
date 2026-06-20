@@ -194,7 +194,19 @@ class ScenarioRunner:
             self._cleanup_run(run_id, ports, bootstrap_files)
 
         ctx.emit(RunEvent(type="run.complete"))
-        task = asyncio.create_task(self.cp.ingest_events(ctx.events))
+        # Ingest the FULL run event log, not just ctx.events. Agent
+        # subprocesses deliver their canonical events (handshake.complete,
+        # delegation.issued/redeemed, tct.*) to POST /internal/telemetry,
+        # which lands them in the store but NOT in ctx.events. The CP
+        # projects sessions / TCTs / delegations off exactly those agent
+        # events, so ingesting ctx.events alone left every CP projection
+        # empty. The store record is a superset of ctx.events (RunContext.emit
+        # mirrors each orchestrator event into the store as well).
+        record = self.store.get(run_id)
+        events_to_ingest = record.get("events") if record else None
+        task = asyncio.create_task(
+            self.cp.ingest_events(events_to_ingest or ctx.events)
+        )
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 

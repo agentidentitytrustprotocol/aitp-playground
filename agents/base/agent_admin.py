@@ -418,6 +418,12 @@ def build_admin_router(
         )
         await emit_event(
             "delegation.issued", bootstrap,
+            # Include the signed delegation token so the CP can project a
+            # delegations row. The CP's parseDelegation reads
+            # payload.tct.{token,claims} for jti / src_jti (parent) /
+            # iss (delegator) / sub (delegatee); without the token it only
+            # saw delegatee_aid + scope and dropped the event.
+            tct=tct_event(token_json),
             delegatee_aid=delegatee_aid, scope=scope,
         )
         return {
