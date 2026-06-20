@@ -80,7 +80,9 @@ def test_version_falls_back_to_distribution_metadata(monkeypatch) -> None:
     fake = types.ModuleType("aitp")  # intentionally no __version__
     fake.AitpAgent = type("A", (), {})
     monkeypatch.setitem(sys.modules, "aitp", fake)
-    monkeypatch.setattr(md, "version", lambda name: "9.9.9" if name == "aitp" else "")
+    monkeypatch.setattr(
+        md, "version", lambda name: "9.9.9" if name == "aitp-sdk" else ""
+    )
     caps.get_capabilities.cache_clear()
 
     report = caps.get_capabilities()
