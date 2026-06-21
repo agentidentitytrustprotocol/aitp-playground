@@ -83,6 +83,13 @@ jobs:
           # the Dockerfile (and its dockerignore) was written against.
           context: .
           file: ./aitp-playground/Dockerfile
+          # Bake the agent LLM extras (crewai + langchain + langgraph + LLM
+          # clients) into the published image so the deployed playground can
+          # call a real provider when LLM_PROVIDER / *_API_KEY are set at
+          # runtime. Without this the image ships no LLM libs and every worker
+          # silently falls back to its deterministic stub.
+          build-args: |
+            INSTALL_EXTRAS=all-agents
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
