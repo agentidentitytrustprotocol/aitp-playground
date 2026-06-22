@@ -621,6 +621,20 @@ class ScenarioRunner:
                 step_outputs[step.id] = {"delegations": [], "skipped": "no cp"}
                 return
             ra = running[step.agent]
+            # Flush this run's observed events to the CP and await the ingest
+            # before reading its projection. Agent subprocesses deliver their
+            # canonical delegation events (delegation.issued / .redeemed) to
+            # POST /internal/telemetry, which lands them in the store but not in
+            # the CP; the batch CP ingest otherwise only runs after
+            # run.complete. Without this flush the query races projection and
+            # always returns an empty tree. The CP's POST /api/events awaits its
+            # projection before responding, so once this returns the delegation
+            # rows are queryable. CP projections are idempotent
+            # (onConflictDoNothing), so the post-run batch re-sending these
+            # events creates no duplicate rows.
+            record = self.store.get(ctx.run_id)
+            events_so_far = record.get("events") if record else list(ctx.events)
+            await self.cp.ingest_events(events_so_far)
             chain = await self.cp.fetch_delegations(delegator=ra.aid)
             result = {
                 "delegator": ra.aid,
