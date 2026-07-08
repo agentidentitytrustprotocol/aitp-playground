@@ -6,40 +6,75 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-          cache: pip
+          enable-cache: true
 
-      - name: Install dependencies (without aitp SDK)
-        # The `aitp` runtime dep is a local SDK built from
-        # ../aitp-rs/bindings/aitp-py via `maturin develop`. It is not on
-        # PyPI, so CI installs the rest of the deps explicitly and installs
-        # the project with --no-deps. Tests that need the SDK use
-        # `pytest.importorskip("aitp")` and skip cleanly in this environment.
+      - name: ruff check
+        run: uv run --only-group dev ruff check src agents tests
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor (requires-python) and latest.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies from lockfile
+        # aitp-sdk ships manylinux wheels on PyPI, so the full suite —
+        # including the SDK-dependent tests — runs here. No local Rust
+        # toolchain or maturin build needed.
+        run: uv sync --locked
+
+      - name: Run unit + scenario tests with coverage
         run: |
-          python -m pip install --upgrade pip
-          pip install \
-            "fastapi>=0.115" \
-            "uvicorn[standard]>=0.32" \
-            "pydantic>=2.10" \
-            "pydantic-settings>=2.7" \
-            "pyyaml>=6.0" \
-            "jsonschema>=4.23" \
-            "httpx>=0.27" \
-            "anyio>=4.7" \
-            "pytest>=8.3" \
-            "pytest-asyncio>=0.24" \
-            "coverage[toml]>=7.6"
-          pip install -e . --no-deps
+          uv run coverage run -m pytest tests/unit tests/scenarios -q
+          uv run coverage report --fail-under=88
 
-      - name: Run tests
-        run: pytest tests/ -v
+  integration:
+    name: Integration (agent subprocess e2e)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies from lockfile
+        run: uv sync --locked
+
+      - name: Run gated runner integration tests
+        # Spawns real agent subprocesses (deterministic stubs, no LLM keys)
+        # and drives a full scenario run through the API.
+        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v
+        timeout-minutes: 10
