@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from .models import (
     ScenarioMeta,
-    ScenarioSpec,
     ScenarioTemplate,
     ScenarioVersion,
     TrustSpec,

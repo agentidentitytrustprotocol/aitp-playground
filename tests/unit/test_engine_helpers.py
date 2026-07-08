@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 
 from aitp_playground.runner.context import RunContext, RunEvent
 from aitp_playground.runner.engine import ScenarioRunner
