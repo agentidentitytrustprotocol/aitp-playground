@@ -1,12 +1,14 @@
 # SDK capabilities & conformance
 
-The `aitp` wheel ships a **core** v0.1 surface (identity, handshake, TCT
-verify, delegation, revocation) plus several **experimental** surfaces
-gated behind Cargo `experimental-*` features. A given wheel may or may not
-expose renewal, session bundles, SPKI pinning, the TCT verification cache,
-or multi-hop delegation verification — it depends on how it was built. This
-page covers how the playground discovers what's installed and degrades
-cleanly, plus the RFC conformance harness.
+The `aitp` wheel (PyPI distribution `aitp-sdk`) ships a **core** surface
+(identity, handshake, TCT verify, delegation, revocation) plus several
+post-v0.1 surfaces — renewal, session bundles, SPKI pinning, the TCT
+verification cache, multi-hop delegation verification. Since `aitp-sdk`
+0.4.0 **all of these ship by default** on the published wheel; only an
+older 0.3.x wheel or a custom `--no-default-features` build omits some.
+The playground therefore probes the *installed* wheel at runtime rather
+than assuming. This page covers that probe, how scenarios degrade
+cleanly, and the RFC conformance harness.
 
 Source: `src/aitp_playground/capabilities.py`,
 `src/aitp_playground/conformance.py`, `src/aitp_playground/api/health.py`.
@@ -24,8 +26,8 @@ absent (e.g. CI without it), every feature reports `False` and
 | `oidc` | `hasattr(aitp, "JwksProvider")` | RFC-AITP-0002 OIDC identity binding |
 | `session_bundle` | `hasattr(aitp, "SessionBundleBuilder")` | RFC-AITP-0010 session bundles |
 | `spki_pinning` | `hasattr(aitp, "SpkiPinVerifier")` | SPKI client-cert pinning |
-| `tct_renewal` | `hasattr(AitpAgent, "build_renewal_request")` | RFC-AITP-0005 §10 in-band renewal |
-| `tct_cache` | `hasattr(aitp, "TctStore")` | RFC-AITP-0005 verification cache |
+| `tct_renewal` | `hasattr(AitpAgent, "build_renewal_request")` | RFC-AITP-0013 / RFC-AITP-0004 §8.1 in-band renewal |
+| `tct_cache` | `hasattr(aitp, "TctStore")` | SDK-side cache for RFC-AITP-0005 TCT verification |
 | `multihop_delegation` | `hasattr(aitp, "verify_delegation_multihop")` | RFC-AITP-0011 multi-hop delegation |
 
 The keys are **stable across releases** — scenarios reference them by name
@@ -48,35 +50,33 @@ curl -s http://localhost:8000/capabilities | jq .
 ```json
 {
   "sdk_available": true,
-  "version": "0.2.1",
+  "version": "0.4.0",
   "features": {
     "oidc": true,
-    "session_bundle": false,
+    "session_bundle": true,
     "spki_pinning": true,
     "tct_renewal": true,
     "tct_cache": true,
-    "multihop_delegation": false
+    "multihop_delegation": true
   }
 }
 ```
 
 `version` comes from `aitp.__version__` if present, otherwise the installed
-distribution metadata for `aitp` — the compiled wheel doesn't always set
-`__version__`.
+distribution metadata for `aitp-sdk` (falling back to a bare `aitp` dist) —
+the compiled wheel doesn't always set `__version__`.
 
-## Building a feature-complete wheel
+## Getting a feature-complete wheel
 
-The native build flag controls which experimental surfaces compile in:
-
-```bash
-cd ../aitp-rs/bindings/aitp-py
-maturin develop --release --features experimental   # enables all experimental-* gates
-```
-
-Without `--features experimental` the core surface still works; the
-experimental scenarios degrade rather than crash (see below). The Docker
-build's `INSTALL_EXTRAS` and feature wiring is in [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md).
-The build flags and what each feature gate turns on are documented by the
+Nothing special: the PyPI wheel is feature-complete. `uv sync` installs
+`aitp-sdk` with the full default surface, and a plain source build
+(`maturin develop --release` in `aitp-rs/bindings/aitp-py`) compiles the
+same defaults. A slimmed-down wheel only appears if someone builds with
+`--no-default-features` — the probe above is what keeps that (or an old
+0.3.x wheel) from crashing scenarios. The Docker build compiles the wheel
+from the sibling `aitp-rs` source; its `INSTALL_EXTRAS` wiring is in
+[docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md).
+The Cargo feature gates and what each one turns on are documented by the
 SDK itself —
 [aitp-rs · sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build)
 and the
@@ -84,7 +84,7 @@ and the
 
 ## Graceful degradation
 
-Scenarios that exercise an experimental surface check `GET /capabilities`
+Scenarios that exercise a feature-gated surface check `GET /capabilities`
 (or the SDK raises) and degrade cleanly when the wheel lacks the feature —
 the step records a "feature not available" outcome instead of crashing the
 run. This is why you can run the whole scenario catalog against a
@@ -113,18 +113,18 @@ located as a sibling checkout) and reports which ones the installed wheel
 could execute. It's a metadata/readiness report — it does **not** run the
 fixtures; it classifies them. (The fixtures are owned by the spec; the
 SDK's own pass/fail status against them is the
-[aitp-rs conformance matrix](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/conformance-matrix.md).)
+[aitp-rs conformance matrix](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/conformance.md#v02-conformance-matrix).)
 
 Run it from the CLI:
 
 ```bash
 uv run python -m aitp_playground.cli conformance
 # Conformance corpus: /…/agentidentitytrustprotocol/schemas/conformance
-#   installed SDK: aitp 0.2.1
-#   fixtures: 42  (required for v0.1: 31)
-#   by RFC:   {'RFC-AITP-0001': 6, 'RFC-AITP-0005': 9, ...}
-#   by tier:  {'core': 31, 'extension': 8, 'draft': 3}
-#   wheel readiness: {'core': 31, 'available': 5, 'skipped': 6}
+#   installed SDK: aitp 0.4.0
+#   fixtures: 53  (required for v0.1: 1)
+#   by RFC:   {'RFC-AITP-0001': 3, 'RFC-AITP-0004': 11, 'RFC-AITP-0005': 10, ...}
+#   by tier:  {'core': 46, 'draft': 7}
+#   wheel readiness: {'available': 7, 'core': 46}
 #   ok  fixture metadata valid
 
 uv run python -m aitp_playground.cli conformance --json          # raw report
@@ -152,6 +152,6 @@ Each fixture carries metadata (`id`, `rfc`, `status`, `required_for_v0_1`,
 ## Where to read next
 
 - What each SDK feature actually does → [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md)
-- How each experimental surface is wired in the playground → [aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces)
+- How each post-v0.1 surface is wired in the playground → [aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces)
 - Which scenario demonstrates each feature → [scenarios.md](scenarios.md#scenarios-in-the-box)
 - Building the wheel in Docker → [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md)

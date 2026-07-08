@@ -182,7 +182,7 @@ runner
   └─ POST /admin/invoke (on caller)
         └─ caller looks up held TCT for the target's port
               POST /capabilities/<name> (on target)
-                 headers: X-AITP-TCT: <held tct envelope>
+                 headers: X-AITP-TCT: <held compact-JWS TCT token>
                  └─ target.AitpServer.verify_capability_tct(...)
                        └─ aitp.verify_tct(...)  ✓ or 403
                  └─ capability handler runs

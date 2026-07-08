@@ -11,7 +11,7 @@ below.
 | Page | Read this when… |
 | --- | --- |
 | [architecture.md](architecture.md) | You want the big picture — components, runtime topology, and where AITP lives. Start here. |
-| [getting-started.md](getting-started.md) | You're cloning the repo and need it running locally. |
+| [getting-started.md](getting-started.md) | You're cloning the repo and need it running locally — install, env, endpoints, CLI, and the development & testing workflow (test tiers, ruff, CI). |
 | [scenarios.md](scenarios.md) | You want to author a new scenario, or understand the YAML schema. |
 | [aitp-integration.md](aitp-integration.md) | You want to know where the SDK is called, how identity/handshake/TCT/revocation work end-to-end, and the post-v0.1 surfaces (OIDC, renewal, bundles, pinning, multi-hop). |
 | [observability.md](observability.md) | You want events, the SSE stream, narration, Prometheus metrics, the dashboard, or run persistence. |
@@ -48,16 +48,17 @@ sibling wins.
 | The protocol itself (normative) | [AITP RFC index](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/README.md) — handshake (0004), identity (0002), manifest (0003), TCT (0005), delegation (0006), key resolution (0007), revocation (0008), session bundle (0010), multi-hop (0011), renewal (0013) |
 | Consuming a peer-issued TCT; reading order for building a peer | [Integration Guide](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/integration-guide.md) · [Implementer Quickstart](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/implementer-quickstart.md) · [Glossary](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/GLOSSARY.md) |
 | The `aitp` Python SDK API the agents call | [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md) — every call, with RFC sections and feature flags |
-| SDK conformance status | [aitp-rs · conformance-matrix.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/conformance-matrix.md) |
+| SDK conformance status | [aitp-rs · conformance.md § v0.2 conformance matrix](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/conformance.md#v02-conformance-matrix) |
 | The Control Plane HTTP API, events, data model | [aitp-control-plane · docs](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/README.md) — [api.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md) · [events.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/events.md) · [integration contract](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/integration-playground.md) |
 
 ## Conventions
 
-- `aitp` always means the Python SDK shipped from
-  `aitp-rs/bindings/aitp-py`. All AITP protocol logic — keygen, manifests,
-  handshake, TCT verify, delegation — goes through it. This service
-  **never reimplements** protocol logic; if you find yourself wanting to
-  parse a TCT, that's a bug.
+- `aitp` always means the Python SDK built from
+  `aitp-rs/bindings/aitp-py` and published to PyPI under the
+  distribution name `aitp-sdk` (the import name stays `aitp`). All AITP
+  protocol logic — keygen, manifests, handshake, TCT verify, delegation —
+  goes through it. This service **never reimplements** protocol logic;
+  if you find yourself wanting to parse a TCT, that's a bug.
 - `aitp-playground` is the service in this repo. It orchestrates
   scenarios, hosts agents, and exposes a small HTTP API.
 - "Agent" is overloaded:
