@@ -24,7 +24,7 @@ from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
 from .registry.service import RegistryService
 from .runner.engine import ScenarioRunner
-from .runner.store import RunStore, build_run_store
+from .runner.store import build_run_store
 from .trust.orchestrator import TrustOrchestrator
 
 

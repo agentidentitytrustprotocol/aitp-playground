@@ -66,7 +66,7 @@ request/response shape, auth, and filters, follow it into the CP's
 | `CpClient` method | CP endpoint | Used by | Fallback |
 | --- | --- | --- | --- |
 | `discover_by_capability(cap)` | `GET /api/registry/agents?capability=` | `cp_registry` discovery | `[]` → static localhost |
-| `ingest_events(events)` | `POST /api/events` | end of every run (background) | no-op, logged |
+| `ingest_events(events)` | `POST /api/events` | end of every run (background); `cp_delegation_tree` (awaited, mid-run) | no-op, logged |
 | `publish_revocation(jti, reason)` | `POST /api/revocation/entries` | `revoke_tct` with `via_cp` | `False` |
 | `fetch_revocation_list()` | `GET /.well-known/aitp-revocation-list` | (agent side mirrors this) | `[]` |
 | `create_webhook(url, events, secret)` | `POST /api/webhooks` | `cp_subscribe_webhook` | `None` |
@@ -116,7 +116,7 @@ disabled. Full field reference is in [scenarios.md](scenarios.md#workflow-steps)
 | `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries`, then the audience pulls the updated signed list from `/.well-known/aitp-revocation-list`. | `intra-org/revocation-via-cp` |
 | `cp_subscribe_webhook` | `POST /api/webhooks` pointing at this run's `/webhooks/cp/{run_id}` receiver; stores the returned secret on the run record for HMAC verification. | `intra-org/webhook-subscription` |
 | `cp_provision_trust_anchor` | `upsert_pinned_key` + optional `upsert_trust_anchor` (OIDC issuer) for an agent under a namespace, then reads them back. | `intra-org/cp-trust-anchor-provisioning` |
-| `cp_delegation_tree` | Walks a delegator's chain via `GET /api/delegations` (CP's recursive `root_jti` query) to show the chain as the CP observed it. | `intra-org/cp-delegation-tree` |
+| `cp_delegation_tree` | Flushes the run's events to the CP (awaiting the ingest, so the projection is populated mid-run), then walks a delegator's chain via `GET /api/delegations` (CP's recursive `root_jti` query) to show the chain as the CP observed it. | `intra-org/cp-delegation-tree` |
 
 ## Webhooks (reverse fan-out)
 
@@ -169,10 +169,24 @@ to call unconditionally from a dashboard.
 After every run reaches `run.complete`, the runner fires a background task
 that `POST`s the full run event log to the CP's `/api/events`
 (`CpClient.ingest_events`). This is fire-and-forget: a CP outage never
-fails a run, and the task is only tracked so its reference stays alive. The
-CP uses these events to populate the projections above. Which event types
-the CP recognizes vs. merely stores, and which it fans out to webhooks, is
-the CP's
+fails a run, and the task is only tracked so its reference stays alive.
+
+What gets ingested is the **store's** event log for the run, not just the
+orchestrator's own events. That distinction matters: the agent
+subprocesses deliver their canonical events (`handshake.complete`,
+`delegation.issued`/`delegation.redeemed`, `tct.*`) to
+`POST /internal/telemetry`, which lands them in the store — and those are
+exactly the events the CP projects sessions, TCTs, and delegations from.
+(The `delegation.issued` telemetry also carries the signed delegation
+token, so the CP's delegation projection can parse `jti`/`src_jti`.) The
+one mid-run exception is the `cp_delegation_tree` step, which flushes the
+run's events to the CP and awaits the ingest *before* querying the
+delegation projection — otherwise the query would race the post-run batch
+and always see an empty tree. CP projections are idempotent, so the
+post-run batch re-sending those events creates no duplicates.
+
+Which event types the CP recognizes vs. merely stores, and which it fans
+out to webhooks, is the CP's
 [events.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/events.md).
 
 ## What lives where (boundary check)

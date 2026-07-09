@@ -67,7 +67,7 @@ class RunStore:
     def unsubscribe(self, run_id: str, q: asyncio.Queue[dict[str, Any]]) -> None:
         with self._lock:
             subs = self._subscribers.get(run_id, [])
-            self._subscribers[run_id] = [(l, qq) for (l, qq) in subs if qq is not q]
+            self._subscribers[run_id] = [(lp, qq) for (lp, qq) in subs if qq is not q]
 
     def get(self, run_id: str) -> Optional[dict[str, Any]]:
         with self._lock:

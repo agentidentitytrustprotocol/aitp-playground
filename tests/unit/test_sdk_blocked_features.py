@@ -77,7 +77,7 @@ def test_tct_renewal_round_trip() -> None:
     envelope has a different jti but identical subject + grants."""
     holder = aitp.AitpAgent.generate()
     issuer = aitp.AitpAgent.generate()
-    h_m = holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
+    _h_m = holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
     i_m = issuer.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
     sh = holder.new_session()
     si = issuer.new_responder()
@@ -236,7 +236,7 @@ def test_oidc_handshake_p256_initiator() -> None:
     a = aitp.AitpAgent.generate("p256")  # P-256 + OIDC
     b = aitp.AitpAgent.generate()        # Ed25519 + pinned-key
     assert a.aid.startswith("aid:pubkey:p256:")
-    a_m = a.build_manifest(
+    _a_m = a.build_manifest(
         "a", "http://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc",
         oidc_issuer=issuer.issuer_url,
@@ -278,7 +278,7 @@ def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
 
     a = aitp.AitpAgent.generate()  # OIDC
     b = aitp.AitpAgent.generate()  # pinned-key
-    a_m = a.build_manifest(
+    _a_m = a.build_manifest(
         "a", "http://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc",
         oidc_issuer=issuer.issuer_url,

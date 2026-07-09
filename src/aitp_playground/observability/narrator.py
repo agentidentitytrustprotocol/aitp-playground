@@ -74,11 +74,11 @@ def narrate_event(event: Mapping[str, Any]) -> str:
         g = ",".join(grants) if grants else ""
         return f"[delegate] issuing  {initiator} -> {target}  scope=[{g}]"
     if etype == "delegation.issued":
-        return f"[delegate] issued"
+        return "[delegate] issued"
     if etype == "delegation.redeeming":
         return f"[delegate] redeeming  {initiator} -> {target}"
     if etype == "delegation.redeemed":
-        return f"[delegate] redeemed — fresh TCT minted for delegatee"
+        return "[delegate] redeemed — fresh TCT minted for delegatee"
     if etype == "delegation.rejected":
         return f"[delegate] REJECTED — {error}"
 

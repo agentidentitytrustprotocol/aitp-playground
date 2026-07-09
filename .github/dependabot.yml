@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned versions fresh (checkout, setup-uv, buildx, ...).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Python deps are resolved through uv.lock; Dependabot's uv support tracks
+  # pyproject.toml + uv.lock together.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    # aitp-sdk tracks the sibling aitp-rs release cadence; bump it
+    # deliberately, not via bot PRs.
+    ignore:
+      - dependency-name: aitp-sdk

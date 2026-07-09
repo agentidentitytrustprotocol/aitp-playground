@@ -13,7 +13,7 @@ def test_allocate_monotonic() -> None:
 
 def test_release_recycles_port() -> None:
     pa = PortAllocator(start=9100)
-    a, b = pa.allocate(), pa.allocate()  # 9100, 9101
+    a, _b = pa.allocate(), pa.allocate()  # 9100, 9101
     pa.release(a)
     # Recycled port comes back first (LIFO).
     assert pa.allocate() == a
