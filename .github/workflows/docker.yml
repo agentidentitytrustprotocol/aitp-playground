@@ -39,24 +39,24 @@ jobs:
       packages: write
     steps:
       - name: Checkout aitp-playground
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: aitp-playground
 
       - name: Checkout sibling aitp-rs (needed by Dockerfile)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: agentidentitytrustprotocol/aitp-rs
           path: aitp-rs
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         # Only push on main + tags. PRs build to validate the Dockerfile but
         # skip auth + push.
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -64,7 +64,7 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -76,7 +76,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build (and push on main / tags)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           # Context is the workspace root, which now contains both
           # aitp-playground/ and aitp-rs/ as siblings — matching the layout
@@ -110,12 +110,12 @@ jobs:
       contents: read
     steps:
       - name: Checkout aitp-playground
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: aitp-playground
 
       - name: Checkout sibling aitp-rs
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: agentidentitytrustprotocol/aitp-rs
           path: aitp-rs
@@ -125,13 +125,13 @@ jobs:
         # under the path "aitp-cp" (its historical short name). The repo on
         # GitHub is "aitp-control-plane", so we check it out and rename via
         # the `path` input.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: agentidentitytrustprotocol/aitp-control-plane
           path: aitp-cp
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Materialize .env for compose
         # docker-compose.test.yml reads aitp-playground/.env for OPENAI_API_KEY
