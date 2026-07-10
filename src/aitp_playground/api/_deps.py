@@ -28,3 +28,7 @@ def get_supervisor(request: Request) -> AgentSupervisor:
 
 def get_cp_client(request: Request) -> CpClient:
     return request.app.state.cp
+
+
+def get_hosted_manager(request: Request):
+    return request.app.state.hosted

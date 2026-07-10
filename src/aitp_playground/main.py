@@ -10,6 +10,7 @@ from .api import agents as agents_api
 from .api import cp as cp_api
 from .api import dashboard as dashboard_api
 from .api import health as health_api
+from .api import hosted as hosted_api
 from .api import metrics as metrics_api
 from .api import registry as registry_api
 from .api import runs as runs_api
@@ -20,6 +21,7 @@ from .cp_client.client import CpClient
 from .errors import install_handlers
 from .hosting.adapters.registry import build_default_adapter_registry
 from .hosting.bootstrap import BootstrapBuilder
+from .hosting.hosted import HostedAgentManager
 from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
 from .registry.service import RegistryService
@@ -47,6 +49,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     cp = CpClient(settings)
     trust = TrustOrchestrator(cp, settings)
     run_store = build_run_store(settings.run_history_db or None)
+    hosted = HostedAgentManager(
+        registry=registry,
+        bootstrap_builder=bootstrap_builder,
+        adapters=adapters,
+        supervisor=supervisor,
+        settings=settings,
+    )
     runner = ScenarioRunner(
         registry=registry,
         supervisor=supervisor,
@@ -65,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Best-effort cleanup of any agent processes still alive
         for run_id in list(run_store.list_ids()):
             supervisor.kill_run(run_id)
+        hosted.stop_all()
 
     app = FastAPI(title="aitp-playground", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -73,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.run_store = run_store
     app.state.supervisor = supervisor
     app.state.cp = cp
+    app.state.hosted = hosted
 
     install_handlers(app)
 
@@ -80,6 +91,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(registry_api.router)
     app.include_router(runs_api.router)
     app.include_router(agents_api.router)
+    app.include_router(hosted_api.router)
     app.include_router(telemetry_api.router)
     app.include_router(metrics_api.router)
     app.include_router(webhooks_api.router)

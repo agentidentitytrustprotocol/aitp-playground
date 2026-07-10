@@ -36,6 +36,7 @@ server = AitpServer(
     port=PORT,
     bootstrap=bootstrap,
     did_web_host=bootstrap["aitp"].get("did_web_host"),
+    did_web_scheme=bootstrap["aitp"].get("did_web_scheme", "http"),
     revoked_jtis=_revoked_jtis,
 )
 app.include_router(server.router)

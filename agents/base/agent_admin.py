@@ -150,6 +150,12 @@ def build_admin_router(
         peer_port: int = int(body["peer_port"])
         capability: str = body["capability"]
         payload = body.get("payload")
+        # Where the peer's capability endpoints live. In-process scenario runs
+        # leave this unset and the peer is reachable at localhost:{peer_port}.
+        # Cross-origin (federated) callers pass the peer's public base URL
+        # (e.g. https://org-b.aitp.test) so the call actually crosses the
+        # domain boundary instead of dialing our own loopback.
+        peer_base_url: str = (body.get("peer_base_url") or f"http://localhost:{peer_port}").rstrip("/")
 
         tct_json = held_tcts.get(peer_port)
         if not tct_json:
@@ -165,7 +171,7 @@ def build_admin_router(
 
         async with httpx.AsyncClient(timeout=120.0) as client:
             r = await client.post(
-                f"http://localhost:{peer_port}/capabilities/{capability}",
+                f"{peer_base_url}/capabilities/{capability}",
                 content=content,
                 headers={
                     "Content-Type": "application/json",
@@ -682,8 +688,9 @@ def build_admin_router(
 
 
 def _port_from_url(url: str) -> int:
-    # http://host:PORT/path
+    # scheme://host[:PORT]/path — used as a stable per-peer key for held TCTs.
+    scheme = url.split("://", 1)[0] if "://" in url else "http"
     host_part = url.split("://", 1)[-1].split("/", 1)[0]
     if ":" in host_part:
         return int(host_part.split(":", 1)[1])
-    return 80
+    return 443 if scheme == "https" else 80

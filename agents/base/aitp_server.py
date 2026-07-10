@@ -42,12 +42,14 @@ class AitpServer:
         bootstrap: dict[str, Any],
         did_web_host: Optional[str] = None,
         revoked_jtis: Optional[set[str]] = None,
+        did_web_scheme: str = "http",
     ) -> None:
         self.agent = agent
         self.manifest_json = manifest_json
         self.port = port
         self.bootstrap = bootstrap
         self.did_web_host = did_web_host
+        self.did_web_scheme = did_web_scheme
         # The set is shared with build_admin_router so /admin/revoke-tct can
         # mutate it and verify_capability_tct will see the change.
         self.revoked_jtis: set[str] = revoked_jtis if revoked_jtis is not None else set()
@@ -139,13 +141,14 @@ class AitpServer:
             @router.get("/.well-known/did.json")
             def get_did_document() -> Response:
                 host = self.did_web_host or ""
+                scheme = self.did_web_scheme or "http"
                 doc = json.dumps({
                     "@context": ["https://www.w3.org/ns/did/v1"],
                     "id": f"did:web:{host}",
                     "service": [{
                         "id": f"did:web:{host}#aitp",
                         "type": "AitpManifest",
-                        "serviceEndpoint": f"http://{host}",
+                        "serviceEndpoint": f"{scheme}://{host}",
                     }],
                 })
                 return Response(doc, media_type="application/did+json")

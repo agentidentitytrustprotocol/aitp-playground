@@ -15,6 +15,20 @@ class Settings(BaseSettings):
     agent_base_port: int = 8100
     agent_python: str = "python3"
     playground_base_url: str = "http://localhost:8000"
+    # Public origin this service advertises for agents it hosts (federated /
+    # cross-domain demos). When set, agents hosted via POST /hosted-agents
+    # advertise their handshake_endpoint + did:web serviceEndpoint at
+    # ``{public_scheme}://{public_host}`` instead of ``http://localhost:{port}``,
+    # so a peer on another service resolves and dials a real cross-origin URL.
+    # Empty (the default) means "no public origin" — behaves exactly as before.
+    public_host: str = ""
+    public_scheme: str = "http"
+    # Comma-separated host (or ".suffix") allowlist for which did:web hosts may
+    # be resolved over plain http instead of https. Test-only escape hatch for
+    # the Level 1 federated stack (e.g. ".aitp.test"); production leaves this
+    # empty so did:web always resolves over https. Read directly by
+    # trust/resolver.py from the AITP_DIDWEB_INSECURE_HOSTS env var too.
+    didweb_insecure_hosts: str = ""
     cp_base_url: str = ""
     cp_api_key: str = ""
     cp_timeout_ms: int = 5000

@@ -1,0 +1,13 @@
+# TLS terminator for org-A (symmetric with org-B). org-A is the initiator here
+# so nothing dials it cross-domain, but a real https origin keeps the topology
+# honest and lets the roles swap in future scenarios.
+{
+	auto_https off
+}
+
+https://org-a.aitp.test {
+	tls /certs/org-a.aitp.test.crt /certs/org-a.aitp.test.key
+	@agent path /.well-known/* /aitp/* /capabilities/*
+	reverse_proxy @agent pg-a:9100
+	reverse_proxy pg-a:8000
+}
