@@ -33,6 +33,34 @@ def test_list_runs_includes_recently_created() -> None:
     assert any(r["run_id"] == posted["run_id"] for r in listing["runs"])
 
 
+def test_run_label_is_echoed_on_create_list_and_detail() -> None:
+    c = _client()
+    posted = c.post("/runs", json={
+        "scenario_ref": "intra-org/research-and-write@1.0.0",
+        "inputs": {"topic": "ai"},
+        "run_label": "nightly-smoke",
+    })
+    assert posted.status_code == 202, posted.text
+    created = posted.json()
+    assert created["run_label"] == "nightly-smoke"
+    rid = created["run_id"]
+
+    summary = next(r for r in c.get("/runs").json()["runs"] if r["run_id"] == rid)
+    assert summary["run_label"] == "nightly-smoke"
+
+    detail = c.get(f"/runs/{rid}").json()
+    assert detail["run_label"] == "nightly-smoke"
+
+
+def test_run_without_label_echoes_null() -> None:
+    c = _client()
+    rid = c.post("/runs", json={
+        "scenario_ref": "intra-org/research-and-write@1.0.0",
+        "inputs": {"topic": "ai"},
+    }).json()["run_id"]
+    assert c.get(f"/runs/{rid}").json()["run_label"] is None
+
+
 def test_get_run_status_returns_state() -> None:
     c = _client()
     posted = c.post("/runs", json={
