@@ -1,0 +1,21 @@
+name: bump aitp
+# Event-driven adoption of a new aitp SDK release (PyPI). Dispatched by aitp-rs's
+# aitp-py-release on publish; also runnable manually. The PyPI distribution name
+# is aitp-sdk (import name aitp); bump-consume runs `uv lock --upgrade-package`.
+on:
+  repository_dispatch:
+    types: [aitp-released]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact aitp version (blank = latest / event payload)'
+        required: false
+        default: ''
+jobs:
+  bump:
+    uses: agentidentitytrustprotocol/aitp-ci/.github/workflows/bump-consume.yml@v1
+    with:
+      ecosystem: uv
+      package: aitp-sdk
+      version: ${{ github.event.inputs.version }}
+    secrets: inherit

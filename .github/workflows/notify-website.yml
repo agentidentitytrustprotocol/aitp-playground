@@ -12,9 +12,18 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger website sync
-        uses: peter-evans/repository-dispatch@v4
+      - name: Mint GitHub App token (scoped to aitp-website)
+        id: app
+        uses: actions/create-github-app-token@v2
         with:
-          token: ${{ secrets.AITP_WEBSITE_SYNC_TOKEN }}
+          app-id: ${{ secrets.AITP_BOT_APP_ID }}
+          private-key: ${{ secrets.AITP_BOT_PRIVATE_KEY }}
+          owner: agentidentitytrustprotocol
+          repositories: aitp-website
+
+      - name: Trigger website sync
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app.outputs.token }}
           repository: agentidentitytrustprotocol/aitp-website
           event-type: docs-updated

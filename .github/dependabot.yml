@@ -15,7 +15,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # aitp-sdk tracks the sibling aitp-rs release cadence; bump it
-    # deliberately, not via bot PRs.
-    ignore:
-      - dependency-name: aitp-sdk
+    groups:
+      # aitp-sdk is normally adopted the moment aitp-rs publishes, via the
+      # event-driven bump-aitp workflow. This group is the backstop: if a
+      # dispatch is ever missed, Dependabot opens the same bump PR weekly.
+      aitp-sdk:
+        patterns:
+          - aitp-sdk
