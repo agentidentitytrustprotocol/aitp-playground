@@ -21,7 +21,7 @@ dependencies = [
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
   "aitp-sdk>=0.4.0",
-  "fastapi>=0.115",
+  "fastapi>=0.139.0",
   "uvicorn[standard]>=0.32",
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
@@ -39,11 +39,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-researcher = ["crewai>=0.70", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
+researcher = ["crewai>=1.15.2", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
 writer = ["langchain>=0.3", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
 analyzer = ["langgraph>=0.2", "langchain-openai>=0.2", "langchain-anthropic>=0.3", "openai>=1.50"]
 all-agents = [
-  "crewai>=0.70",
+  "crewai>=1.15.2",
   "langgraph>=0.2",
   "langchain>=0.3",
   "langchain-openai>=0.2",
@@ -51,7 +51,7 @@ all-agents = [
   "openai>=1.50",
 ]
 dev = [
-  "pytest>=8.3",
+  "pytest>=9.1.1",
   "pytest-asyncio>=0.24",
   "httpx>=0.27",
   "coverage[toml]>=7.6",
@@ -71,7 +71,7 @@ pythonpath = ["src", "agents/base"]
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3",
+  "pytest>=9.1.1",
   "pytest-asyncio>=0.24",
   "coverage[toml]>=7.6",
   "ruff>=0.8",
