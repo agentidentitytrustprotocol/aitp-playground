@@ -35,7 +35,7 @@ dependencies = [
   # installs `pip install -e .` with no extras, and cryptography would
   # otherwise only arrive transitively via the optional *-agents extras,
   # so agents crash with ModuleNotFoundError when those aren't installed.
-  "cryptography>=42",
+  "cryptography>=49.0.0",
 ]
 
 [project.optional-dependencies]
