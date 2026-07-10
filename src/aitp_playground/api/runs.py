@@ -38,12 +38,14 @@ class RunCreated(BaseModel):
     run_id: str
     status: str
     scenario_ref: str
+    run_label: Optional[str] = None
 
 
 class RunSummary(BaseModel):
     run_id: str
     status: Optional[str] = None
     scenario_ref: Optional[str] = None
+    run_label: Optional[str] = None
     created_at: Optional[float] = None
     event_count: int = 0
 
@@ -63,6 +65,7 @@ class RunResponse(BaseModel):
     run_id: str
     status: str
     scenario_ref: str
+    run_label: Optional[str] = None
     outputs: dict[str, Any] = {}
     events: list[dict[str, Any]] = []
     error: Optional[str] = None
@@ -83,12 +86,18 @@ async def create_run(
         "run_id": run_id,
         "status": "pending",
         "scenario_ref": body.scenario_ref,
+        "run_label": body.run_label,
         "outputs": {},
         "events": [],
         "error": None,
     })
     background_tasks.add_task(_run_in_background, runner, run_id, body)
-    return RunCreated(run_id=run_id, status="pending", scenario_ref=body.scenario_ref)
+    return RunCreated(
+        run_id=run_id,
+        status="pending",
+        scenario_ref=body.scenario_ref,
+        run_label=body.run_label,
+    )
 
 
 async def _run_in_background(runner: ScenarioRunner, run_id: str, body: RunRequest) -> None:
@@ -113,6 +122,7 @@ def list_runs(store: RunStore = Depends(get_run_store)) -> RunList:
             run_id=rid,
             status=r.get("status"),
             scenario_ref=r.get("scenario_ref"),
+            run_label=r.get("run_label"),
             created_at=r.get("created_at"),
             event_count=len(r.get("events", [])),
         ))
@@ -128,6 +138,7 @@ def get_run(run_id: str, store: RunStore = Depends(get_run_store)) -> RunRespons
         run_id=record["run_id"],
         status=record.get("status") or "unknown",
         scenario_ref=record.get("scenario_ref") or "",
+        run_label=record.get("run_label"),
         outputs=record.get("outputs") or {},
         events=list(record.get("events") or []),
         error=record.get("error"),

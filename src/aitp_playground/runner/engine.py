@@ -71,7 +71,7 @@ class ScenarioRunner:
         )
         self.store.upsert(run_id, {
             "run_id": run_id, "status": "running", "scenario_ref": scenario_ref,
-            "outputs": {}, "events": [], "error": None,
+            "run_label": run_label, "outputs": {}, "events": [], "error": None,
         })
 
         # 1. Load scenario (optionally merged with a named template)
