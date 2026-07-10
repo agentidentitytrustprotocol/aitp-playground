@@ -39,14 +39,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-researcher = ["crewai>=1.15.2", "langchain-openai>=1.3.4", "langchain-anthropic>=1.4.8", "openai>=2.45.0"]
-writer = ["langchain>=1.3.12", "langchain-openai>=1.3.4", "langchain-anthropic>=1.4.8", "openai>=2.45.0"]
-analyzer = ["langgraph>=0.2", "langchain-openai>=1.3.4", "langchain-anthropic>=1.4.8", "openai>=2.45.0"]
+researcher = ["crewai>=1.15.2", "langchain-openai>=1.3.5", "langchain-anthropic>=1.4.8", "openai>=2.45.0"]
+writer = ["langchain>=1.3.12", "langchain-openai>=1.3.5", "langchain-anthropic>=1.4.8", "openai>=2.45.0"]
+analyzer = ["langgraph>=0.2", "langchain-openai>=1.3.5", "langchain-anthropic>=1.4.8", "openai>=2.45.0"]
 all-agents = [
   "crewai>=1.15.2",
   "langgraph>=0.2",
   "langchain>=1.3.12",
-  "langchain-openai>=1.3.4",
+  "langchain-openai>=1.3.5",
   "langchain-anthropic>=1.4.8",
   "openai>=2.45.0",
 ]
