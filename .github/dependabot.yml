@@ -22,3 +22,11 @@ updates:
       aitp-sdk:
         patterns:
           - aitp-sdk
+      # Everything else: one PR for minor+patch, majors held separately.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+      major-updates:
+        update-types:
+          - major
