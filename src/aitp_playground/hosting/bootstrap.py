@@ -25,9 +25,16 @@ class BootstrapBuilder:
         peers: dict[str, dict[str, Any]],
         inputs: dict[str, Any],
         oidc: Any = None,
+        public_origin: str | None = None,
     ) -> dict[str, Any]:
         seed_hex = derive_seed_hex(run_id, agent_spec.id, org=agent_spec.org)
-        handshake_ep = f"http://localhost:{port}/aitp/handshake/hello"
+        # A federated/hosted agent advertises its *public* origin so a peer on
+        # another service resolves and dials a real cross-origin URL. Without a
+        # public origin the agent stays reachable only at localhost — the
+        # default for in-process scenario runs.
+        base_origin = public_origin.rstrip("/") if public_origin else f"http://localhost:{port}"
+        handshake_ep = f"{base_origin}/aitp/handshake/hello"
+        did_web_scheme = base_origin.split("://", 1)[0]
 
         cp_block: dict[str, Any] = {}
         if self.settings.cp_base_url:
@@ -52,6 +59,7 @@ class BootstrapBuilder:
                 "handshake_endpoint": handshake_ep,
                 "offered_caps": list(resolved_manifest.spec.aitp.offered_caps),
                 "did_web_host": agent_spec.did_web_host,
+                "did_web_scheme": did_web_scheme,
                 "ttl_secs": resolved_manifest.spec.aitp.ttl_secs,
                 "signing_suite": signing_suite,
                 "identity_type": resolved_manifest.spec.aitp.identity_type,

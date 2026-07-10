@@ -1,0 +1,76 @@
+# Level 2 — two playground services on distinct domains over real HTTPS.
+#
+# Same flow as Level 1, but each domain is fronted by a Caddy TLS terminator
+# using a local CA (see gen-ca.sh). This exercises the *https* branch of
+# did:web resolution and real certificate validation: org-A fetches
+# https://org-b.aitp.test/.well-known/did.json, validates the chain against the
+# mounted CA bundle, and handshakes over TLS.
+#
+#   ./federated/gen-ca.sh
+#   docker compose -f federated/docker-compose.federated-tls.yml up --build -d
+#   AITP_FEDERATED_E2E=1 uv run pytest tests/e2e_federated/ -v
+#   docker compose -f federated/docker-compose.federated-tls.yml down
+#
+# The control API is still plain http on published host ports (18000 / 18001);
+# only the cross-domain agent traffic is TLS. Standard 443 means clean DIDs
+# (did:web:org-b.aitp.test, no port).
+
+name: aitp-federated-tls
+
+x-playground: &playground
+  build:
+    context: ../..
+    dockerfile: aitp-playground/Dockerfile
+  image: aitp-playground:federated
+  environment: &playground-env
+    PUBLIC_SCHEME: "https"
+    # Real https end to end — trust the local CA (system bundle + test root).
+    SSL_CERT_FILE: "/certs/ca-bundle.pem"
+    REQUESTS_CA_BUNDLE: "/certs/ca-bundle.pem"
+    AGENT_BASE_PORT: "8100"
+    LOG_LEVEL: "info"
+  volumes:
+    - ./certs:/certs:ro
+
+services:
+  pg-a:
+    <<: *playground
+    environment:
+      <<: *playground-env
+      PUBLIC_HOST: "org-a.aitp.test"
+    networks: [aitpnet]
+    ports:
+      - "18000:8000"
+
+  pg-b:
+    <<: *playground
+    environment:
+      <<: *playground-env
+      PUBLIC_HOST: "org-b.aitp.test"
+    networks: [aitpnet]
+    ports:
+      - "18001:8000"
+
+  caddy-a:
+    image: caddy:2-alpine
+    depends_on: [pg-a]
+    volumes:
+      - ./Caddyfile.org-a:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+    networks:
+      aitpnet:
+        aliases: [org-a.aitp.test]
+
+  caddy-b:
+    image: caddy:2-alpine
+    depends_on: [pg-b]
+    volumes:
+      - ./Caddyfile.org-b:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+    networks:
+      aitpnet:
+        aliases: [org-b.aitp.test]
+
+networks:
+  aitpnet:
+    driver: bridge

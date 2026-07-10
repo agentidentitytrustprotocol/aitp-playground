@@ -1,0 +1,66 @@
+# Level 1 — two playground services on distinct domains, plain HTTP.
+#
+# org-A hosts the researcher; org-B hosts the analyzer. org-A resolves the
+# analyzer via did:web across a real container/origin boundary (docker DNS
+# aliases org-a.aitp.test / org-b.aitp.test) and performs a genuine AITP
+# handshake + capability call. No localhost shortcut: the did:web host is a
+# real hostname and the fail-closed guard rejects any resolution that lands
+# back on loopback.
+#
+#   docker compose -f federated/docker-compose.federated.yml up --build -d
+#   AITP_FEDERATED_E2E=1 uv run pytest tests/e2e_federated/ -v
+#   docker compose -f federated/docker-compose.federated.yml down
+#
+# The control API of each service is published to the host (18000 / 18001) so
+# the test harness can drive it. Inter-service (agent↔agent) traffic never
+# leaves the docker network and is addressed by hostname alias, not host port.
+
+name: aitp-federated
+
+x-playground: &playground
+  build:
+    # Grandparent (the agentIdenitytrustprotocol/ dir) so the sibling aitp-rs/
+    # SDK source is in the build context. This compose file lives one level
+    # deeper than the repo root, hence ../.. rather than ..
+    context: ../..
+    dockerfile: aitp-playground/Dockerfile
+  image: aitp-playground:federated
+  # Agents degrade to deterministic stubs without the LLM framework extras,
+  # which is all this identity/trust demo needs — so the lean image is fine.
+  environment: &playground-env
+    PUBLIC_SCHEME: "http"
+    # did:web over http is allowed only for these test hostnames; everything
+    # else stays https-only (production behavior).
+    AITP_DIDWEB_INSECURE_HOSTS: ".aitp.test"
+    AGENT_BASE_PORT: "8100"
+    LOG_LEVEL: "info"
+
+services:
+  org-a:
+    <<: *playground
+    environment:
+      <<: *playground-env
+      # Public origin org-A advertises for agents it hosts. The analyzer never
+      # dials org-A here (the researcher is the initiator), but keeping a real
+      # origin makes the topology symmetric and debuggable.
+      PUBLIC_HOST: "org-a.aitp.test:9100"
+    networks:
+      aitpnet:
+        aliases: [org-a.aitp.test]
+    ports:
+      - "18000:8000"
+
+  org-b:
+    <<: *playground
+    environment:
+      <<: *playground-env
+      PUBLIC_HOST: "org-b.aitp.test:9100"
+    networks:
+      aitpnet:
+        aliases: [org-b.aitp.test]
+    ports:
+      - "18001:8000"
+
+networks:
+  aitpnet:
+    driver: bridge
