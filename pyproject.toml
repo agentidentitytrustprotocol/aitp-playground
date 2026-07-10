@@ -21,7 +21,7 @@ dependencies = [
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
   "aitp-sdk>=0.4.0",
-  "fastapi>=0.115",
+  "fastapi>=0.139.0",
   "uvicorn[standard]>=0.32",
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
