@@ -4,7 +4,7 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       actions:
         patterns: ["*"]
@@ -14,7 +14,7 @@ updates:
   - package-ecosystem: uv
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       # aitp-sdk is normally adopted the moment aitp-rs publishes, via the
       # event-driven bump-aitp workflow. This group is the backstop: if a
