@@ -18,7 +18,7 @@ Plan's own recommended order, not numeric order. Phase 5 lands in `aitp-rs`, not
 | 3 | e2e stack + published image use the pinned wheel | playground | Sonnet | **DONE** |
 | 5 | Bind `verify_revocation_list` in Python + Node SDKs | **aitp-rs** | Fable | **DONE** — [aitp-rs#90](https://github.com/agentidentitytrustprotocol/aitp-rs/pull/90) |
 | 4 | Run e2e pre-merge on SDK-bump PRs | playground | Sonnet | **DONE** (criterion 4 deferred — PENDING P7) |
-| 6 | Verify the snapshot in the production revocation path | playground | Fable | **BLOCKED** — needs aitp-sdk 0.6.0 (PENDING P8) |
+| 6 | Verify the snapshot in the production revocation path | playground | Fable | **DONE** — both axes |
 | 7 | Correct the docs | playground | Opus | **DONE** |
 
 Phase 6 is blocked on Phase 5 (cross-repo). Phase 7's revocation half tracks Phase 6;
@@ -222,3 +222,34 @@ Three PRs, all green:
 `cargo fmt --all` was clean locally — the bindings are **separate workspaces** the root
 Cargo.toml does not cover, which `ci.yml`'s own comment warns about. I ran the wrong gate.
 Fixed in `e86835b`.
+
+### Phase 6 — Verify the snapshot in the production path — 2026-08-26 — PASS
+Shipped in three commits: Axis A (`43bfffe`), Axis B (`94a4826`), floor bump.
+
+- **Axis A** — the deny-set restructure (the prerequisite the plan's first draft assumed
+  away), verify-or-discard with distinct causes, the `CP_AID` pin threaded to agent
+  subprocesses, and the envelope-tolerant parse removed.
+- **Axis B** — `fail_closed` by default, a 300s staleness budget, a 60s poll, and posture
+  (`unchecked | current | degraded`) evaluated as a pure function.
+- **Verifier:** Fable on both axes. Axis B round 1 returned 7 gaps, 3 blocking.
+
+**Three design errors the review and the tests caught, not the plan:**
+
+1. Treating "CP configured but no `CP_AID`" as *degraded* meant `fail_closed` rejected every
+   call on any deployment that had not set a brand-new variable — broken-by-default on the
+   upgrade that introduces it. A federated e2e test caught it.
+2. My fix then folded the SDK capability probe into the same check, silently downgrading a
+   deployment that HAD pinned its AID but ran an old wheel. `PENDING.md` P8 forbids exactly
+   that by name. A pinned deployment on an old SDK is now degraded, loudly.
+3. My cold-start fix (refresh immediately rather than after a full interval) connected to a
+   socket uvicorn had not bound yet, breaking the federated handshake tests. Now a short
+   grace delay: no 60s window of 403s, no self-inflicted startup error.
+
+Also: criterion 7's test was **vacuous** — it asserted a jti it never added was absent, and
+would have passed even if `soft_fail` did rescue forgeries. It now presents a real
+attacker-signed snapshot. An unrecognized `fail_mode` now fails closed. `CP_AID` is pinned in
+the compose stack, without which the shipped demo ran unchecked.
+
+- **Final:** **490 passed, 0 skipped** against the published `aitp-sdk` 0.6.0 — every test
+  that had been skipping is now real coverage. 4 integration, ruff clean, `uv sync --locked`
+  clean.

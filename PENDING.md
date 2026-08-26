@@ -143,8 +143,8 @@ touches `uv.lock` and one that does not, and confirm the first blocks on e2e whi
 merges normally. Both halves need demonstrating — the second is the one that breaks if the
 skip semantics are wrong.
 
-## P8 — Phase 6 (verify the snapshot in the production path) is blocked on an aitp-sdk **release**
-**From:** Phase 6 · **Blocks:** the plan's headline security deliverable · **Cost:** the phase itself, once unblocked
+## ~~P8 — Phase 6 is blocked on an aitp-sdk release~~ — **CLOSED 2026-08-26**
+**From:** Phase 6 · **Resolved by:** `aitp-sdk` 0.6.0 published; floor raised; both axes shipped
 
 Phase 6 needs `aitp.verify_revocation_list`. That surface was implemented in this run —
 `aitp-rs` PR #90, branch `feat/bind-verify-revocation-list` — but:
@@ -160,12 +160,17 @@ runtime the first time an agent refreshed revocations), or raising `pyproject.to
 a version that does not exist. Neither is shippable, and a capability-probe fallback is
 exactly the unchecked posture the phase exists to remove.
 
-**Sequence to unblock:**
-1. Merge `aitp-rs#90`.
-2. Release `aitp-sdk` 0.6.0 to PyPI (the existing `aitp-py-release.yml` cascade).
-3. In this repo: raise the floor to `>=0.6.0` and let `uv lock` regenerate.
-4. Then run Phase 6 — its plan section is fully written, including the prerequisite the
-   original draft missed (see below).
+**All four steps done.** `aitp-rs#90` merged; `v0.6.0` released (release-plz's computed
+v0.5.1 was overridden — the issuer-mismatch reclassification is a behavioural change and in
+0.x the minor is the breaking position); `aitp-sdk` 0.6.0 is on PyPI; the floor here is
+`>=0.6.0` and the suite runs **490 passed, 0 skipped** against the pinned wheel.
+
+Two operational notes worth keeping. The binding cascade was wedged by a GitHub Actions
+outage and had to be re-dispatched by hand (`gh workflow run release-bindings.yml -f
+version=0.6.0`) — the original push-triggered run stayed `queued` forever and could not even
+be cancelled. And `uv lock` initially insisted only `<=0.5.0` existed, for the Python 3.14
+resolution split only; that was a stale index cache, cleared with
+`uv lock --refresh-package aitp-sdk`.
 
 **Do not skip the prerequisite.** The plan's `[REV]` note is load-bearing: the deny-set is
 today a **monotonic union** (`agent_admin.py` `revoked_jtis.add(...)`) shared with local
