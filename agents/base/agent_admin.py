@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
+from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
@@ -678,153 +679,32 @@ def build_admin_router(
         }
 
     @router.post("/refresh-revocations")
-    async def refresh_revocations(request: Request) -> dict[str, Any]:
-        """Pull the Control Plane's revocation list and merge every
-        jti into this agent's local deny-set.
+    async def refresh_revocations_route(request: Request) -> dict[str, Any]:
+        """Fetch, verify, and apply the Control Plane's revocation snapshot.
 
-        This is how a TCT holder learns that its token was revoked: the
-        original issuer marks the jti on the CP (via /api/revocation/entries),
-        and any peer that consults the CP list will then short-circuit any
-        capability call that presents that jti — without ever asking the
-        issuer.
+        A thin wrapper over `revocation_refresh.refresh_revocations`, which is
+        the one ingest path — shared with the agent's start-up refresh and its
+        background poll so no second copy of fetch/verify/apply can drift.
 
         Body (all optional):
-          - cp_base_url: explicit override. When omitted, the agent uses
-            ``bootstrap['cp']['base_url']`` (set by the playground supervisor
-            from CP_BASE_URL at spawn time).
-          - cp_api_key: bearer token for gated CP routes. The well-known
-            revocation list is public so this is rarely needed, but we
-            accept it for forward-compat.
+          - cp_base_url / cp_api_key: overrides; default to
+            ``bootstrap['cp']``, set by the supervisor at spawn time.
+          - quiet: suppress per-attempt telemetry (used by the poll loop).
 
-        Returns the count of jtis now in the local deny set, plus how many
-        new entries this refresh added.
+        The pinned issuer AID is deliberately NOT overridable — see the module
+        docstring for why a caller-chosen issuer would make verification a
+        formality.
         """
         body = await request.json() if await request.body() else {}
-        # A poll-driven refresh suppresses its per-attempt events. At a 60s
-        # cadence, emitting on every attempt is one event per minute per agent
-        # for as long as a control plane is down — which buries the single
-        # verify_failed that actually explains something. The poll loop emits
-        # its own change-triggered `revocation.poll` instead; an operator-driven
-        # refresh (the scenario step, a manual call) still reports every time,
-        # because there a human is waiting for the answer.
-        quiet = bool(body.get("quiet"))
-        cp_base_url = body.get("cp_base_url") or (
-            bootstrap.get("cp", {}).get("base_url") if isinstance(bootstrap.get("cp"), dict) else None
-        )
-        cp_api_key = body.get("cp_api_key") or (
-            bootstrap.get("cp", {}).get("api_key") if isinstance(bootstrap.get("cp"), dict) else None
-        )
-        if not cp_base_url:
-            return {
-                "revoked_count": len(revocation),
-                "added": 0,
-                "skipped": "no cp configured",
-            }
-
-        # The pinned issuer. Without it we cannot verify — any key can sign a
-        # well-formed snapshot that validates against its own declared issuer,
-        # so an unpinned check would confirm only that *somebody* signed it.
-        #
-        # Deliberately NOT accepted from the request body: the URL may be
-        # overridden per-call, but if the pin were overridable too, an
-        # attacker-chosen endpoint could simply supply its own AID and the
-        # verification would become a formality.
-        expected_issuer = (
-            bootstrap.get("cp", {}).get("aid")
-            if isinstance(bootstrap.get("cp"), dict)
-            else None
+        return await refresh_revocations(
+            revocation=revocation,
+            bootstrap=bootstrap,
+            emit=emit_event,
+            cp_base_url=body.get("cp_base_url"),
+            cp_api_key=body.get("cp_api_key"),
+            quiet=bool(body.get("quiet")),
         )
 
-        url = f"{cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
-        headers = {"Authorization": f"Bearer {cp_api_key}"} if cp_api_key else {}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                envelope_json = resp.text
-        except Exception as exc:  # noqa: BLE001
-            # Transport failure only. This must never alias a verification
-            # failure: collapsing them is how a signing-convention break gets
-            # triaged as a network blip.
-            if not quiet:
-                await emit_event(
-                    "revocation.refresh_failed", bootstrap, error=str(exc)
-                )
-            return {"revoked_count": len(revocation), "added": 0, "error": str(exc)}
-
-        async def _discard(cause: str, detail: str) -> dict[str, Any]:
-            """RFC-AITP-0008 §1.5: an unverifiable snapshot is DISCARDED.
-
-            Not applied, not partially applied, not merged. The previously
-            verified snapshot stays in force and the deny-set is untouched.
-            This is a MUST, so it has no mode knob — `revocation_fail_mode`
-            governs the *absence* of a fresh snapshot, never its authenticity.
-            """
-            if not quiet:
-                await emit_event(
-                    "revocation.verify_failed", bootstrap, cause=cause, detail=detail
-                )
-            return {
-                "revoked_count": len(revocation),
-                "added": 0,
-                "discarded": cause,
-                "detail": detail,
-            }
-
-        if not expected_issuer:
-            return await _discard(
-                "no_expected_issuer",
-                "no CP AID pinned (set CP_AID) — refusing to apply an "
-                "unverifiable revocation snapshot",
-            )
-        if not hasattr(aitp, "verify_revocation_list"):
-            return await _discard(
-                "sdk_cannot_verify",
-                "installed aitp-sdk has no verify_revocation_list (needs "
-                ">=0.6.0) — refusing to apply an unverified snapshot",
-            )
-
-        try:
-            aitp.verify_revocation_list(envelope_json, expected_issuer)
-        except Exception as exc:  # noqa: BLE001
-            cause = getattr(exc, "code", None) or "signature_invalid"
-            return await _discard(cause, str(exc))
-
-        # Verified. Parse the exact RFC-AITP-0008 §1.5 envelope — no tolerant
-        # fallback. Once the signature is checked, accepting a second shape is
-        # a downgrade path: a body the parser accepts but the verifier did not
-        # sign over.
-        body_obj = json.loads(envelope_json)["revocation_list"]
-        jtis = [
-            e["jti"]
-            for e in body_obj.get("entries", [])
-            if isinstance(e, dict) and isinstance(e.get("jti"), str)
-        ]
-        previous = revocation.snapshot_entry_count
-        # Wholesale replacement, not a merge — a snapshot is the issuer's
-        # complete current deny-set, so a jti it no longer lists is no longer
-        # revoked by them.
-        revocation.apply_snapshot(
-            jtis,
-            published_at=int(body_obj["published_at"]),
-            expires_at=int(body_obj["expires_at"]),
-        )
-
-        if not quiet:
-            await emit_event(
-                "revocation.list_fetched",
-                bootstrap,
-                jti_count=len(jtis),
-                added=max(0, len(jtis) - previous),
-                verified=True,
-                issuer=expected_issuer,
-            )
-        return {
-            "revoked_count": len(revocation),
-            "snapshot_count": len(jtis),
-            "added": max(0, len(jtis) - previous),
-            "verified": True,
-        }
 
     @router.post("/self-execute")
     async def self_execute(request: Request) -> Any:

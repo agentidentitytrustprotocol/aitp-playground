@@ -19,6 +19,7 @@ import aitp
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from bootstrap import get_manifest_json
+from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
 from oidc import OidcContext, peer_aid_from_hello_envelope
 from tct_claims import decode_claims, tct_event
@@ -43,6 +44,15 @@ def ready_lifespan(*, aid: str, port: int, server: "Optional[AitpServer]" = None
 
     @asynccontextmanager
     async def _lifespan(_app):
+        # Fetch a snapshot BEFORE signalling ready. Under the default
+        # fail_closed an agent with no verified snapshot rejects every
+        # capability call, and a scenario's first call lands milliseconds
+        # after the supervisor sees AITP_AGENT_READY — so no poll cadence,
+        # however tight, closes that window. The refresh has to be complete
+        # before we claim to be ready, which is also why it cannot go over
+        # HTTP to ourselves: nothing is listening yet.
+        if server is not None:
+            await server.refresh_revocations_now(quiet=False)
         sys.stdout.write(f"AITP_AGENT_READY aid={aid} port={port}\n")
         sys.stdout.flush()
         task = server.start_revocation_poll() if server is not None else None
@@ -199,34 +209,15 @@ class AitpServer:
         ticks = 0
         heartbeat_every = max(1, 600 // max(1, self.revocation_poll_secs))
 
-        # The first refresh happens after a short grace period, not after a
-        # full interval and not immediately.
-        #
-        # Not a full interval: that leaves a fully configured agent with no
-        # verified snapshot for `poll_secs`, and under the default fail_closed
-        # every capability call in that window 403s — which would make D1's
-        # "fail_closed does not convert stack start-up into flake" false in
-        # exactly the configuration D1 is about.
-        #
-        # Not immediately either: this loop refreshes by calling this agent's
-        # OWN admin route, and the task is created inside the lifespan before
-        # uvicorn is accepting connections. Firing at once means connecting to
-        # a socket that is not listening yet — a self-inflicted error on every
-        # start-up, which is how the first version of this loop broke the
-        # federated handshake tests.
-        grace = min(2, self.revocation_poll_secs)
-        first = True
+        # The start-up refresh already ran (see `ready_lifespan`), so this
+        # loop just sleeps its cadence from the start.
         while True:
-            await asyncio.sleep(grace if first else self.revocation_poll_secs)
-            first = False
+            await asyncio.sleep(self.revocation_poll_secs)
             ticks += 1
             try:
-                ok = await self._refresh_revocations_once()
+                ok = await self.refresh_revocations_now(quiet=True)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 — a poll must never kill the agent
-                logger.exception("revocation poll raised")
-                ok = False
 
             changed = healthy is None or ok != healthy
             if changed or ticks % heartbeat_every == 0:
@@ -242,25 +233,25 @@ class AitpServer:
                 )
             healthy = ok
 
-    async def _refresh_revocations_once(self) -> bool:
-        """One refresh, via this agent's own admin route.
+    async def refresh_revocations_now(self, *, quiet: bool) -> bool:
+        """One refresh through the shared ingest path. No HTTP hop.
 
-        Going through the route rather than duplicating the fetch/verify logic
-        keeps exactly one ingest path — a second copy is how the two existing
-        signature-blind parses came to exist in the first place.
+        Returns whether a snapshot is now verified and in force — which is
+        what the poll loop reports state changes on.
         """
-        import httpx
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"http://localhost:{self.port}/admin/refresh-revocations",
-                # Suppress per-attempt telemetry; this loop reports state
-                # CHANGES instead. See the route's `quiet` handling.
-                json={"quiet": True},
-            )
-        if resp.status_code != 200:
+        if not self.cp_configured:
             return False
-        return bool(resp.json().get("verified"))
+        try:
+            result = await refresh_revocations(
+                revocation=self.revocation,
+                bootstrap=self.bootstrap,
+                emit=emit_event,
+                quiet=quiet,
+            )
+        except Exception:  # noqa: BLE001 — a refresh must never kill the agent
+            logger.exception("revocation refresh raised")
+            return False
+        return bool(result.get("verified"))
 
     def _emit_soon(self, event_type: str, **fields: Any) -> None:
         """Fire a telemetry event from a sync path.
