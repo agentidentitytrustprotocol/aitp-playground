@@ -198,3 +198,27 @@ job, main-push only · `.github/workflows/auto-merge.yml` (a green bump PR auto-
 - **Round 1 also caught a route that does not exist** (`/admin/build-delegation`; it is
   `/admin/delegate`) — in prose I had written, contradicting the same file 40 lines up.
 - **Tests:** 459 passed, ruff clean, scenario YAML validates.
+
+### CI outcome — 2026-08-25
+Three PRs, all green:
+
+| Repo | PR | Checks |
+|---|---|---|
+| `aitp-control-plane` | [#55](https://github.com/agentidentitytrustprotocol/aitp-control-plane/pull/55) | 3 pass |
+| `aitp-rs` | [#90](https://github.com/agentidentitytrustprotocol/aitp-rs/pull/90) | 35 pass |
+| `aitp-playground` | [#47](https://github.com/agentidentitytrustprotocol/aitp-playground/pull/47) | 7 pass |
+
+**Two things CI settled that local runs could not.**
+
+1. **Phase 3 criteria 2 and 4 are met.** `docker-compose e2e` passed in 5m21s on the `pypi`
+   path with `revocation-via-cp` included, and `test_sdk_version_matches_lock` **actually
+   executed** (`PASSED`) against a running container — it had never run before. PENDING P5
+   closed. The arm64 CP build fault was genuinely local-only.
+2. **Phase 4 criterion 1 is demonstrated on a real PR.** This PR touches `uv.lock`, so
+   `Detect SDK pin changes` → `sdk_pin=true` → `docker-compose e2e` ran pre-merge. Criterion 2
+   (an unrelated PR does *not* trigger it) is still only shown by the filter logic.
+
+**One CI-only failure, now fixed:** `bindings fmt + clippy` failed on aitp-rs #90 while
+`cargo fmt --all` was clean locally — the bindings are **separate workspaces** the root
+Cargo.toml does not cover, which `ci.yml`'s own comment warns about. I ran the wrong gate.
+Fixed in `e86835b`.

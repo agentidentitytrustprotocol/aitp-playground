@@ -52,8 +52,8 @@ so it fails loudly rather than silently.
 The real fix is Phase 5's ask: typed exceptions or a stable `.code` attribute on the binding.
 Revisit here once that lands.
 
-## P5 — Criterion 4 of Phase 3 is unverified locally
-**From:** Phase 3 · **Blocks:** nothing · **Cost:** none here — it is CI's to prove
+## ~~P5 — Criterion 4 of Phase 3 is unverified locally~~ — **CLOSED 2026-08-25**
+**From:** Phase 3 · **Resolved by:** CI run 32929085653 on PR #47
 
 The plan's Phase 3 criterion 4 ("the full `docker-compose.test.yml` stack passes on the
 `pypi` path, `revocation-via-cp` included") could **not** be run on this machine. The
@@ -87,8 +87,18 @@ because `aitp-rs` exists on disk here no matter what CI checks out. The checkout
 restored to the `e2e` job (and correctly stays removed from `build-and-push`, which never
 builds the CP image).
 
-**Watch the first post-merge `Docker` run** and confirm `test_sdk_version_matches_lock`
-passes there. If it does, close this item.
+**Closed by the PR's own `Docker` run**, which did not need to wait for main:
+
+```
+Installing aitp-sdk==0.5.0 (pinned by uv.lock)
+tests/integration/test_protocol_e2e.py::test_sdk_version_matches_lock PASSED
+tests/integration/test_protocol_e2e.py::test_protocol_scenario[intra-org/revocation-via-cp@1.0.0] PASSED
+docker-compose e2e  pass  5m21s
+```
+
+Phase 3 criteria 2 and 4 are therefore **met**, on `linux/amd64`, on the `pypi` path, with
+`revocation-via-cp` included. The arm64 control-plane build fault described above is real and
+local-only; it did not reproduce in CI. Nothing further to do.
 
 ## P6 — `aitp-cp` is a symlink to `aitp-control-plane`
 **From:** Phase 3 · **Blocks:** nothing · **Cost:** awareness only
