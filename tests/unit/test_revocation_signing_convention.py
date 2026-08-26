@@ -38,20 +38,27 @@ import aitp
 
 from tests.unit._jcs_reference import canonicalize
 
-# `sign_revocation_list` is not behind a Cargo feature, so a default wheel
-# always has it. Guard anyway — but skip LOUDLY, with the reason, so a wheel
-# that quietly lost the surface cannot make this interlock silently stop
-# interlocking.
-_HAS_SIGN_REVOCATION = hasattr(aitp.AitpAgent, "sign_revocation_list")
+def test_the_sdk_exposes_the_signing_surface_this_module_interlocks() -> None:
+    """A hard assertion, not a skipif — deliberately.
 
-pytestmark = pytest.mark.skipif(
-    not _HAS_SIGN_REVOCATION,
-    reason=(
+    `sign_revocation_list` is unconditional in the binding (no
+    `#[cfg(feature)]`), and this repo floors `aitp-sdk>=0.6.0`, so a wheel
+    without it is not one CI can resolve. The one path that still reaches
+    here is `maturin develop` from an old sibling `aitp-rs` checkout, which
+    bypasses the resolver entirely — and that is precisely where a silent
+    skip is worst.
+
+    A skip would also not be loud. CI runs `pytest -q` with no `addopts`, so
+    a skip renders as a bare `s` and the reason string is never printed to
+    anyone. An earlier version of this module claimed to "skip LOUDLY"; the
+    configuration did not provide it. One named red test does.
+    """
+    assert hasattr(aitp.AitpAgent, "sign_revocation_list"), (
         "installed aitp-sdk has no AitpAgent.sign_revocation_list — the "
-        "revocation signing-convention interlock CANNOT RUN against this "
-        "wheel. This is a coverage hole, not a pass."
-    ),
-)
+        "revocation signing-convention interlock cannot run, so this suite "
+        "is a coverage hole rather than a pass"
+    )
+
 
 _AID_PREFIX = "aid:pubkey:"
 _AID_ED25519_PREFIX = "aid:pubkey:ed25519:"

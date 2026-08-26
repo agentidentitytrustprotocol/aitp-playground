@@ -586,14 +586,29 @@ class ScenarioRunner:
                 # authenticity.
                 aitp.verify_manifest_json(mr.text)
                 manifest = mr.json().get("manifest", {})
-            # NOTE: this establishes authenticity (the manifest was minted by
-            # the holder of the AID it declares), not identity — it does not
-            # yet assert that AID equals `ra.aid`, the agent the runner
-            # launched. Without that comparison, whatever answers at this port
-            # gets its key pinned in the CP *under ra.aid*. The pin belongs
-            # with Phase 6's expected-issuer work, which is where the fixture
-            # rework it requires (the fake supervisor issues synthetic AIDs)
-            # is in scope. Tracked in ASSUMPTIONS.md.
+            # Authenticity is not enough here. Verification proves the envelope
+            # was minted by the holder of the AID it declares — but this step
+            # pins the key it finds into the control plane's trust store
+            # *under `ra.aid`*, so without an identity check whatever answers
+            # at this port can serve its own genuinely-signed manifest and have
+            # its key trusted as this agent's.
+            #
+            # "The runner launched it" does not close that: the launch and this
+            # fetch are separate channels. If the agent dies between reporting
+            # ready and being provisioned, or anything else takes the port, the
+            # substitution succeeds and nothing downstream can tell.
+            #
+            # `ra.aid` is the right thing to compare against: the supervisor
+            # reads it from the spawned process's own AITP_AGENT_READY line
+            # over a parent-child pipe, not off the network.
+            declared_aid = manifest.get("aid")
+            if declared_aid != ra.aid:
+                raise PlaygroundError(
+                    f"manifest at {ra.manifest_url} declares aid "
+                    f"{declared_aid!r}, but the runner launched {ra.aid!r} — "
+                    "refusing to pin a trust anchor for an agent that is not "
+                    "the one answering at this port"
+                )
             pubkey = (manifest.get("identity_hint") or {}).get("public_key")
             pinned = None
             if pubkey:

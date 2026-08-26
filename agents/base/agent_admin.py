@@ -50,7 +50,15 @@ async def _verify_peer_manifest(
     trust anchor.
 
     Raises `HTTPException(502)` — the failure is in the upstream peer's
-    response, not in this agent's caller.
+    response, not in this agent's caller. That follows the status taxonomy the
+    rest of this module already uses: 412 for caller-state preconditions, 404
+    for a capability the caller named that does not exist, 500 for a wiring bug
+    here, and 502 for anything a downstream peer did. The plan asked for "a 4xx
+    naming the cause", but a 4xx would blame the scenario author for a third
+    party's bytes — and could not carry the cause anyway, since
+    `api/hosted.py` flattens any status from this route back to 502 at the
+    federation boundary. The `manifest.verify_failed` event's `cause` field is
+    the channel that survives; that is where the distinction lives.
     """
     async def _reject(cause: str, detail: str) -> None:
         # A verification failure must never be readable as a transport blip.

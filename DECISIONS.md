@@ -50,3 +50,89 @@ Where implementation showed a plan criterion was wrong, the plan was edited inli
 correction recorded: Phase 1's "no `uv.lock` modification" (unsatisfiable — uv mirrors the
 declared specifier), and Phase 2's implied by-construction proof for `self_inclusive` (a fixed
 point). A plan that survives contact with the code unamended is a plan nobody checked.
+
+## D-8 — Pin identity at the CP trust-anchor site, not just authenticity
+**2026-08-26 · reconcile · recommender: Fable · verdict: CHANGE, implemented**
+
+`cp_provision_trust_anchor` verified the agent manifest but did not assert
+`manifest["aid"] == ra.aid`, so whatever answered at a launched agent's port could have its
+key pinned into the control plane's trust store **under that agent's AID**.
+
+Deferred originally as "belongs with Phase 6, needs a fixture rework". Both premises expired:
+Phase 6 shipped without touching the site, and Phase 2B had already made the fixture mint
+real signed manifests — leaving four lines plus one test.
+
+The "narrow exposure" argument was also wrong in kind. It is narrow by *wiring*, not by
+verification: launch and manifest-fetch are separate channels, so an agent that dies between
+reporting ready and being provisioned leaves a port anything can take, serve its own
+genuinely-signed manifest from, and pass. Extending provisioning to hosted agents would have
+made it remotely exploitable with no test failing.
+
+`ra.aid` is the right comparand: the supervisor reads it from the spawned process's own
+`AITP_AGENT_READY` line over a parent-child pipe, not off the network.
+
+Implemented in `runner/engine.py` with a mismatch test proven non-vacuous by mutation.
+Closes `PENDING.md` P1.
+
+## D-9 — Serving-side manifest freshness belongs with ingest verification
+**2026-08-26 · reconcile · recommender: Opus · verdict: CONFIRM**
+
+Folding the re-mint into Phase 2B was right, and the logged reason ("one property") understated
+it. `verify_manifest_json` is the **same function** on both sides — enabling it for ingest
+enabled it for every peer verifying us, in the same commit, across the family. A split phase
+would not have left a theoretical window; it would have left every agent alive past `ttl_secs`
+undialable, surfacing as `cause=expired` on the *peer's* telemetry, i.e. blamed on the wrong
+agent. The control plane's enrollment guard (rejects manifests expiring within 5 minutes) and
+its `listAgents` expiry filter are a third consumer a split would have broken.
+
+Half-life is the correct trigger, not a compromise: it guarantees a remaining-life *floor* of
+TTL/2, which clears both the CP's 300s enrollment guard and `max_staleness_secs` by ~6x. A
+later trigger shrinks that floor below both. It is also the standard idiom (SPIFFE/SPIRE
+rotate X.509-SVIDs at exactly 50% of lifetime). Cost is one Ed25519 signature per agent per
+half-TTL, taken lazily.
+
+Three refinements taken as follow-ups rather than re-decisions (`PENDING.md` P10): derive the
+deadline from the manifest's own `published_at`/`expires_at` instead of config plus a
+constructor timestamp; add a failure cooldown; record that the push path (re-enrolling after a
+re-mint) is out of scope.
+
+## D-10 — Manifest verification failure stays 502
+**2026-08-26 · reconcile · recommender: Opus · verdict: CONFIRM**
+
+502 matches the taxonomy `agent_admin.py` already uses — 412 caller-state, 404 unknown
+capability, 500 wiring bug here, 502 downstream peer — and a 4xx would be the one site in the
+repo that blames the caller for a third party's bytes.
+
+The plan asked for "a 4xx naming the cause". The naming half is what was load-bearing, and the
+status code cannot carry it regardless: `api/hosted.py` catches `HTTPStatusError` from this
+route and re-raises 502 unconditionally at the federation boundary, so any 4xx would survive
+only inside a detail string — the same place the current detail already lives. The
+`manifest.verify_failed` event's `cause` is the only channel that crosses intact, which is
+where the distinction was put. Nothing in this repo or any sibling branches on the code;
+every caller uses `raise_for_status()`, which is code-blind.
+
+Docstring tightened to record the taxonomy, so this is not re-litigated from the plan text.
+
+## D-11 — The SDK-surface guards become assertions, not skips
+**2026-08-26 · reconcile · recommender: Opus · verdict: CHANGE, implemented**
+
+Three `skipif` guards (signing-convention interlock, verify-or-discard, and the soft-fail
+forgery case) are now hard assertions.
+
+Two reasons the skip stopped being defensible. First, the condition is unreachable where it
+was supposed to protect: both `sign_revocation_list` and `verify_revocation_list` are
+unconditional in the binding (no `#[cfg(feature)]`), and the floor is now `aitp-sdk>=0.6.0`,
+so CI's `uv sync --locked` cannot produce a wheel without them. Second, the one path that
+*does* still reach it — `maturin develop` from an old sibling `aitp-rs` checkout, which
+bypasses the resolver entirely — is exactly where a silent skip does the most damage.
+
+And the skip was never loud. The comment claimed "skip LOUDLY, with the reason"; CI runs
+`pytest -q` with no `addopts`, so a skip renders as a bare `s` and the reason is never
+printed. Coverage would not have caught it either: these modules exercise `agents/base`,
+outside `source_pkgs`, so skipping them costs zero coverage and clears `--fail-under=88`.
+
+Rejected the `addopts = "-rs"` alternative: it widens output for every skip in the repo and
+still leaves a green job in a state the reason text calls "a coverage hole, not a pass".
+
+Verified by installing 0.5.0: the suite is red with 8 named failures where it previously
+reported a green count.

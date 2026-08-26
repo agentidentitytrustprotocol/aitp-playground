@@ -6,8 +6,8 @@ Each names why it was deferred and what closing it would take, so none of them
 depends on remembering a conversation. Decisions live in `DECISIONS.md`;
 still-open judgement calls live in `ASSUMPTIONS.md` as `UNCONFIRMED`.
 
-## P1 — Pin identity, not just authenticity, at the CP trust-anchor site
-**From:** Phase 2B · **Blocks:** nothing · **Cost:** small code, medium fixture rework
+## ~~P1 — Pin identity at the CP trust-anchor site~~ — **CLOSED 2026-08-26**
+**From:** Phase 2B · **Closed by:** reconcile `DECISIONS.md` D-8 — the pin is implemented, with a substitution test proven non-vacuous by mutation
 
 `src/aitp_playground/runner/engine.py` verifies the agent manifest before pinning
 `identity_hint.public_key` into the control plane's trust store, but does **not** assert
@@ -18,8 +18,8 @@ Closing it needs `FakeSupervisor` (`tests/unit/test_engine_run.py`) to issue rea
 instead of synthetic `aid-<agent_id>` strings, which three other tests assert on. That rework
 belongs with Phase 6's expected-issuer pinning, where real AIDs are the subject anyway.
 
-## P2 — A skipped interlock keeps CI green
-**From:** Phase 2 · **Blocks:** nothing · **Cost:** one line, one judgement call
+## ~~P2 — A skipped interlock keeps CI green~~ — **CLOSED 2026-08-26**
+**From:** Phase 2 · **Closed by:** reconcile `DECISIONS.md` D-11 — all three guards are now assertions; on a 0.5.0 wheel the suite is red with 8 named failures
 
 `tests/unit/test_revocation_signing_convention.py` skips wholesale if the installed wheel
 lacks `AitpAgent.sign_revocation_list`. CI runs `pytest -q` with no `-ra`, so the skip shows
@@ -49,8 +49,19 @@ exception classes — every failure is a `RuntimeError`/`ValueError` carrying a 
 wording change upstream silently reclassifies the cause. Pinned by the expired-manifest test,
 so it fails loudly rather than silently.
 
-The real fix is Phase 5's ask: typed exceptions or a stable `.code` attribute on the binding.
-Revisit here once that lands.
+**Checked against 0.6.0 — NOT fixed, and the reason is worth recording.** PR #90 gave the
+*revocation* path a typed error, and left the manifest path untyped:
+
+| Path | Error type | `.code` |
+|---|---|---|
+| `aitp.verify_revocation_list` | `RevocationVerificationError` | yes |
+| `aitp.verify_manifest_json` | `RuntimeError` | no |
+
+So this is the same asymmetry the whole effort is about — one binding has the surface, its
+sibling does not — reproduced one artifact over, by the change that was fixing it. The fix is
+a small upstream follow-up in `aitp-rs`: give `verify_manifest_json` the same treatment
+(`bindings/aitp-py/src/manifest.rs`, plus Node parity in `bindings/aitp-node`), then branch
+on `.code` here instead of the message text.
 
 ## ~~P5 — Criterion 4 of Phase 3 is unverified locally~~ — **CLOSED 2026-08-25**
 **From:** Phase 3 · **Resolved by:** CI run 32929085653 on PR #47
@@ -209,3 +220,30 @@ one step away.
 
 Worth doing together with Phase 6: once snapshots are verified, this step is what proves
 verification is load-bearing rather than decorative.
+
+## P10 — Manifest re-mint: three refinements to the same trigger
+**From:** reconcile of the Phase 2B freshness decision (`DECISIONS.md` D-9) · **Blocks:** nothing
+
+The decision to fold serving-side freshness into Phase 2B, and the half-life trigger, are both
+CONFIRMED. Three refinements came out of that review. None changes the decision, so they are
+follow-ups rather than a new assumption.
+
+1. **Derive the re-mint deadline from the manifest itself.** `_fresh_manifest_json` currently
+   computes it from `bootstrap.ttl_secs` plus a `_manifest_minted_at` stamped in the
+   constructor — for a manifest the constructor did not mint. Correct today only because the
+   agent mints milliseconds earlier with the same config. Parsing `published_at`/`expires_at`
+   out of `manifest_json` removes both couplings and lets `_manifest_minted_at` go entirely.
+   It would also expose that `/admin/rotate-keys` re-implements the mint by hand instead of
+   calling `bootstrap.get_manifest_json`, and that the two copies have already drifted
+   (`display_name` handling, and rotate drops the `identity_type` default).
+2. **Add a cooldown on repeated re-mint failure.** The failure path does not advance
+   `_manifest_minted_at`, so every subsequent request retakes the lock, retries the signature,
+   and logs a full traceback. Harmless at Ed25519 speed; a self-inflicted request-serialization
+   stall the moment signing moves behind a KMS or HSM.
+3. **The push path is out of scope, and should say so.** `/admin/enroll-with-cp` sends fresh
+   bytes, but the control plane *stores* them and nothing re-enrolls after a re-mint — and its
+   `listAgents` drops rows whose `manifest_expires_at` has passed. So an agent enrolled at
+   startup silently vanishes from the CP registry at `ttl_secs` while its own endpoint serves
+   a perfectly fresh manifest. Pre-existing and not made worse by the re-mint (before it, the
+   stored and served copies expired together), but the "peer caching manifest bytes" case the
+   assumption called hypothetical is real, one repo over.

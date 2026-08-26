@@ -179,14 +179,6 @@ def test_an_expired_snapshot_is_degraded_even_inside_the_staleness_budget() -> N
 # ── criterion 7: soft_fail is Axis B only ────────────────────────────────
 
 
-@pytest.mark.skipif(
-    not hasattr(aitp, "verify_revocation_list"),
-    reason=(
-        "needs aitp-sdk >=0.6.0 to mint the rejection; without it the forgery "
-        "cannot be presented to a real ingest path and this criterion is "
-        "UNTESTED, not passing."
-    ),
-)
 def test_soft_fail_never_rescues_a_forged_snapshot() -> None:
     """The assertion that keeps the two axes apart — with a real forgery.
 

@@ -18,7 +18,13 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Blast radius if wrong:** The interlock silently stops interlocking and nobody notices
   until a convention change ships. Low likelihood, high cost — exactly the shape of the
   original bug.
-- **Status:** UNCONFIRMED
+- **Status:** **CHANGED (2026-08-26)** — the three skip guards are now hard assertions. The
+  skip condition became unreachable in CI once the floor moved to `>=0.6.0` (both symbols are
+  unconditional in the binding), but it is still reachable via `maturin develop` from an old
+  sibling checkout — the one place a silent skip does most damage. And the "skip LOUDLY"
+  comment asserted a property the configuration never provided: `pytest -q` with no `addopts`
+  prints a bare `s` and never the reason. Verified: on a 0.5.0 wheel the suite is now red with
+  8 named failures. See `DECISIONS.md` D-11.
 
 ## Manifest verification failure returns 502, not 4xx
 - **Plan:** `../aitp-control-plane/plans/cross-repo/aitp-playground-revocation-verification.md` (Phase 2B)
@@ -31,7 +37,10 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   is mitigated by the `manifest.verify_failed` telemetry event carrying an explicit `cause`,
   so the distinction lives in the event stream rather than the status code.
 - **Blast radius if wrong:** A status-code change; any caller matching on it is in this repo.
-- **Status:** UNCONFIRMED
+- **Status:** **CONFIRMED (2026-08-26)** — and confirmed to be *unchangeable in effect*:
+  `api/hosted.py` flattens any status from this route back to 502 at the federation
+  boundary, so a 4xx would survive only inside a detail string. Nothing in this repo or any
+  sibling branches on the code. See `DECISIONS.md` D-10.
 
 ## Serving-side manifest freshness folded into Phase 2B
 - **Plan:** `../aitp-control-plane/plans/cross-repo/aitp-playground-revocation-verification.md` (Phase 2B)
@@ -46,10 +55,20 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   long-lived agents); raising `ttl_secs` (moves the cliff, does not remove it).
 - **Blast radius if wrong:** Re-minting changes `published_at`/`expires_at`/`signature` on a
   cadence. The AID is unchanged, so AID-pinning peers are unaffected; a peer caching manifest
-  *bytes* would see them change every half-TTL.
-- **Status:** UNCONFIRMED
+  *bytes* would see them change every half-TTL. **Correction: that byte-cache case is not
+  hypothetical** — the control plane stores the manifest sent at enrollment and drops the
+  agent from `listAgents` once `manifest_expires_at` passes, and nothing re-enrolls after a
+  re-mint. The push path is knowingly out of scope; see `PENDING.md` P10.
+- **Status:** **CONFIRMED (2026-08-26)** — and for a stronger reason than logged:
+  `verify_manifest_json` is the *same* function on both sides, so enabling it for ingest
+  enabled it for every peer verifying us in the same commit. A split phase would not have
+  left a theoretical window but an undialable agent, reported as `cause=expired` on the
+  *peer's* telemetry — the fetch-vs-verify misattribution D-5 exists to prevent. Half-life
+  is the standard floor-guaranteeing trigger (SPIFFE/SPIRE rotate at exactly 50%), and it
+  clears both the CP's 300s enrollment guard and `max_staleness_secs` by 6x.
+  See `DECISIONS.md` D-9.
 
-## CP trust-anchor pin verifies authenticity but not identity
+## CP trust-anchor pin verifies authenticity but not identity — **RESOLVED**
 - **Plan:** `../aitp-control-plane/plans/cross-repo/aitp-playground-revocation-verification.md` (Phase 2B)
 - **Assumed:** Closing the authenticity hole at `runner/engine.py` now, and deferring the
   identity comparison, is better than doing neither in this phase.
@@ -62,4 +81,10 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Blast radius if wrong:** Whatever answers at a launched agent's port can still get its
   key pinned in the CP *under that agent's AID*. Local runner, agent it launched itself, so
   exposure is narrow — but it is the substitution shape, not yet closed.
-- **Status:** UNCONFIRMED
+- **Status:** **CHANGED (2026-08-26)** — the identity pin was added. Both premises of the
+  deferral had expired: Phase 6 shipped without touching this site, and Phase 2B had already
+  done the expensive half of the fixture rework (`_fake_agent_manifest` mints real signed
+  envelopes), leaving a ~4-line change. The "narrow exposure" reasoning was also wrong in
+  kind: it is narrow by *wiring*, not by verification — launch and manifest-fetch are
+  separate channels, so anything that takes the port between ready and provisioning serves
+  its own genuinely-signed manifest and passes. See `DECISIONS.md` D-8.

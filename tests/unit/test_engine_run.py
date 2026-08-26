@@ -209,7 +209,11 @@ class FakeSupervisor:
             raise RuntimeError(f"launch failed for {agent_id}")
         ra = RunningAgent(
             run_id=run_id, agent_id=agent_id, port=port, pid=None,
-            aid=f"aid-{agent_id}",
+            # The AID the real supervisor reads from the agent's own
+            # AITP_AGENT_READY line. Taken from the same cached fixture the
+            # manifest endpoint serves, so the two agree by construction —
+            # cp_provision_trust_anchor now asserts exactly that.
+            aid=json.loads(_fake_agent_manifest(port))["manifest"]["aid"],
             manifest_url=f"http://localhost:{port}/.well-known/aitp-manifest",
             status="ready",
         )
@@ -902,10 +906,40 @@ async def test_cp_provision_trust_anchor_registers_key_and_issuer(agent_http) ->
     # actually served rather than a hard-coded literal, so the test cannot
     # drift from the fixture.
     served = json.loads(_fake_agent_manifest(env.supervisor.agents["alice"].port))
-    assert env.cp.pinned[0]["aid"] == "aid-alice"
+    assert env.cp.pinned[0]["aid"] == served["manifest"]["aid"]
     assert env.cp.pinned[0]["pubkey"] == served["manifest"]["identity_hint"]["public_key"]
     assert env.cp.anchors[0]["issuer_url"] == "https://issuer.test"
     assert "cp.trust_anchor.provisioned" in _event_types(result)
+
+
+async def test_cp_provision_refuses_a_manifest_from_a_different_agent(agent_http) -> None:
+    """The substitution the identity pin exists to stop.
+
+    Verification alone is not enough here: this step pins the key it finds
+    into the control plane's trust store **under `ra.aid`**. A manifest that
+    is perfectly signed — just by somebody else — would otherwise have its key
+    trusted as this agent's. "The runner launched it" does not close that,
+    because the launch and this fetch are separate channels: if the agent dies
+    between reporting ready and being provisioned, whatever takes the port
+    serves its own genuinely-signed manifest and passes verification.
+    """
+    other_port = 65000  # a port no agent in this run was launched on
+    agent_http.overrides["/.well-known/aitp-manifest"] = lambda req: httpx.Response(
+        200, text=_fake_agent_manifest(other_port)
+    )
+    env = make_env(
+        agents={"alice": ["cap.a"]}, eager=False, cp=FakeCp(enabled=True),
+        steps=[{"id": "prov", "type": "cp_provision_trust_anchor",
+                "agent": "alice", "issuer_url": "https://issuer.test"}],
+    )
+    result = await _run(env)
+
+    assert result.status == "failed", (
+        "a manifest minted by a different agent was accepted; its key would "
+        "have been pinned in the CP under alice's AID"
+    )
+    assert "refusing to pin a trust anchor" in (result.error or "")
+    assert env.cp.pinned == [], "nothing may be pinned when identity does not match"
 
 
 async def test_cp_delegation_tree_skips_without_cp(agent_http) -> None:
@@ -927,7 +961,9 @@ async def test_cp_delegation_tree_flushes_events_before_reading(agent_http) -> N
     result = await _run(env)
     assert result.status == "success", result.error
     out = result.outputs["tree"]
-    assert out["delegator"] == "aid-alice"
+    # Derived from the fixture, not hard-coded: the fake supervisor now issues
+    # the AID the served manifest actually declares.
+    assert out["delegator"] == json.loads(_fake_agent_manifest(env.supervisor.agents["alice"].port))["manifest"]["aid"]
     assert out["count"] == 1
     assert out["delegations"] == [{"jti": "d-1"}]
     # Mid-run flush + post-run batch → two ingests, flush first and before
@@ -1026,7 +1062,10 @@ async def test_rotate_keys_updates_the_running_agent_aid(agent_http) -> None:
     )
     result = await _run(env)
     assert result.status == "success", result.error
-    assert result.outputs["rot"] == {"old_aid": "aid-alice", "new_aid": "aid-rotated"}
+    assert result.outputs["rot"] == {
+        "old_aid": json.loads(_fake_agent_manifest(env.supervisor.agents["alice"].port))["manifest"]["aid"],
+        "new_aid": "aid-rotated",  # from the fake /admin/rotate-keys endpoint
+    }
     # The engine mutates its RunningAgent record so later steps see the new AID.
     assert env.supervisor.agents["alice"].aid == "aid-rotated"
     rotated = [e for e in result.events if e.type == "identity.key.rotated"]

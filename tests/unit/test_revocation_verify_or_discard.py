@@ -22,7 +22,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import aitp
@@ -35,16 +34,17 @@ from revocation_state import RevocationState  # noqa: E402
 
 from tests.unit._jcs_reference import canonicalize  # noqa: E402
 
-_HAS_VERIFY = hasattr(aitp, "verify_revocation_list")
-
-pytestmark = pytest.mark.skipif(
-    not _HAS_VERIFY,
-    reason=(
+def test_the_sdk_exposes_the_verify_surface_this_module_depends_on() -> None:
+    """A hard assertion rather than a skipif — same reasoning as the
+    signing-convention interlock: the floor makes the condition unreachable
+    in CI, the one path that reaches it (`maturin develop` from an old
+    sibling checkout) is where a silent skip does the most damage, and
+    `pytest -q` never prints a skip reason.
+    """
+    assert hasattr(aitp, "verify_revocation_list"), (
         "installed aitp-sdk has no verify_revocation_list (needs >=0.6.0) — "
-        "the verify-or-discard path CANNOT BE TESTED against this wheel. "
-        "This is a coverage hole, not a pass."
-    ),
-)
+        "the verify-or-discard path is UNTESTED, not passing"
+    )
 
 
 def _jti(label: str) -> str:
