@@ -251,3 +251,23 @@ follow-ups rather than a new assumption.
    a perfectly fresh manifest. Pre-existing and not made worse by the re-mint (before it, the
    stored and served copies expired together), but the "peer caching manifest bytes" case the
    assumption called hypothetical is real, one repo over.
+
+## P11 — `external-enrollment` flaked once in the e2e stack
+**From:** Phase 6 CI · **Blocks:** nothing · **Cost:** a watch item, not a fix
+
+On one `docker-compose e2e` run, `intra-org/external-enrollment` failed at its `self_enroll`
+step with `All connection attempts failed`; 9 of 10 scenarios passed, and a re-run of the same
+job went green. Not reproducible so far.
+
+Recorded rather than dismissed because **Phase 6 may have narrowed the window**. Agents now
+make a blocking control-plane fetch during lifespan start-up (the refresh that must complete
+before `AITP_AGENT_READY`), and `self_enroll` fires within ~15ms of ready. The revocation
+fetch to the *same* CP succeeded 15ms earlier in the failing run, so the CP was reachable —
+which points at a CP-side transient (a cold Next.js route, a connection pool) rather than our
+change. But "the agent now talks to the CP twice in quick succession at start-up, where it
+used to talk once" is a real difference, and this is the first flake seen there.
+
+**If it recurs:** capture the agent's stderr around `cp.enroll_started` — the distinction that
+matters is whether the failure is agent→CP (CP-side) or engine→agent (our start-up path). If
+the latter, the start-up refresh is holding the event loop longer than the supervisor's
+readiness signal implies.
