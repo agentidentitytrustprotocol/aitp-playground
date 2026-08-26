@@ -17,6 +17,7 @@ import aitp
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from bootstrap import get_manifest_json
+from revocation_state import RevocationState
 from oidc import OidcContext, peer_aid_from_hello_envelope
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
@@ -47,7 +48,7 @@ class AitpServer:
         port: int,
         bootstrap: dict[str, Any],
         did_web_host: Optional[str] = None,
-        revoked_jtis: Optional[set[str]] = None,
+        revocation: Optional[RevocationState] = None,
         did_web_scheme: str = "http",
     ) -> None:
         self.agent = agent
@@ -65,9 +66,13 @@ class AitpServer:
         self.bootstrap = bootstrap
         self.did_web_host = did_web_host
         self.did_web_scheme = did_web_scheme
-        # The set is shared with build_admin_router so /admin/revoke-tct can
-        # mutate it and verify_capability_tct will see the change.
-        self.revoked_jtis: set[str] = revoked_jtis if revoked_jtis is not None else set()
+        # Shared with build_admin_router so /admin/revoke-tct and
+        # /admin/refresh-revocations mutate the same state verify_capability_tct
+        # reads. It holds local revocations and the CP snapshot separately —
+        # see revocation_state.py for why a single set could not.
+        self.revocation: RevocationState = (
+            revocation if revocation is not None else RevocationState()
+        )
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
         # Issued-TCT log keyed by peer AID. Populated when a responder
         # session completes — gives /admin/export-session-bundle access
@@ -381,7 +386,8 @@ class AitpServer:
         Two-stage verification:
           1. Local revocation short-circuit on the TCT's ``jti`` (read from
              the unverified claims for a precise 403; the SDK also re-checks
-             ``revoked_jtis`` below, so this is fail-closed either way).
+             the SDK also re-checks the same set below, so this is
+             fail-closed either way).
           2. SDK ``verify_tct`` in presented-TCT mode: we pass the TCT's
              own declared ``aud`` as ``expected_audience``. In v0.1/v0.2
              (RFC-AITP-0005) ``aud`` defaults to ``sub``, so this asserts
@@ -399,8 +405,15 @@ class AitpServer:
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=f"tct malformed: {exc}") from exc
         jti = claims.get("jti", "")
-        if jti and jti in self.revoked_jtis:
-            raise HTTPException(status_code=403, detail=f"tct revoked: jti={jti}")
+        if jti and self.revocation.is_revoked(jti):
+            # Name the source. "We revoked this" and "the control plane says
+            # someone revoked this" are different facts for whoever reads the
+            # 403, and collapsing them makes a CP-propagation bug look like a
+            # local one.
+            source = "local" if self.revocation.is_locally_revoked(jti) else "cp-snapshot"
+            raise HTTPException(
+                status_code=403, detail=f"tct revoked ({source}): jti={jti}"
+            )
         # Issuer-AID check: TCTs we issued must declare us as the issuer.
         # After a key rotation our AID changes, so any TCT issued by the
         # pre-rotation key fails this guard before the signature path runs.
@@ -422,7 +435,7 @@ class AitpServer:
                     required_grant,
                     self._tct_store,
                     expected_audience=declared_audience,
-                    revoked_jtis=self.revoked_jtis,
+                    revoked_jtis=self.revocation.effective_jtis,
                 )
                 # len-delta hit/miss heuristic: a miss inserts a new entry,
                 # a hit reuses an existing one. Exact while size < max_entries
@@ -435,7 +448,7 @@ class AitpServer:
             return self.agent.verify_tct(
                 tct_token, required_grant,
                 expected_audience=declared_audience,
-                revoked_jtis=self.revoked_jtis,
+                revoked_jtis=self.revocation.effective_jtis,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=403, detail=f"tct rejected: {exc}") from exc

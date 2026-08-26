@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
+from revocation_state import RevocationState
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
 
@@ -96,7 +97,7 @@ def build_admin_router(
     agent,                                       # aitp.AitpAgent
     bootstrap: dict[str, Any],
     held_tcts: dict[int, str],                   # peer_port -> tct_token (mutated in place)
-    revoked_jtis: set[str],                      # mutated in place by /admin/revoke-tct
+    revocation: RevocationState,                 # mutated by /admin/revoke-tct + refresh
     capabilities: Optional[dict[str, CapabilityHandler]] = None,
     manifest_provider: Optional[Callable[[], str]] = None,
     issued_tcts: Optional[dict[str, str]] = None,  # peer_aid -> tct_token (responder-side)
@@ -106,7 +107,7 @@ def build_admin_router(
     async handler invoked by ``/admin/self-execute``. The handler receives the
     parsed JSON payload (str/dict/None) and returns a JSON-serializable value.
 
-    ``revoked_jtis`` is the same set referenced by ``AitpServer`` so that
+    ``revocation`` is the same state object referenced by ``AitpServer`` so that
     revoking a TCT via ``/admin/revoke-tct`` makes subsequent capability calls
     that present that TCT fail with 403.
 
@@ -571,9 +572,12 @@ def build_admin_router(
         """
         body = await request.json()
         jti: str = body["jti"]
-        revoked_jtis.add(jti)
+        # Local, deliberately separate from anything the CP says. A snapshot
+        # refresh replaces the CP-derived set wholesale; it must never clear
+        # an operator's own revocation.
+        revocation.revoke_local(jti)
         await emit_event("tct.revoked", bootstrap, jti=jti)
-        return {"revoked": jti, "total_revoked": len(revoked_jtis)}
+        return {"revoked": jti, "total_revoked": len(revocation)}
 
     @router.post("/enroll-with-cp")
     async def enroll_with_cp(request: Request) -> dict[str, Any]:
@@ -703,41 +707,111 @@ def build_admin_router(
             bootstrap.get("cp", {}).get("api_key") if isinstance(bootstrap.get("cp"), dict) else None
         )
         if not cp_base_url:
-            return {"revoked_count": len(revoked_jtis), "added": 0, "skipped": "no cp configured"}
+            return {
+                "revoked_count": len(revocation),
+                "added": 0,
+                "skipped": "no cp configured",
+            }
+
+        # The pinned issuer. Without it we cannot verify — any key can sign a
+        # well-formed snapshot that validates against its own declared issuer,
+        # so an unpinned check would confirm only that *somebody* signed it.
+        #
+        # Deliberately NOT accepted from the request body: the URL may be
+        # overridden per-call, but if the pin were overridable too, an
+        # attacker-chosen endpoint could simply supply its own AID and the
+        # verification would become a formality.
+        expected_issuer = (
+            bootstrap.get("cp", {}).get("aid")
+            if isinstance(bootstrap.get("cp"), dict)
+            else None
+        )
 
         url = f"{cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
         headers = {"Authorization": f"Bearer {cp_api_key}"} if cp_api_key else {}
-        added = 0
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(url, headers=headers)
                 resp.raise_for_status()
-                data = resp.json()
+                envelope_json = resp.text
         except Exception as exc:  # noqa: BLE001
-            await emit_event(
-                "revocation.refresh_failed", bootstrap, error=str(exc),
-            )
-            return {"revoked_count": len(revoked_jtis), "added": 0, "error": str(exc)}
+            # Transport failure only. This must never alias a verification
+            # failure: collapsing them is how a signing-convention break gets
+            # triaged as a network blip.
+            await emit_event("revocation.refresh_failed", bootstrap, error=str(exc))
+            return {"revoked_count": len(revocation), "added": 0, "error": str(exc)}
 
-        # Same envelope-tolerant parse as the playground's CpClient: accept
-        # either {"revocation_list": {"entries": [...]}} or
-        # {"entries": [...]} at the top level.
-        entries: list[Any] = []
-        if isinstance(data, dict):
-            inner = data.get("revocation_list") or data
-            if isinstance(inner, dict):
-                entries = list(inner.get("entries") or [])
-        for entry in entries:
-            jti_val = entry.get("jti") if isinstance(entry, dict) else entry
-            if isinstance(jti_val, str) and jti_val and jti_val not in revoked_jtis:
-                revoked_jtis.add(jti_val)
-                added += 1
+        async def _discard(cause: str, detail: str) -> dict[str, Any]:
+            """RFC-AITP-0008 §1.5: an unverifiable snapshot is DISCARDED.
+
+            Not applied, not partially applied, not merged. The previously
+            verified snapshot stays in force and the deny-set is untouched.
+            This is a MUST, so it has no mode knob — `revocation_fail_mode`
+            governs the *absence* of a fresh snapshot, never its authenticity.
+            """
+            await emit_event(
+                "revocation.verify_failed", bootstrap, cause=cause, detail=detail
+            )
+            return {
+                "revoked_count": len(revocation),
+                "added": 0,
+                "discarded": cause,
+                "detail": detail,
+            }
+
+        if not expected_issuer:
+            return await _discard(
+                "no_expected_issuer",
+                "no CP AID pinned (set CP_AID) — refusing to apply an "
+                "unverifiable revocation snapshot",
+            )
+        if not hasattr(aitp, "verify_revocation_list"):
+            return await _discard(
+                "sdk_cannot_verify",
+                "installed aitp-sdk has no verify_revocation_list (needs "
+                ">=0.6.0) — refusing to apply an unverified snapshot",
+            )
+
+        try:
+            aitp.verify_revocation_list(envelope_json, expected_issuer)
+        except Exception as exc:  # noqa: BLE001
+            cause = getattr(exc, "code", None) or "signature_invalid"
+            return await _discard(cause, str(exc))
+
+        # Verified. Parse the exact RFC-AITP-0008 §1.5 envelope — no tolerant
+        # fallback. Once the signature is checked, accepting a second shape is
+        # a downgrade path: a body the parser accepts but the verifier did not
+        # sign over.
+        body_obj = json.loads(envelope_json)["revocation_list"]
+        jtis = [
+            e["jti"]
+            for e in body_obj.get("entries", [])
+            if isinstance(e, dict) and isinstance(e.get("jti"), str)
+        ]
+        previous = revocation.snapshot_entry_count
+        # Wholesale replacement, not a merge — a snapshot is the issuer's
+        # complete current deny-set, so a jti it no longer lists is no longer
+        # revoked by them.
+        revocation.apply_snapshot(
+            jtis,
+            published_at=int(body_obj["published_at"]),
+            expires_at=int(body_obj["expires_at"]),
+        )
 
         await emit_event(
-            "revocation.list_fetched", bootstrap,
-            jti_count=len(entries), added=added,
+            "revocation.list_fetched",
+            bootstrap,
+            jti_count=len(jtis),
+            added=max(0, len(jtis) - previous),
+            verified=True,
+            issuer=expected_issuer,
         )
-        return {"revoked_count": len(revoked_jtis), "added": added}
+        return {
+            "revoked_count": len(revocation),
+            "snapshot_count": len(jtis),
+            "added": max(0, len(jtis) - previous),
+            "verified": True,
+        }
 
     @router.post("/self-execute")
     async def self_execute(request: Request) -> Any:

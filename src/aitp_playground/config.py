@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     didweb_insecure_hosts: str = ""
     cp_base_url: str = ""
     cp_api_key: str = ""
+    # The control plane's AID, pinned. Verifying a revocation snapshot without
+    # a pinned expected issuer is close to worthless — the snapshot is
+    # self-certifying, so ANY key can sign a well-formed one and it will
+    # verify against its own declared issuer. The pin is the difference
+    # between checking a signature and checking the *right* signature.
+    #
+    # Empty means "do not verify", which is the pre-0.6.0 posture and is
+    # logged loudly at startup rather than assumed. In the compose stack the
+    # CP's identity is deterministic (CP_AID_SEED_HEX), so this can be a known
+    # constant; in a real deployment it comes from the CP's published manifest
+    # at bootstrap, pinned once — discovery *without* pinning would reintroduce
+    # the hole in a new shape.
+    cp_aid: str = ""
     cp_timeout_ms: int = 5000
     anthropic_api_key: str = ""
     openai_api_key: str = ""

@@ -8,6 +8,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 from agent_admin import build_admin_router
+from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
 from telemetry import emit_event
@@ -26,9 +27,10 @@ app = FastAPI(
 )
 
 # Shared by AitpServer (which checks it on every capability call) and the admin
-# router's /admin/revoke-tct (which mutates it). Module-level so multiple
-# requests see the same set.
-_revoked_jtis: set[str] = set()
+# router's /admin/revoke-tct + /admin/refresh-revocations (which mutate it).
+# Module-level so every request sees the same state. It keeps local
+# revocations and the CP snapshot separate — see revocation_state.py.
+_revocation = RevocationState()
 
 server = AitpServer(
     agent=agent,
@@ -37,7 +39,7 @@ server = AitpServer(
     bootstrap=bootstrap,
     did_web_host=bootstrap["aitp"].get("did_web_host"),
     did_web_scheme=bootstrap["aitp"].get("did_web_scheme", "http"),
-    revoked_jtis=_revoked_jtis,
+    revocation=_revocation,
 )
 app.include_router(server.router)
 
@@ -96,7 +98,7 @@ app.include_router(build_admin_router(
     agent=agent,
     bootstrap=bootstrap,
     held_tcts=_held_tcts,
-    revoked_jtis=_revoked_jtis,
+    revocation=_revocation,
     issued_tcts=server._issued_tcts,
     capabilities={
         "research.query": do_research,

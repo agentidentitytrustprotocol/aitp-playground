@@ -41,6 +41,11 @@ class BootstrapBuilder:
             cp_block["base_url"] = self.settings.cp_base_url
         if self.settings.cp_api_key:
             cp_block["api_key"] = self.settings.cp_api_key
+        # Agents run as separate processes and read CP config from this block,
+        # never from Settings — so the expected-issuer pin has to travel here
+        # or /admin/refresh-revocations cannot verify anything.
+        if self.settings.cp_aid:
+            cp_block["aid"] = self.settings.cp_aid
 
         # Per-agent overrides of manifest defaults: signing_suite + the
         # OIDC issuer/subject when identity_type=oidc.
