@@ -136,3 +136,17 @@ still leaves a green job in a state the reason text calls "a coverage hole, not 
 
 Verified by installing 0.5.0: the suite is red with 8 named failures where it previously
 reported a green count.
+
+## D-12 — `docker-compose e2e` stays advisory, not required
+**2026-08-26 · user decision**
+
+Phase 4 widened the job to run pre-merge on any PR touching `uv.lock`. It is deliberately
+**not** added to `main`'s required status checks.
+
+Accepted trade: a green bump PR can auto-merge while e2e is still running or red. Detection
+exists; the gate does not. Weighed against changing repo-wide configuration that affects every
+contributor's PR, plus the skipped-vs-required trap — a conditional job wired wrong leaves
+unrelated PRs waiting on a check that never reports.
+
+Reversible in one settings change; `PENDING.md` P7 keeps the close-out steps, including the
+requirement to demonstrate **both** directions (a pin PR blocks, an unrelated PR merges).

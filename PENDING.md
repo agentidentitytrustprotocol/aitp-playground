@@ -149,10 +149,14 @@ behaviour is easy to get wrong — if the job ends up "expected, waiting" instea
 every unrelated PR hangs forever. The `changes` job always runs precisely so `e2e` has a
 definite input and skips cleanly rather than never reporting.
 
-**To close:** add `docker-compose e2e` to `main`'s required contexts, then open one PR that
-touches `uv.lock` and one that does not, and confirm the first blocks on e2e while the second
-merges normally. Both halves need demonstrating — the second is the one that breaks if the
-skip semantics are wrong.
+**Decided 2026-08-26: leave advisory.** The job runs pre-merge and is visible on the PR; it
+just cannot block. The trade accepted is that a green bump PR can auto-merge while e2e is
+still running or red — the detection is there, the gate is not.
+
+**To close later:** add `docker-compose e2e` to `main`'s required contexts, then open one PR
+that touches `uv.lock` and one that does not, and confirm the first blocks on e2e while the
+second merges normally. Both halves need demonstrating — the second is the one that breaks if
+the skip semantics are wrong.
 
 ## ~~P8 — Phase 6 is blocked on an aitp-sdk release~~ — **CLOSED 2026-08-26**
 **From:** Phase 6 · **Resolved by:** `aitp-sdk` 0.6.0 published; floor raised; both axes shipped
