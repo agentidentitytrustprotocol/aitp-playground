@@ -1,24 +1,73 @@
 # syntax=docker/dockerfile:1.7-labs
 #
 # Multi-stage build:
-#   stage 1 — sdk-builder — compiles the aitp Python SDK (Rust extension)
-#             from the sibling aitp-rs repo using maturin.
-#   stage 2 — runtime     — slim Python image that imports the SDK wheel
-#             produced by stage 1 and runs the FastAPI playground.
+#   stage 1 — sdk-builder — obtains the aitp Python SDK wheel, either from
+#             PyPI at the version uv.lock pins (default) or by compiling the
+#             sibling aitp-rs source tree with maturin.
+#   stage 2 — runtime     — slim Python image that installs that wheel and
+#             runs the FastAPI playground.
+#
+# ── AITP_SDK_SOURCE: which SDK does this image actually contain? ────────────
+#
+#   pypi (default) — install aitp-sdk at the version resolved in uv.lock.
+#   path           — build from ../aitp-rs source with maturin.
+#
+# `pypi` is the default because it makes the image *reproducible from its own
+# commit*. Previously this Dockerfile always built from the sibling checkout,
+# and CI checked that sibling out at whatever `main` happened to be — so the
+# published image embedded an unreleased, unpinned SDK, `uv.lock` did not
+# describe what the container ran, and the e2e suite could not observe a
+# pin/behaviour mismatch in either direction. A test stack that cannot see the
+# version under test does not report weak coverage; it reports misleading
+# coverage.
+#
+# Use `path` when you genuinely mean "test unreleased SDK source" — local
+# development against an aitp-rs working tree, or aitp-rs validating its own
+# `main` against a live playground:
+#
+#   docker build --build-arg AITP_SDK_SOURCE=path ...
 #
 # The build context is the *parent* directory of this repo so the sibling
-# aitp-rs/ source tree is visible. The compose files set context: .. for you.
-# To build manually:
+# aitp-rs/ source tree is visible (needed only for `path`). The compose files
+# set context: .. for you. To build manually:
 #
 #   cd /path/to/agentIdenitytrustprotocol
 #   docker build -f aitp-playground/Dockerfile -t aitp-playground .
 #
-# No host Rust toolchain or maturin is required.
+# No host Rust toolchain or maturin is required on either path; `path`
+# installs one inside the builder stage.
+
+ARG AITP_SDK_SOURCE=pypi
 
 # ============================================================================
-# Stage 1 — build the aitp wheel (native arch).
+# Stage 1a — fetch the pinned wheel from PyPI (the default).
 # ============================================================================
-FROM python:3.12-slim AS sdk-builder
+FROM python:3.12-slim AS sdk-builder-pypi
+
+# Only the lockfile — the pinned version is the entire input to this stage.
+COPY aitp-playground/uv.lock /tmp/uv.lock
+
+# `--only-binary=:all:` makes a source fallback a hard build failure rather
+# than a silent Rust compile: if aitp-sdk ever stops publishing a wheel for
+# this image's platform, we want to know at build time, loudly, not to
+# discover it as a mysteriously slow build.
+RUN set -eu; \
+    version="$(python -c "\
+import tomllib, sys; \
+lock = tomllib.load(open('/tmp/uv.lock','rb')); \
+pkgs = [p for p in lock['package'] if p['name'] == 'aitp-sdk']; \
+sys.exit('aitp-sdk not found in uv.lock') if not pkgs else None; \
+sys.exit(f'uv.lock has {len(pkgs)} aitp-sdk entries (resolution markers?); refusing to guess which one this image should run') if len(pkgs) > 1 else None; \
+print(pkgs[0]['version'])")"; \
+    echo "Installing aitp-sdk==${version} (pinned by uv.lock)"; \
+    pip download "aitp-sdk==${version}" \
+        --only-binary=:all: --no-deps -d /wheels; \
+    ls -la /wheels
+
+# ============================================================================
+# Stage 1b — build the aitp wheel from sibling source (opt-in).
+# ============================================================================
+FROM python:3.12-slim AS sdk-builder-path
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -51,6 +100,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     ls -la /wheels
 
 # ============================================================================
+# Stage 1 — whichever of the two above AITP_SDK_SOURCE selected.
+# ============================================================================
+FROM sdk-builder-${AITP_SDK_SOURCE} AS sdk-builder
+
+# ============================================================================
 # Stage 2 — runtime image.
 # ============================================================================
 FROM python:3.12-slim AS runtime
@@ -72,6 +126,11 @@ ARG INSTALL_EXTRAS=""
 COPY --from=sdk-builder /wheels/aitp_sdk-*.whl /tmp/wheels/
 
 COPY aitp-playground/pyproject.toml ./
+# Carried into the image so the running container can be asserted against
+# the pin it was built from — see tests/integration/test_protocol_e2e.py::
+# test_sdk_version_matches_lock. Without it, "the image runs the pinned
+# wheel" is a claim nothing checks.
+COPY aitp-playground/uv.lock ./
 COPY aitp-playground/src/ ./src/
 COPY aitp-playground/agents/ ./agents/
 COPY aitp-playground/scenarios/ ./scenarios/

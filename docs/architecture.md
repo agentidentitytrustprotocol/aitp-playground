@@ -16,10 +16,17 @@ When a scenario is started, the playground:
 5. Executes the scenario's workflow steps — capability calls, probes,
    delegation, revocation — and records every event.
 
-The runner itself contains no AITP protocol code. All protocol logic
-(keygen, manifests, handshake, TCT verify, delegation, revocation) is
-in the `aitp` Python SDK, which the agent workers import directly. The
-playground is purely the harness around them.
+Nearly all AITP protocol logic (keygen, manifests, handshake, TCT verify,
+delegation, revocation) lives in the `aitp` Python SDK, which the agent
+workers import directly; the playground is the harness around them.
+
+The runner is *almost* protocol-free. Two exceptions, both deliberate and
+both SDK calls rather than reimplementations: `spki_pin_check` drives
+`compute_spki_hash`/`SpkiPinVerifier` directly (a pure-SDK exercise with no
+agent involved), and `cp_provision_trust_anchor` calls
+`aitp.verify_manifest_json` before pinning an agent's key into the control
+plane's trust store — pinning key material read from an unverified fetch
+would let whatever answered at that URL choose the key the CP trusts.
 
 ## Runtime topology
 

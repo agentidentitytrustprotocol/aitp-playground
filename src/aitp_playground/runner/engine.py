@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import aitp
 import httpx
 import jsonschema
 
@@ -576,7 +577,38 @@ class ScenarioRunner:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 mr = await client.get(ra.manifest_url)
                 mr.raise_for_status()
+                # Verify before reading key material out of the envelope. This
+                # value is pinned into the control plane's trust store, so an
+                # unverified read here would let whatever answered at
+                # manifest_url choose the key the CP trusts for this agent.
+                # The runner launched this agent and knows its AID, so unlike
+                # the peer-manifest sites we can check identity too, not just
+                # authenticity.
+                aitp.verify_manifest_json(mr.text)
                 manifest = mr.json().get("manifest", {})
+            # Authenticity is not enough here. Verification proves the envelope
+            # was minted by the holder of the AID it declares — but this step
+            # pins the key it finds into the control plane's trust store
+            # *under `ra.aid`*, so without an identity check whatever answers
+            # at this port can serve its own genuinely-signed manifest and have
+            # its key trusted as this agent's.
+            #
+            # "The runner launched it" does not close that: the launch and this
+            # fetch are separate channels. If the agent dies between reporting
+            # ready and being provisioned, or anything else takes the port, the
+            # substitution succeeds and nothing downstream can tell.
+            #
+            # `ra.aid` is the right thing to compare against: the supervisor
+            # reads it from the spawned process's own AITP_AGENT_READY line
+            # over a parent-child pipe, not off the network.
+            declared_aid = manifest.get("aid")
+            if declared_aid != ra.aid:
+                raise PlaygroundError(
+                    f"manifest at {ra.manifest_url} declares aid "
+                    f"{declared_aid!r}, but the runner launched {ra.aid!r} — "
+                    "refusing to pin a trust anchor for an agent that is not "
+                    "the one answering at this port"
+                )
             pubkey = (manifest.get("identity_hint") or {}).get("public_key")
             pinned = None
             if pubkey:
@@ -796,7 +828,6 @@ class ScenarioRunner:
             # No agent involved — the playground runs the SDK directly so
             # the demo doesn't have to stand up TLS infrastructure.
             import base64
-            import aitp
 
             if not step.cert_der_b64 or step.pins is None:
                 raise PlaygroundError(

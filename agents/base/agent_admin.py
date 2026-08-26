@@ -14,10 +14,13 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable, Optional
 
+import aitp
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
+from revocation_refresh import refresh_revocations
+from revocation_state import RevocationState
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
 
@@ -25,12 +28,85 @@ CapabilityHandler = Callable[[Any], Awaitable[Any]]
 ManifestProvider = Callable[[], str]
 
 
+async def _verify_peer_manifest(
+    envelope_json: str, source_url: str, bootstrap: dict[str, Any]
+) -> dict[str, Any]:
+    """Verify a fetched peer ManifestEnvelope, then return its inner manifest.
+
+    Every field this agent reads out of a peer manifest — the AID it delegates
+    to, the handshake endpoint it dials, the capabilities it requests — comes
+    from an unauthenticated HTTP fetch. Verifying the envelope first is what
+    makes those fields the peer's own claims rather than whatever answered at
+    that URL.
+
+    What this establishes, and what it does not: `verify_manifest_json` checks
+    the envelope signature against the key embedded in the manifest's own
+    `aid`. AITP AIDs are self-certifying, so that proves the manifest was
+    minted by the holder of that AID. It does **not** prove that AID is the
+    peer you meant — for `did:web` that binding comes from the DID document
+    (`trust/resolver.py`), which the federated stack resolves over plain HTTP
+    under `AITP_DIDWEB_INSECURE_HOSTS`. Verification here closes substitution
+    by anything that cannot produce a self-consistent envelope; it is not a
+    trust anchor.
+
+    Raises `HTTPException(502)` — the failure is in the upstream peer's
+    response, not in this agent's caller. That follows the status taxonomy the
+    rest of this module already uses: 412 for caller-state preconditions, 404
+    for a capability the caller named that does not exist, 500 for a wiring bug
+    here, and 502 for anything a downstream peer did. The plan asked for "a 4xx
+    naming the cause", but a 4xx would blame the scenario author for a third
+    party's bytes — and could not carry the cause anyway, since
+    `api/hosted.py` flattens any status from this route back to 502 at the
+    federation boundary. The `manifest.verify_failed` event's `cause` field is
+    the channel that survives; that is where the distinction lives.
+    """
+    async def _reject(cause: str, detail: str) -> None:
+        # A verification failure must never be readable as a transport blip.
+        # The `cause` is the field that separates "the peer's manifest does not
+        # verify" from "the peer was unreachable" (which raises upstream and
+        # never reaches here) — the same fetch-vs-verify distinction Phase 6
+        # requires for revocation.
+        await emit_event(
+            "manifest.verify_failed",
+            bootstrap,
+            cause=cause,
+            source_url=source_url,
+        )
+        raise HTTPException(status_code=502, detail=detail)
+
+    try:
+        aitp.verify_manifest_json(envelope_json)
+    except Exception as exc:  # noqa: BLE001 — the SDK raises RuntimeError/ValueError
+        message = str(exc)
+        cause = "expired" if "expired" in message.lower() else "signature_invalid"
+        await _reject(
+            cause,
+            f"peer manifest from {source_url} failed verification ({cause}): "
+            f"{message}. Refusing to read an AID or endpoint out of an "
+            "unverified manifest.",
+        )
+    try:
+        envelope = json.loads(envelope_json)
+    except ValueError as exc:
+        await _reject(
+            "malformed",
+            f"peer manifest from {source_url} is not JSON: {exc}",
+        )
+    manifest = envelope.get("manifest") if isinstance(envelope, dict) else None
+    if not isinstance(manifest, dict):
+        await _reject(
+            "malformed",
+            f"peer manifest from {source_url} has no `manifest` body",
+        )
+    return manifest
+
+
 def build_admin_router(
     *,
     agent,                                       # aitp.AitpAgent
     bootstrap: dict[str, Any],
     held_tcts: dict[int, str],                   # peer_port -> tct_token (mutated in place)
-    revoked_jtis: set[str],                      # mutated in place by /admin/revoke-tct
+    revocation: RevocationState,                 # mutated by /admin/revoke-tct + refresh
     capabilities: Optional[dict[str, CapabilityHandler]] = None,
     manifest_provider: Optional[Callable[[], str]] = None,
     issued_tcts: Optional[dict[str, str]] = None,  # peer_aid -> tct_token (responder-side)
@@ -40,7 +116,7 @@ def build_admin_router(
     async handler invoked by ``/admin/self-execute``. The handler receives the
     parsed JSON payload (str/dict/None) and returns a JSON-serializable value.
 
-    ``revoked_jtis`` is the same set referenced by ``AitpServer`` so that
+    ``revocation`` is the same state object referenced by ``AitpServer`` so that
     revoking a TCT via ``/admin/revoke-tct`` makes subsequent capability calls
     that present that TCT fail with 403.
 
@@ -77,7 +153,11 @@ def build_admin_router(
             manifest_res.raise_for_status()
             peer_manifest_json = manifest_res.text
 
-            peer_manifest = json.loads(peer_manifest_json)["manifest"]
+            # Verify BEFORE reading any field out of the envelope — the AID
+            # below is handed straight to the handshake as the peer identity.
+            peer_manifest = await _verify_peer_manifest(
+                peer_manifest_json, peer_manifest_url, bootstrap
+            )
             # Wire field is `offered_capabilities` (see aitp-manifest types).
             offered = list(peer_manifest.get("offered_capabilities", []))
             if requested_grants is None or len(requested_grants) == 0:
@@ -416,7 +496,12 @@ def build_admin_router(
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(delegatee_manifest_url)
             r.raise_for_status()
-        delegatee_manifest = r.json()["manifest"]
+        # Verify BEFORE reading the AID: this value is the delegation's
+        # recipient. Anything that can answer at delegatee_manifest_url and is
+        # not checked here receives the delegation, scope and all.
+        delegatee_manifest = await _verify_peer_manifest(
+            r.text, delegatee_manifest_url, bootstrap
+        )
         delegatee_aid = delegatee_manifest["aid"]
 
         token_json = agent.build_delegation(
@@ -496,9 +581,12 @@ def build_admin_router(
         """
         body = await request.json()
         jti: str = body["jti"]
-        revoked_jtis.add(jti)
+        # Local, deliberately separate from anything the CP says. A snapshot
+        # refresh replaces the CP-derived set wholesale; it must never clear
+        # an operator's own revocation.
+        revocation.revoke_local(jti)
         await emit_event("tct.revoked", bootstrap, jti=jti)
-        return {"revoked": jti, "total_revoked": len(revoked_jtis)}
+        return {"revoked": jti, "total_revoked": len(revocation)}
 
     @router.post("/enroll-with-cp")
     async def enroll_with_cp(request: Request) -> dict[str, Any]:
@@ -599,70 +687,32 @@ def build_admin_router(
         }
 
     @router.post("/refresh-revocations")
-    async def refresh_revocations(request: Request) -> dict[str, Any]:
-        """Pull the Control Plane's signed revocation list and merge every
-        jti into this agent's local deny-set.
+    async def refresh_revocations_route(request: Request) -> dict[str, Any]:
+        """Fetch, verify, and apply the Control Plane's revocation snapshot.
 
-        This is how a TCT holder learns that its token was revoked: the
-        original issuer marks the jti on the CP (via /api/revocation/entries),
-        and any peer that consults the CP list will then short-circuit any
-        capability call that presents that jti — without ever asking the
-        issuer.
+        A thin wrapper over `revocation_refresh.refresh_revocations`, which is
+        the one ingest path — shared with the agent's start-up refresh and its
+        background poll so no second copy of fetch/verify/apply can drift.
 
         Body (all optional):
-          - cp_base_url: explicit override. When omitted, the agent uses
-            ``bootstrap['cp']['base_url']`` (set by the playground supervisor
-            from CP_BASE_URL at spawn time).
-          - cp_api_key: bearer token for gated CP routes. The well-known
-            revocation list is public so this is rarely needed, but we
-            accept it for forward-compat.
+          - cp_base_url / cp_api_key: overrides; default to
+            ``bootstrap['cp']``, set by the supervisor at spawn time.
+          - quiet: suppress per-attempt telemetry (used by the poll loop).
 
-        Returns the count of jtis now in the local deny set, plus how many
-        new entries this refresh added.
+        The pinned issuer AID is deliberately NOT overridable — see the module
+        docstring for why a caller-chosen issuer would make verification a
+        formality.
         """
         body = await request.json() if await request.body() else {}
-        cp_base_url = body.get("cp_base_url") or (
-            bootstrap.get("cp", {}).get("base_url") if isinstance(bootstrap.get("cp"), dict) else None
+        return await refresh_revocations(
+            revocation=revocation,
+            bootstrap=bootstrap,
+            emit=emit_event,
+            cp_base_url=body.get("cp_base_url"),
+            cp_api_key=body.get("cp_api_key"),
+            quiet=bool(body.get("quiet")),
         )
-        cp_api_key = body.get("cp_api_key") or (
-            bootstrap.get("cp", {}).get("api_key") if isinstance(bootstrap.get("cp"), dict) else None
-        )
-        if not cp_base_url:
-            return {"revoked_count": len(revoked_jtis), "added": 0, "skipped": "no cp configured"}
 
-        url = f"{cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
-        headers = {"Authorization": f"Bearer {cp_api_key}"} if cp_api_key else {}
-        added = 0
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-        except Exception as exc:  # noqa: BLE001
-            await emit_event(
-                "revocation.refresh_failed", bootstrap, error=str(exc),
-            )
-            return {"revoked_count": len(revoked_jtis), "added": 0, "error": str(exc)}
-
-        # Same envelope-tolerant parse as the playground's CpClient: accept
-        # either {"revocation_list": {"entries": [...]}} or
-        # {"entries": [...]} at the top level.
-        entries: list[Any] = []
-        if isinstance(data, dict):
-            inner = data.get("revocation_list") or data
-            if isinstance(inner, dict):
-                entries = list(inner.get("entries") or [])
-        for entry in entries:
-            jti_val = entry.get("jti") if isinstance(entry, dict) else entry
-            if isinstance(jti_val, str) and jti_val and jti_val not in revoked_jtis:
-                revoked_jtis.add(jti_val)
-                added += 1
-
-        await emit_event(
-            "revocation.list_fetched", bootstrap,
-            jti_count=len(entries), added=added,
-        )
-        return {"revoked_count": len(revoked_jtis), "added": added}
 
     @router.post("/self-execute")
     async def self_execute(request: Request) -> Any:

@@ -1,9 +1,46 @@
 # Docker
 
-The Dockerfile is multi-stage. Stage 1 compiles the `aitp` Python SDK
-from the sibling `aitp-rs/` Rust source via maturin. Stage 2 is a slim
-runtime image that installs the wheel and runs the playground. **No
-host Rust toolchain or maturin required** — the build does it for you.
+The Dockerfile is multi-stage. Stage 1 obtains the `aitp` Python SDK wheel;
+stage 2 is a slim runtime image that installs it and runs the playground.
+**No host Rust toolchain or maturin required** on either path.
+
+## `AITP_SDK_SOURCE` — which SDK is in the image
+
+| Value | What stage 1 does | Use it for |
+|-------|-------------------|------------|
+| `pypi` (**default**) | Installs `aitp-sdk` at the version `uv.lock` pins | Everything: CI, the published image, the e2e stack |
+| `path` | Compiles `../aitp-rs` with maturin | Testing *unreleased* SDK source |
+
+```bash
+# default — reproducible from this commit
+docker build -f aitp-playground/Dockerfile -t aitp-playground .
+
+# opt in to sibling source (requires ../aitp-rs checked out)
+docker build -f aitp-playground/Dockerfile \
+  --build-arg AITP_SDK_SOURCE=path -t aitp-playground .
+```
+
+**Why `pypi` is the default.** The Dockerfile used to always build from the
+sibling checkout, and CI checked `aitp-rs` out at whatever `main` happened to
+be. Three things followed: the image published to GHCR embedded an unreleased,
+unpinned SDK; `uv.lock` did not describe what the container ran; and the e2e
+suite was structurally unable to notice a pin/behaviour mismatch in either
+direction. That last one is the worst — a stack that cannot see the version
+under test reports green about a build nobody ships, and green reads as
+coverage.
+
+`tests/integration/test_protocol_e2e.py::test_sdk_version_matches_lock`
+asserts the running container's `/capabilities` version equals the `uv.lock`
+pin, so this cannot silently regress.
+
+**What changed about image tags.** Before this, `:latest` meant "aitp-rs main
+as of build time"; now it means "the pinned wheel". Older tags are not
+reproducible from their commit — don't diagnose against them as if they were.
+
+**Local dev note.** `docker compose -f docker-compose.test.yml up` now gets the
+PyPI wheel. If you were relying on it picking up your `../aitp-rs` working
+tree, pass `--build-arg AITP_SDK_SOURCE=path` (see
+[testing.md](testing.md)).
 
 Source: `Dockerfile`, `Dockerfile.dockerignore`,
 `docker-compose.yml`, `docker-compose.dev.yml`, `docker-compose.test.yml`.
@@ -20,9 +57,10 @@ agentIdenitytrustprotocol/
     └── Dockerfile
 ```
 
-Stage 1 needs to COPY from `aitp-rs/`. With the build context set to
-`aitp-playground/` we couldn't reach it (`COPY` can't escape the
-context). So all the compose files explicitly set:
+On the `path` build, stage 1 needs to COPY from `aitp-rs/`. With the build
+context set to `aitp-playground/` we couldn't reach it (`COPY` can't escape
+the context). The `pypi` default reads nothing outside this repo, but the
+compose files keep the parent context so both paths work unchanged:
 
 ```yaml
 build:
@@ -39,7 +77,7 @@ docker build -f aitp-playground/Dockerfile -t aitp-playground .
 
 ## The two stages
 
-### Stage 1 — `sdk-builder`
+### Stage 1 — `sdk-builder` (shown: the `path` variant)
 
 ```dockerfile
 FROM python:3.12-slim AS sdk-builder

@@ -59,12 +59,67 @@ degrade cleanly ([capabilities.md](capabilities.md)):
 | `agent.verify_tct_cached(tct_token, grant, store, …)` | `aitp_server.py` (`verify_capability_tct`) | TCT verification with an `aitp.TctStore` cache on the hot path. |
 | `agent.build_renewal_request(tct_token)` / `agent.process_renewal_request(req, …)` | `agent_admin.py` (`/admin/renew-tct`, `/admin/process-renewal`) | RFC-AITP-0013 in-band TCT renewal (holder + issuer sides). |
 | `aitp.SessionBundleBuilder(agent)` + `aitp.verify_session_bundle(env, aid)` | `agent_admin.py` (`/admin/export…`, `/admin/verify-session-bundle`) | RFC-AITP-0010 session-bundle export + verify. |
+| `aitp.verify_manifest_json(envelope)` | `agent_admin.py` (`/admin/initiate-handshake`, `/admin/delegate`), `runner/engine.py` (`cp_provision_trust_anchor`) | Verify a peer `ManifestEnvelope` before reading the AID or endpoint out of it. |
 | `aitp.verify_delegation_multihop(token, aid)` | `aitp_server.py` (`/aitp/delegation/redeem`) | RFC-AITP-0011 multi-hop delegation verify (replaces `verify_delegation` when enabled). |
 | `aitp.AitpAgent.generate(suite=…)` + `agent.build_manifest(...)` | `aitp_server.py` (`/admin/rotate-keys`) | RFC-AITP-0007 key rotation — fresh keypair + republished manifest. |
 | `aitp.compute_spki_hash(der)` + `aitp.SpkiPinVerifier(...)` | engine (`spki_pin_check` step) | SPKI client-cert pin computation + verification. |
 
-Everything else is HTTP plumbing or telemetry. The boundary still holds:
-no envelope is parsed, canonicalized, or signed outside the SDK.
+Everything else is HTTP plumbing or telemetry. The boundary is: **nothing
+security-relevant is decided outside the SDK** — no envelope is canonicalized
+or signed here, and every trust decision routes through an SDK verify call.
+
+That is deliberately narrower than "no envelope is parsed outside the SDK",
+which this repo said until it stopped being true. JSON *is* read outside the
+SDK in three places, and each is fine only because the SDK made the decision
+first or the value is not load-bearing:
+
+- peer manifests are `json.loads`'d after `verify_manifest_json` has verified
+  the envelope (`agent_admin.py`, `runner/engine.py`);
+- TCT claims are decoded unverified by `tct_claims.decode_claims` for a precise
+  403, an issuer guard, and the declared audience — `verify_tct` is still the
+  gate (see "What you can ignore" below);
+- the revocation snapshot is parsed with **no** verification at all, which is
+  the one real exception and is called out next.
+
+Parsing is not the property that matters; *deciding* is.
+
+**One exception is open, and it is stated here rather than left implied.** The
+**revocation snapshot** served at `/.well-known/aitp-revocation-list` is parsed
+outside the SDK and **its signature is not checked** —
+`cp_client/client.py:206` and `agent_admin.py` (`/admin/refresh-revocations`)
+both read `entries` straight out of the envelope. The control plane signs that
+snapshot; this repo does not yet verify it, so the deny-set is currently only
+as trustworthy as the transport that delivered it. Anything able to answer as
+the CP could suppress revocations (return `entries: []`, keeping a revoked TCT
+working) or inject them.
+
+Closing it needs `aitp.verify_revocation_list`, which does not exist in any
+released `aitp-sdk` — it is implemented in
+[`aitp-rs#90`](https://github.com/agentidentitytrustprotocol/aitp-rs/pull/90),
+still open, and would ship in 0.6.0. Tracked in `aitp-playground#46` and, with
+the full unblock sequence, in **`PENDING.md` P8**. **Delete this paragraph when
+verification is on** — a caveat with no live tracker behind it becomes
+permanent, and #46 itself closes on the *interlock*, which already shipped.
+
+Peer **manifest signatures** were the same shape of gap and are now checked at
+all three sites that ingest one: the handshake (`/admin/initiate-handshake`),
+delegation (`/admin/delegate`), and the runner before it pins a key into the
+CP's trust store (`runner/engine.py`). Each calls `aitp.verify_manifest_json`
+before reading any field out of the envelope.
+
+Note precisely what that establishes: the envelope was minted by the holder of
+the AID it declares. It is **self-certifying, not trust-anchored** — it does not
+prove that AID is the peer you meant. Two consequences worth keeping straight:
+
+- For `did:web`, the DID document supplies the manifest **endpoint**
+  (`serviceEndpoint`), not a key or an AID (`trust/resolver.py`). So the chain
+  is DID → endpoint → whatever manifest that endpoint serves; and the federated
+  stack resolves that first hop over plain HTTP under
+  `AITP_DIDWEB_INSECURE_HOSTS`.
+- At the runner's CP trust-anchor site the expected AID **is** known — the
+  runner launched the agent — and simply is not compared yet. That is a missing
+  one-line check, not an inherent limit of `verify_manifest_json`. Tracked as
+  `PENDING.md` P1.
 
 ## Identity
 
@@ -301,9 +356,12 @@ By default no revocation list is published over the wire — local deny-set
 fail-closed is all the base demo needs
 ([RFC-AITP-0008](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md)
 defines the signed-list distribution model). The `revoke_tct` step's
-`via_cp: true` mode *does* exercise the full path — publish to the Control
-Plane and have the audience pull the CP's signed
-`/.well-known/aitp-revocation-list`; see
+`via_cp: true` mode exercises the **data** path — publish to the Control Plane
+and have an unrelated peer pull `/.well-known/aitp-revocation-list` into its
+deny-set. Two things it does not show, both called out in the scenario's own
+summary: the snapshot's signature is not checked (`PENDING.md` P8), and no step
+drives a call whose outcome depends on the CP-derived deny-set, so the final
+403 comes from the issuer's *local* set. See
 [control-plane.md](control-plane.md#cp-backed-workflow-steps).
 
 ## Post-v0.1 experimental surfaces
@@ -337,7 +395,16 @@ should be doing it instead:
   short-circuit, the issuer-AID guard, and the declared audience;
   everything security-relevant routes through `verify_tct`).
 - Canonicalize JSON for signing.
-- Verify a signature.
+- Verify a signature — **in `src/` or `agents/`**. Test code is the one
+  carve-out, and it is deliberate: when the SDK itself is the thing under
+  test, verifying with the SDK is circular. It would pass under *any*
+  self-consistent convention, including a wrong one — which is exactly how a
+  wrapped-form revocation signing input survived a full release across this
+  family before 0.5.0. `tests/unit/test_revocation_signing_convention.py`
+  therefore verifies with `cryptography` plus an independent RFC 8785
+  canonicalizer vendored in `tests/unit/_jcs_reference.py`. The oracle has to
+  be independent of the artifact under test. Do not "fix" that into
+  circularity.
 - Build any AITP message by hand.
 - Track handshake state across multiple requests (the responder map
   in `AitpServer._sessions` is keyed by `session_id` from the SDK,
