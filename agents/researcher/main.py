@@ -21,11 +21,6 @@ PORT = int(bootstrap["port"])
 agent = create_agent(bootstrap)
 manifest_json = get_manifest_json(agent, bootstrap)
 
-app = FastAPI(
-    title=f"agent-{bootstrap['agent_id']}",
-    lifespan=ready_lifespan(aid=agent.aid, port=PORT),
-)
-
 # Shared by AitpServer (which checks it on every capability call) and the admin
 # router's /admin/revoke-tct + /admin/refresh-revocations (which mutate it).
 # Module-level so every request sees the same state. It keeps local
@@ -40,6 +35,12 @@ server = AitpServer(
     did_web_host=bootstrap["aitp"].get("did_web_host"),
     did_web_scheme=bootstrap["aitp"].get("did_web_scheme", "http"),
     revocation=_revocation,
+)
+app = FastAPI(
+    title=f"agent-{bootstrap['agent_id']}",
+    # Constructed AFTER the server so the lifespan can own the background
+    # revocation poll; without a cadence the staleness budget is meaningless.
+    lifespan=ready_lifespan(aid=agent.aid, port=PORT, server=server),
 )
 app.include_router(server.router)
 

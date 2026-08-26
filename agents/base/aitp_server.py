@@ -5,6 +5,8 @@ module and does `app.include_router(server.router)`.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import sys
@@ -25,16 +27,30 @@ from telemetry import emit_event
 logger = logging.getLogger(__name__)
 
 
-def ready_lifespan(*, aid: str, port: int):
-    """FastAPI lifespan that emits ``AITP_AGENT_READY`` once uvicorn has bound
-    the listening socket. The supervisor uses this line as the spawn-ready
-    signal; emitting it pre-bind would race against the first HTTP request."""
+def ready_lifespan(*, aid: str, port: int, server: "Optional[AitpServer]" = None):
+    """FastAPI lifespan: signal readiness, and run the revocation poll.
+
+    Emits ``AITP_AGENT_READY`` once uvicorn has bound the listening socket —
+    the supervisor uses that line as the spawn-ready signal, and emitting it
+    pre-bind would race against the first HTTP request.
+
+    When a `server` is passed and it has a control plane configured, this also
+    owns the background revocation refresh. RFC-AITP-0008 §1.4 says a consuming
+    peer SHOULD poll; without a cadence, the staleness budget is either
+    meaningless (nothing ever refreshes, so every agent is permanently
+    degraded) or a time bomb for a long-running scenario.
+    """
 
     @asynccontextmanager
     async def _lifespan(_app):
         sys.stdout.write(f"AITP_AGENT_READY aid={aid} port={port}\n")
         sys.stdout.flush()
-        yield
+        task = server.start_revocation_poll() if server is not None else None
+        try:
+            yield
+        finally:
+            if task is not None:
+                await server.stop_revocation_poll()
 
     return _lifespan
 
@@ -73,6 +89,56 @@ class AitpServer:
         self.revocation: RevocationState = (
             revocation if revocation is not None else RevocationState()
         )
+        _cp = bootstrap.get("cp") if isinstance(bootstrap.get("cp"), dict) else {}
+        #: Whether a control plane is configured at all. With none, this agent
+        #: is in the explicitly-named unchecked posture — local revocations
+        #: only — which is logged once at start-up rather than assumed.
+        self.cp_configured: bool = bool(_cp.get("base_url"))
+        self.revocation_fail_mode: str = _cp.get("fail_mode", "fail_closed")
+        self.revocation_max_staleness_secs: int = int(
+            _cp.get("max_staleness_secs", 300)
+        )
+        self.revocation_poll_secs: int = int(_cp.get("poll_secs", 60))
+        #: Whether the operator has ASKED for verification: a control plane and
+        #: a pinned issuer AID. Deliberately not "and the SDK can do it" —
+        #: see below.
+        #:
+        #: Distinct from "the last fetch worked". Without this distinction an
+        #: agent that merely has no pinned AID looks identical to one whose CP
+        #: went down, and `fail_closed` rejects every call on a deployment that
+        #: has simply not been configured yet — broken-by-default on the very
+        #: upgrade that introduces the setting.
+        self.can_verify_revocation: bool = bool(self.cp_configured and _cp.get("aid"))
+        if not self.cp_configured:
+            logger.info(
+                "revocation: no control plane configured — enforcing local "
+                "revocations only. This is the unchecked posture; a peer's "
+                "revocations published via a CP will not be seen."
+            )
+        elif not _cp.get("aid"):
+            logger.warning(
+                "revocation: CP configured but no CP_AID pinned — snapshots "
+                "cannot be verified, so this agent enforces LOCAL revocations "
+                "only. Set CP_AID to the control plane's AID to turn on "
+                "snapshot verification and fail_mode=%s.",
+                self.revocation_fail_mode,
+            )
+        elif not hasattr(aitp, "verify_revocation_list"):
+            # A pin IS set, so verification was explicitly asked for, and the
+            # wheel cannot deliver it. That is DEGRADED, not unchecked: an old
+            # SDK must not silently downgrade a deployment that opted in.
+            # Treating a capability probe as consent is precisely the unchecked
+            # posture this work exists to remove — every snapshot will be
+            # discarded with cause=sdk_cannot_verify, and under the default
+            # fail_closed that is a loud failure rather than a quiet one.
+            logger.error(
+                "revocation: CP_AID is pinned but the installed aitp-sdk "
+                "cannot verify snapshots (needs >=0.6.0). Every snapshot will "
+                "be discarded and this agent runs DEGRADED (fail_mode=%s). "
+                "Upgrade the SDK or unset CP_AID to fall back to local-only "
+                "revocation deliberately.",
+                self.revocation_fail_mode,
+            )
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
         # Issued-TCT log keyed by peer AID. Populated when a responder
         # session completes — gives /admin/export-session-bundle access
@@ -84,6 +150,8 @@ class AitpServer:
         # wheels (or one built without the cache) leave this None and fall
         # back to plain ``verify_tct``. Sized for demo-scale runs.
         self._tct_store = aitp.TctStore(256) if hasattr(aitp, "TctStore") else None
+        self._degraded_serves = 0
+        self._telemetry_tasks: set[asyncio.Task[None]] = set()
         self._tct_cache_hits = 0
         self._tct_cache_misses = 0
         self.oidc = OidcContext(bootstrap)
@@ -99,6 +167,179 @@ class AitpServer:
                 trust_anchors=self.oidc.trust_anchors,
             )
         return self.agent.new_responder()
+
+    # ── background revocation refresh ────────────────────────────────────
+
+    def start_revocation_poll(self) -> "Optional[asyncio.Task[None]]":
+        """Begin polling the CP for a fresh snapshot. No-op without a CP."""
+        if not self.cp_configured:
+            return None
+        self._poll_task = asyncio.create_task(self._revocation_poll_loop())
+        return self._poll_task
+
+    async def stop_revocation_poll(self) -> None:
+        task = getattr(self, "_poll_task", None)
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        self._poll_task = None
+
+    async def _revocation_poll_loop(self) -> None:
+        """Refresh on a cadence, reporting state CHANGES rather than ticks.
+
+        Telemetry discipline matters here: a 60s poll against a control plane
+        that is down is one event per minute per agent, and that volume buries
+        the single `revocation.verify_failed` that actually means something.
+        So this emits when the health flips (ok->failing, failing->ok) plus a
+        low-frequency heartbeat, not on every attempt.
+        """
+        healthy: Optional[bool] = None
+        ticks = 0
+        heartbeat_every = max(1, 600 // max(1, self.revocation_poll_secs))
+
+        # The first refresh happens after a short grace period, not after a
+        # full interval and not immediately.
+        #
+        # Not a full interval: that leaves a fully configured agent with no
+        # verified snapshot for `poll_secs`, and under the default fail_closed
+        # every capability call in that window 403s — which would make D1's
+        # "fail_closed does not convert stack start-up into flake" false in
+        # exactly the configuration D1 is about.
+        #
+        # Not immediately either: this loop refreshes by calling this agent's
+        # OWN admin route, and the task is created inside the lifespan before
+        # uvicorn is accepting connections. Firing at once means connecting to
+        # a socket that is not listening yet — a self-inflicted error on every
+        # start-up, which is how the first version of this loop broke the
+        # federated handshake tests.
+        grace = min(2, self.revocation_poll_secs)
+        first = True
+        while True:
+            await asyncio.sleep(grace if first else self.revocation_poll_secs)
+            first = False
+            ticks += 1
+            try:
+                ok = await self._refresh_revocations_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — a poll must never kill the agent
+                logger.exception("revocation poll raised")
+                ok = False
+
+            changed = healthy is None or ok != healthy
+            if changed or ticks % heartbeat_every == 0:
+                await emit_event(
+                    "revocation.poll",
+                    self.bootstrap,
+                    healthy=ok,
+                    changed=changed,
+                    posture=self.revocation.posture(
+                        can_verify=self.can_verify_revocation,
+                        max_staleness_secs=self.revocation_max_staleness_secs,
+                    ),
+                )
+            healthy = ok
+
+    async def _refresh_revocations_once(self) -> bool:
+        """One refresh, via this agent's own admin route.
+
+        Going through the route rather than duplicating the fetch/verify logic
+        keeps exactly one ingest path — a second copy is how the two existing
+        signature-blind parses came to exist in the first place.
+        """
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"http://localhost:{self.port}/admin/refresh-revocations",
+                # Suppress per-attempt telemetry; this loop reports state
+                # CHANGES instead. See the route's `quiet` handling.
+                json={"quiet": True},
+            )
+        if resp.status_code != 200:
+            return False
+        return bool(resp.json().get("verified"))
+
+    def _emit_soon(self, event_type: str, **fields: Any) -> None:
+        """Fire a telemetry event from a sync path.
+
+        `verify_capability_tct` is sync but is only ever called from an async
+        route handler, so a running loop exists. Scheduling rather than
+        awaiting keeps telemetry off the request's critical path — a slow
+        collector must never be able to delay a capability call, let alone
+        fail one.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop (a direct unit-test call). The log line above already
+            # recorded the degraded state; dropping the event is correct
+            # rather than raising into the caller's request.
+            return
+        task = loop.create_task(emit_event(event_type, self.bootstrap, **fields))
+        # Hold a reference so the task is not garbage-collected mid-flight,
+        # and drop it on completion so the set cannot grow without bound.
+        self._telemetry_tasks.add(task)
+        task.add_done_callback(self._telemetry_tasks.discard)
+
+    def _enforce_revocation_freshness(self) -> None:
+        """Apply the Axis B policy for the ABSENCE of a fresh snapshot.
+
+        Never about authenticity — an unverifiable snapshot was already
+        discarded at ingest, unconditionally, and no mode here can resurrect
+        it. That separation is the whole point of D1: under a collapsed single
+        switch, `soft_fail` reports a *forged* snapshot as not-revoked, so an
+        attacker who can serve garbage gets the same outcome as one who can
+        suppress the list.
+        """
+        posture = self.revocation.posture(
+            can_verify=self.can_verify_revocation,
+            max_staleness_secs=self.revocation_max_staleness_secs,
+        )
+        if posture != "degraded":
+            return
+
+        reason = self.revocation.degraded_reason(
+            max_staleness_secs=self.revocation_max_staleness_secs
+        )
+        # Anything that is not an explicit, recognized opt-in fails closed.
+        # RFC-AITP-0008 §3.1: "Deployments that need availability-first
+        # behavior MUST opt into `soft_fail` or `fail_open` explicitly." A typo
+        # is not an opt-in, and neither is a mode this build does not
+        # implement — treating an unrecognized value as permissive would make
+        # a misspelling silently disable enforcement.
+        if self.revocation_fail_mode != "soft_fail":
+            # The spec's schema default (§3.1). Distinct detail text from a
+            # deny-list hit above, so the two are never confused.
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"revocation state degraded ({reason}) and fail_mode is "
+                    f"{self.revocation_fail_mode!r} — refusing to honour a TCT "
+                    "this agent cannot check against a fresh revocation snapshot"
+                ),
+            )
+        # soft_fail: proceed on the last verified deny-set. §3.1 requires the
+        # degraded state to be logged, so it is never silent — and a log line
+        # inside a container is not an observable, so it also emits an event.
+        # Emitted on the FIRST degraded serve and then every 100th, because
+        # once an agent is degraded every single call takes this path and a
+        # per-call event would bury the `verify_failed` that explains why.
+        self._degraded_serves += 1
+        logger.warning(
+            "revocation state degraded (%s) — serving on the last verified "
+            "deny-set because fail_mode=soft_fail",
+            reason,
+        )
+        if self._degraded_serves == 1 or self._degraded_serves % 100 == 0:
+            self._emit_soon(
+                "revocation.degraded_serve",
+                reason=reason,
+                serves=self._degraded_serves,
+                fail_mode=self.revocation_fail_mode,
+            )
 
     def _fresh_manifest_json(self) -> str:
         """The served manifest, re-minted before it can expire.
@@ -414,6 +655,12 @@ class AitpServer:
             raise HTTPException(
                 status_code=403, detail=f"tct revoked ({source}): jti={jti}"
             )
+        # Axis B. Checked AFTER the deny-set so a genuine revocation keeps its
+        # own reason: "this token is revoked" and "I cannot currently tell
+        # whether it is" are different answers, and reporting the second for
+        # the first would send an operator hunting a CP outage that is not
+        # there.
+        self._enforce_revocation_freshness()
         # Issuer-AID check: TCTs we issued must declare us as the issuer.
         # After a key rotation our AID changes, so any TCT issued by the
         # pre-rotation key fails this guard before the signature path runs.

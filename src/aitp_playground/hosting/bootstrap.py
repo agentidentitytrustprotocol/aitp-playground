@@ -36,9 +36,20 @@ class BootstrapBuilder:
         handshake_ep = f"{base_origin}/aitp/handshake/hello"
         did_web_scheme = base_origin.split("://", 1)[0]
 
+        # NOTE: an empty cp_block means "no control plane" — the bootstrap
+        # omits the "cp" key entirely (see below), and agents read that as the
+        # local-only posture. So every key here must stay conditional on a CP
+        # actually being configured; unconditionally adding policy defaults
+        # would make `bootstrap["cp"]` always present and silently erase that
+        # signal.
         cp_block: dict[str, Any] = {}
         if self.settings.cp_base_url:
             cp_block["base_url"] = self.settings.cp_base_url
+            # Axis B policy travels with the CP block for the same reason the
+            # pin does: agents are separate processes that never see Settings.
+            cp_block["fail_mode"] = self.settings.revocation_fail_mode
+            cp_block["max_staleness_secs"] = self.settings.revocation_max_staleness_secs
+            cp_block["poll_secs"] = self.settings.revocation_poll_secs
         if self.settings.cp_api_key:
             cp_block["api_key"] = self.settings.cp_api_key
         # Agents run as separate processes and read CP config from this block,
@@ -46,6 +57,7 @@ class BootstrapBuilder:
         # or /admin/refresh-revocations cannot verify anything.
         if self.settings.cp_aid:
             cp_block["aid"] = self.settings.cp_aid
+
 
         # Per-agent overrides of manifest defaults: signing_suite + the
         # OIDC issuer/subject when identity_type=oidc.

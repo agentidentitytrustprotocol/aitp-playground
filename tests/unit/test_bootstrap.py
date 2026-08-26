@@ -78,4 +78,16 @@ def test_bootstrap_carries_cp_block_when_configured() -> None:
         agent_spec=AgentSpec(id="researcher", ref="_shared/agents/researcher"),
         resolved_manifest=manifest, port=8100, peers={}, inputs={"topic": "x"},
     )
-    assert bs["cp"] == {"base_url": "http://cp.test:4000", "api_key": "k"}
+    # Exact equality on purpose: the CP block is the entire contract an agent
+    # subprocess sees, so an accidental addition should fail here rather than
+    # reach an agent unnoticed.
+    assert bs["cp"] == {
+        "base_url": "http://cp.test:4000",
+        "api_key": "k",
+        # Axis B policy. Agents never read Settings, so the revocation
+        # freshness policy has to travel in this block or every agent
+        # silently falls back to the constructor defaults.
+        "fail_mode": "fail_closed",
+        "max_staleness_secs": 300,
+        "poll_secs": 60,
+    }

@@ -700,6 +700,14 @@ def build_admin_router(
         new entries this refresh added.
         """
         body = await request.json() if await request.body() else {}
+        # A poll-driven refresh suppresses its per-attempt events. At a 60s
+        # cadence, emitting on every attempt is one event per minute per agent
+        # for as long as a control plane is down — which buries the single
+        # verify_failed that actually explains something. The poll loop emits
+        # its own change-triggered `revocation.poll` instead; an operator-driven
+        # refresh (the scenario step, a manual call) still reports every time,
+        # because there a human is waiting for the answer.
+        quiet = bool(body.get("quiet"))
         cp_base_url = body.get("cp_base_url") or (
             bootstrap.get("cp", {}).get("base_url") if isinstance(bootstrap.get("cp"), dict) else None
         )
@@ -738,7 +746,10 @@ def build_admin_router(
             # Transport failure only. This must never alias a verification
             # failure: collapsing them is how a signing-convention break gets
             # triaged as a network blip.
-            await emit_event("revocation.refresh_failed", bootstrap, error=str(exc))
+            if not quiet:
+                await emit_event(
+                    "revocation.refresh_failed", bootstrap, error=str(exc)
+                )
             return {"revoked_count": len(revocation), "added": 0, "error": str(exc)}
 
         async def _discard(cause: str, detail: str) -> dict[str, Any]:
@@ -749,9 +760,10 @@ def build_admin_router(
             This is a MUST, so it has no mode knob — `revocation_fail_mode`
             governs the *absence* of a fresh snapshot, never its authenticity.
             """
-            await emit_event(
-                "revocation.verify_failed", bootstrap, cause=cause, detail=detail
-            )
+            if not quiet:
+                await emit_event(
+                    "revocation.verify_failed", bootstrap, cause=cause, detail=detail
+                )
             return {
                 "revoked_count": len(revocation),
                 "added": 0,
@@ -798,14 +810,15 @@ def build_admin_router(
             expires_at=int(body_obj["expires_at"]),
         )
 
-        await emit_event(
-            "revocation.list_fetched",
-            bootstrap,
-            jti_count=len(jtis),
-            added=max(0, len(jtis) - previous),
-            verified=True,
-            issuer=expected_issuer,
-        )
+        if not quiet:
+            await emit_event(
+                "revocation.list_fetched",
+                bootstrap,
+                jti_count=len(jtis),
+                added=max(0, len(jtis) - previous),
+                verified=True,
+                issuer=expected_issuer,
+            )
         return {
             "revoked_count": len(revocation),
             "snapshot_count": len(jtis),

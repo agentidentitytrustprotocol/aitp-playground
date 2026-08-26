@@ -135,6 +135,17 @@ services:
       CP_BASE_URL: "http://aitp-cp:4000"
       CP_API_KEY: "test-api-key-do-not-use-in-prod-0123456789abcdef"
       CP_TIMEOUT_MS: "10000"
+      # The control plane's AID, pinned. Derived deterministically from the
+      # CP_AID_SEED_HEX above (32 bytes of 0x11) — the CP signs its revocation
+      # snapshots with that key, so this is the issuer an agent must expect.
+      #
+      # Without it, agents cannot verify a snapshot and fall back to enforcing
+      # local revocations only: the CP-propagation half of
+      # `intra-org/revocation-via-cp` would go quiet rather than fail, which is
+      # the worst of both. Verification without a pinned issuer would be no
+      # better — a snapshot is self-certifying, so any key can sign one that
+      # validates against its own declared issuer.
+      CP_AID: "aid:pubkey:0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc"
     expose:
       - "8000"
     # No host port mapping. The tests container reaches the playground via

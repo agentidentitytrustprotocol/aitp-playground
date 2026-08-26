@@ -44,6 +44,32 @@ class Settings(BaseSettings):
     # at bootstrap, pinned once — discovery *without* pinning would reintroduce
     # the hole in a new shape.
     cp_aid: str = ""
+    # ── Axis B: what to do about the ABSENCE of a fresh snapshot ─────────
+    #
+    # Kept strictly separate from Axis A (an unverifiable snapshot is always
+    # discarded — RFC-AITP-0008 §1.5 makes that a MUST with no knob). These
+    # settings govern only the case where we have no *fresh* verified snapshot
+    # to consult. Collapsing the two axes into one switch is how a `soft_fail`
+    # mode ends up reporting a forged snapshot as not-revoked, which is
+    # exactly the behaviour `aitp_verifier`'s single `fail_mode` exhibits and
+    # which this repo must not copy.
+    #
+    # `fail_closed` is the spec's own schema default (§3.1): "Deployments that
+    # need availability-first behavior MUST opt into `soft_fail` or
+    # `fail_open` explicitly; secure-by-default means revocation enforcement
+    # does not silently degrade."
+    revocation_fail_mode: str = "fail_closed"
+    # RFC-AITP-0008 §3's example value. The timing envelope it has to cover:
+    # the CP re-signs at most every 60s, so a served snapshot can already be
+    # ~60s old on arrival; the poll cadence below adds up to another 60s;
+    # container clock skew is small but nonzero. 300s clears 60+60+skew with
+    # better than 2x margin, and the CP's signed expires_at defaults to 3600s,
+    # so expiry is never the binding constraint in the demo.
+    revocation_max_staleness_secs: int = 300
+    # RFC-AITP-0008 §1.4: a consuming peer SHOULD poll. Without a cadence a
+    # staleness deadline is either meaningless (nothing refreshes) or a time
+    # bomb for a long-running scenario.
+    revocation_poll_secs: int = 60
     cp_timeout_ms: int = 5000
     anthropic_api_key: str = ""
     openai_api_key: str = ""
