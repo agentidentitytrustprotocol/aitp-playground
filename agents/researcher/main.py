@@ -102,10 +102,11 @@ app.include_router(build_admin_router(
         "research.query": do_research,
         "research.deep": do_deep_research,
     },
-    # Closure over server.manifest_json so /admin/enroll-with-cp sends
-    # the *current* manifest — after a rotate-keys call this reflects
-    # the new identity automatically.
-    manifest_provider=lambda: server.manifest_json,
+    # Bound to the freshness accessor, not the stored string, so
+    # /admin/enroll-with-cp sends the *current* manifest: it reflects a
+    # rotate-keys call automatically, and — since the CP verifies what it is
+    # sent — it is also re-minted before it can expire on a long-lived agent.
+    manifest_provider=server._fresh_manifest_json,
 ))
 
 

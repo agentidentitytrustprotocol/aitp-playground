@@ -160,8 +160,38 @@ AITP_LLM_E2E=1 PLAYGROUND_URL=http://localhost:8000 \
   uv run pytest tests/integration/test_llm_e2e.py -v
 ```
 
-…or, more typically, inside the Dockerized stack — see
-[docker.md](docker.md):
+…or, more typically, inside the Dockerized stack — see [docker.md](docker.md).
+
+### When the Dockerized e2e stack runs
+
+| Event | Runs? | Why |
+|-------|-------|-----|
+| Push to `main` | yes | standing regression check |
+| PR touching `uv.lock` | yes | the SDK pin moved — this is the cross-implementation check, and it has to happen **before** merge |
+| Any other PR | no | ~6 minutes and two sibling repo checkouts; `build-and-push` already validates the Dockerfile and `ci.yml` runs the unit suite |
+
+The filter is `uv.lock` alone: uv mirrors a declared specifier into the lock's
+`requires-dist` metadata, so any dependency edit in `pyproject.toml` necessarily
+moves `uv.lock` too — while `[tool.ruff]` and the LLM extras, which live in the
+same file and change for unrelated reasons, do not.
+
+The pin trigger exists because `auto-merge.yml` runs on `pull_request` and delegates to
+`aitp-ci`'s shared auto-merge: a green bump PR merges unattended. Post-merge e2e *detects* a
+signer/verifier disagreement; pre-merge e2e *prevents* one. A `paths-filter` is used rather
+than a branch-name match on the bump bot's convention, because it also catches a hand-edited
+pin.
+
+**Caveat, tracked as `PENDING.md` P7:** this job is not yet in `main`'s required status
+checks, so it currently *runs* pre-merge without *blocking* merge.
+
+If this job goes red because the control-plane half of a coordinated flip has not shipped,
+that is the design working — sequence the rollout rather than disabling the job.
+
+The stack builds the playground image on the default `AITP_SDK_SOURCE=pypi`
+path, so it exercises the `aitp-sdk` version `uv.lock` pins — and
+`test_sdk_version_matches_lock` asserts exactly that, rather than trusting it. To run the stack against an unreleased `../aitp-rs` working tree
+instead, add `--build-arg AITP_SDK_SOURCE=path` (or set it in the compose
+`args:` block):
 
 ```bash
 cp .env.example .env && $EDITOR .env    # set OPENAI_API_KEY

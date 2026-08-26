@@ -57,8 +57,13 @@ sibling wins.
   `aitp-rs/bindings/aitp-py` and published to PyPI under the
   distribution name `aitp-sdk` (the import name stays `aitp`). All AITP
   protocol logic — keygen, manifests, handshake, TCT verify, delegation —
-  goes through it. This service **never reimplements** protocol logic;
-  if you find yourself wanting to parse a TCT, that's a bug.
+  goes through it. This service **never reimplements** protocol logic: no
+  canonicalization, no signing, and every trust decision is an SDK verify
+  call. Reading JSON out of an artifact is not the same thing and is fine in
+  a few named places (`decode_claims` for a precise 403, a verified manifest
+  body) — see
+  [aitp-integration.md § Where the SDK is actually called](aitp-integration.md).
+  What would be a bug is *deciding* anything from those reads.
 - `aitp-playground` is the service in this repo. It orchestrates
   scenarios, hosts agents, and exposes a small HTTP API.
 - "Agent" is overloaded:

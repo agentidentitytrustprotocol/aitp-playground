@@ -6,18 +6,27 @@ metadata:
   version: 1.0.0
   name: Revocation via Control Plane (RFC-AITP-0008)
   summary: >
-    End-to-end revocation propagation through the Control Plane.
+    Revocation propagation through the Control Plane.
     Researcher establishes trust with writer; writer issues a TCT and the
     researcher's first call succeeds. Researcher then revokes the writer's
     TCT and the engine *also* posts the jti to the CP's
     /api/revocation/entries. The writer pulls the updated revocation list
-    from /.well-known/aitp-revocation-list into its local deny-set, so its
-    own follow-up probe is rejected — not because researcher told it
-    directly, but because the CP advertised the revocation publicly.
+    from /.well-known/aitp-revocation-list into its local deny-set.
 
-    Demonstrates the federation story: any peer that consults the CP list
-    learns about revoked TCTs without needing a back-channel to the
-    issuer.
+    Read the final probe carefully — it proves less than it looks like it
+    does. `blocked_call` is writer -> researcher, so its 403 comes from the
+    *researcher's* local deny-set (set directly by /admin/revoke-tct), and it
+    would fire identically with the whole CP path broken. The writer's
+    CP-derived deny-set is never consulted on that call: /admin/invoke
+    attaches the held TCT unconditionally, and a deny-set is only read by the
+    peer serving a capability. So what the CP half demonstrates is that the
+    revocation *data* reaches an unrelated peer — visible as
+    `audience_revoked_count` and the `revocation.list_fetched` event — not
+    that it changes an enforcement outcome anywhere in this run.
+
+    Two gaps sit behind that, both tracked: the fetched snapshot's signature
+    is not verified (aitp-playground#46, PENDING.md P8), and no step drives a
+    call *into* the writer to make its refreshed deny-set decide something.
   tags: [revocation, rfc-0008, control-plane, federation, intra-org]
 
 spec:
@@ -66,9 +75,13 @@ spec:
         description: >
           Researcher revokes writer's TCT locally AND publishes the jti to
           the CP's /api/revocation/entries. The engine then asks the
-          writer (the audience) to refresh its view from the signed
+          writer (the audience) to refresh its view from
           /.well-known/aitp-revocation-list, so the writer fails-closed
           on this jti even though the issuer never called it back.
+
+          The CP signs that snapshot. The playground does not yet verify
+          the signature (aitp-playground#46), so what this step currently
+          demonstrates is propagation, not authenticated propagation.
 
       - id: blocked_call
         type: capability_probe

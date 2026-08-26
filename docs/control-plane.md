@@ -50,7 +50,8 @@ straight:
    projections surfaced under `/cp/*`.
 2. **Agent workers** (`agents/base/agent_admin.py`) — an agent talks to
    the CP *directly* for self-enrollment (`enroll_with_cp`) and to pull
-   the signed revocation list (`refresh-revocations`). The playground
+   the revocation list (`refresh-revocations`) — the CP signs it, and the
+   playground does not yet verify that signature (`PENDING.md` P8). The playground
    never enrolls on an agent's behalf; it pokes the agent's `/admin`
    route and the agent makes the call itself (the same boundary rule as
    the AITP protocol — see [aitp-integration.md](aitp-integration.md)).
@@ -113,7 +114,7 @@ disabled. Full field reference is in [scenarios.md](scenarios.md#workflow-steps)
 | Step type | What it does | Demo scenario |
 | --- | --- | --- |
 | `enroll_with_cp` | Agent self-enrolls: `POST /api/registry/enroll` to mint a one-time bearer token, then `POST /api/registry/agents` with that token + its manifest. | `intra-org/external-enrollment` |
-| `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries`, then the audience pulls the updated signed list from `/.well-known/aitp-revocation-list`. | `intra-org/revocation-via-cp` |
+| `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries`, then the audience pulls the updated list from `/.well-known/aitp-revocation-list`. The CP signs that snapshot; the playground does not yet check the signature (`aitp-playground#46`, `PENDING.md` P8) — so today the audience trusts the transport, not the issuer. | `intra-org/revocation-via-cp` |
 | `cp_subscribe_webhook` | `POST /api/webhooks` pointing at this run's `/webhooks/cp/{run_id}` receiver; stores the returned secret on the run record for HMAC verification. | `intra-org/webhook-subscription` |
 | `cp_provision_trust_anchor` | `upsert_pinned_key` + optional `upsert_trust_anchor` (OIDC issuer) for an agent under a namespace, then reads them back. | `intra-org/cp-trust-anchor-provisioning` |
 | `cp_delegation_tree` | Flushes the run's events to the CP (awaiting the ingest, so the projection is populated mid-run), then walks a delegator's chain via `GET /api/delegations` (CP's recursive `root_jti` query) to show the chain as the CP observed it. | `intra-org/cp-delegation-tree` |
@@ -194,10 +195,17 @@ out to webhooks, is the CP's
 - The playground **never** signs revocation lists, mints CP bearer tokens,
   or canonicalizes CP payloads — agents and the CP own that. The
   playground only orchestrates *when* those calls happen.
+- It also does not yet **verify** the revocation snapshot it consumes. See
+  `aitp-playground#46`; it needs `aitp.verify_revocation_list`, arriving in
+  `aitp-sdk` 0.6.0 (`aitp-rs#90`, still open).
 - The CP is a separate repo (`aitp-control-plane`); its API contract is
   the source of truth for the endpoint shapes above. The
   envelope-tolerant parsing in `CpClient` exists precisely so small CP
-  shape changes don't break the demo.
+  shape changes don't break the demo. **That tolerance becomes a liability
+  the moment the signature is checked** — a response shape the parser
+  accepts but the verifier did not sign over is a downgrade path. Tighten
+  the parse to the exact RFC-AITP-0008 §1.5 envelope in the same change that
+  turns verification on, rather than leaving two accepted shapes.
 
 ## Where to read next
 

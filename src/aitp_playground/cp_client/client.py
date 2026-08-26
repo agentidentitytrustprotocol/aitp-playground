@@ -205,7 +205,11 @@ class CpClient:
 
     async def fetch_revocation_list(self) -> list[str]:
         """GET /.well-known/aitp-revocation-list — return the list of revoked
-        jtis from the signed envelope. Returns [] when CP is disabled or the
+        jtis from the envelope. **The signature is not checked** — the CP
+        signs this snapshot and we do not yet verify it, so the deny-set
+        this populates is only as trustworthy as the transport that
+        delivered it (aitp-playground#46, PENDING.md P8). Returns [] when
+        CP is disabled or the
         call failed.
 
         The well-known endpoint is public on the CP; no bearer header is

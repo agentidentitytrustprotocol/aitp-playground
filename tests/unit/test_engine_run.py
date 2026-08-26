@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
+import aitp
 import httpx
 import pytest
 
@@ -51,6 +52,26 @@ _SPKI_WRONG_PIN = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 # --------------------------------------------------------------------------- #
 # fakes
 # --------------------------------------------------------------------------- #
+
+
+_FAKE_AGENT_MANIFESTS: dict[int, str] = {}
+
+
+def _fake_agent_manifest(port: int) -> str:
+    """A genuinely signed ManifestEnvelope for a fake agent on `port`.
+
+    Cached per port so repeat fetches are byte-stable within a run.
+    """
+    cached = _FAKE_AGENT_MANIFESTS.get(port)
+    if cached is None:
+        agent = aitp.AitpAgent.generate()
+        cached = agent.build_manifest(
+            display_name=f"fake-{port}",
+            handshake_endpoint=f"http://localhost:{port}/aitp/handshake/hello",
+            offered_caps=["cap.a"],
+        )
+        _FAKE_AGENT_MANIFESTS[port] = cached
+    return cached
 
 
 class _AgentHttpHandler:
@@ -116,9 +137,12 @@ class _AgentHttpHandler:
                 "aid": "aid-enrolled", "registered_at": "2026-07-07T00:00:00Z",
             })
         if path == "/.well-known/aitp-manifest":
-            return httpx.Response(200, json={
-                "manifest": {"identity_hint": {"public_key": "PK-b64"}},
-            })
+            # A REAL minted manifest, not a hand-built dict: the engine now
+            # verifies this envelope before reading key material out of it
+            # (cp_provision_trust_anchor pins the key into the CP's trust
+            # store). A fabricated manifest no longer verifies — which is the
+            # interlock working, so the fixture mints instead of relaxing it.
+            return httpx.Response(200, text=_fake_agent_manifest(port))
         if path == "/admin/renew-tct":
             return httpx.Response(200, json={"jti": "jti-renewed", "expires_at": 4102444800})
         if path == "/admin/tct-cache-stats":
@@ -873,9 +897,13 @@ async def test_cp_provision_trust_anchor_registers_key_and_issuer(agent_http) ->
     assert out["namespace"] == "test"  # defaults to the pack slug
     assert out["pinned_key_count"] == 1
     assert out["trust_anchor_count"] == 1
-    # The pinned key comes from the agent's published manifest.
+    # The pinned key comes from the agent's published manifest — which the
+    # engine now verifies before reading it. Assert it against the manifest
+    # actually served rather than a hard-coded literal, so the test cannot
+    # drift from the fixture.
+    served = json.loads(_fake_agent_manifest(env.supervisor.agents["alice"].port))
     assert env.cp.pinned[0]["aid"] == "aid-alice"
-    assert env.cp.pinned[0]["pubkey"] == "PK-b64"
+    assert env.cp.pinned[0]["pubkey"] == served["manifest"]["identity_hint"]["public_key"]
     assert env.cp.anchors[0]["issuer_url"] == "https://issuer.test"
     assert "cp.trust_anchor.provisioned" in _event_types(result)
 

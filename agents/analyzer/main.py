@@ -78,7 +78,7 @@ app.include_router(build_admin_router(
     revoked_jtis=_revoked_jtis,
     issued_tcts=server._issued_tcts,
     capabilities={"analyze.data": do_analyze},
-    manifest_provider=lambda: server.manifest_json,
+    manifest_provider=server._fresh_manifest_json,
 ))
 
 

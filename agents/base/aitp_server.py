@@ -6,16 +6,22 @@ module and does `app.include_router(server.router)`.
 from __future__ import annotations
 
 import json
+import logging
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import aitp
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from bootstrap import get_manifest_json
 from oidc import OidcContext, peer_aid_from_hello_envelope
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
+
+logger = logging.getLogger(__name__)
 
 
 def ready_lifespan(*, aid: str, port: int):
@@ -46,6 +52,15 @@ class AitpServer:
     ) -> None:
         self.agent = agent
         self.manifest_json = manifest_json
+        # When the served manifest was minted, so it can be re-signed before
+        # its TTL elapses — see _fresh_manifest_json. The lock serializes
+        # re-minting against /admin/rotate-keys: `get_manifest` runs in a
+        # threadpool (sync route) while `rotate_keys` runs on the event loop,
+        # so without it a re-mint that started before a rotation could finish
+        # after it and overwrite the new-key manifest with an old-key one —
+        # served for up to half a TTL, failing every handshake against it.
+        self._manifest_minted_at = time.time()
+        self._manifest_lock = threading.Lock()
         self.port = port
         self.bootstrap = bootstrap
         self.did_web_host = did_web_host
@@ -80,12 +95,63 @@ class AitpServer:
             )
         return self.agent.new_responder()
 
+    def _fresh_manifest_json(self) -> str:
+        """The served manifest, re-minted before it can expire.
+
+        A manifest is signed with a `ttl_secs` lifetime (default 3600,
+        `bootstrap.py:32`) and was previously minted once at construction and
+        served verbatim for the life of the process. Nothing noticed, because
+        nothing in this family verified a peer manifest.
+
+        Phase 2B makes peers verify, and `verify_manifest_json` checks
+        `expires_at` against the wall clock with no override
+        (`bindings/aitp-py/src/manifest.rs`). A hosted agent alive longer than
+        its TTL would therefore serve a manifest every verifying peer rejects
+        — it would drop off the network an hour after start-up. Re-minting is
+        the fix for the actual defect: serving a credential past its own stated
+        lifetime.
+
+        Re-minting keeps the AID (same key, so same self-certifying
+        identifier); only `published_at`, `expires_at` and `signature` move.
+        Peers that pin the AID are unaffected. Rotation (`/admin/rotate-keys`)
+        still replaces the whole thing, key included.
+        """
+        cfg = self.bootstrap.get("aitp", {})
+        ttl = int(cfg.get("ttl_secs", 3600))
+        # Re-mint once past half-life rather than at the edge, so a peer that
+        # fetches and verifies a moment later is never racing the deadline.
+        if time.time() < self._manifest_minted_at + (ttl / 2):
+            return self.manifest_json
+        with self._manifest_lock:
+            # Re-check under the lock: a concurrent request (or a rotation)
+            # may already have refreshed it.
+            if time.time() < self._manifest_minted_at + (ttl / 2):
+                return self.manifest_json
+            agent = self.agent
+            try:
+                minted = get_manifest_json(agent, self.bootstrap)
+            except Exception:  # noqa: BLE001
+                # Serving the previous manifest is strictly better than serving
+                # nothing; it stays valid until the full TTL elapses, which
+                # leaves a half-TTL window for the next request to succeed.
+                logger.exception("manifest re-mint failed; serving the previous one")
+                return self.manifest_json
+            if agent is not self.agent:
+                # A rotation landed while we were signing. The rotation's own
+                # manifest is authoritative; ours is signed by a key this agent
+                # no longer holds. Discard it.
+                logger.info("manifest re-mint superseded by a key rotation")
+                return self.manifest_json
+            self.manifest_json = minted
+            self._manifest_minted_at = time.time()
+        return self.manifest_json
+
     def _build_router(self) -> APIRouter:
         router = APIRouter()
 
         @router.get("/.well-known/aitp-manifest")
         def get_manifest() -> Response:
-            return Response(self.manifest_json, media_type="application/json")
+            return Response(self._fresh_manifest_json(), media_type="application/json")
 
         @router.post("/admin/rotate-keys")
         async def rotate_keys(request: Request) -> Response:
@@ -120,8 +186,10 @@ class AitpServer:
                 manifest_kwargs["oidc_issuer"] = cfg.get("oidc_issuer")
                 manifest_kwargs["oidc_subject"] = cfg.get("oidc_subject")
             new_manifest = new_agent.build_manifest(**manifest_kwargs)
-            self.agent = new_agent
-            self.manifest_json = new_manifest
+            with self._manifest_lock:
+                self.agent = new_agent
+                self.manifest_json = new_manifest
+                self._manifest_minted_at = time.time()
             self._sessions.clear()
 
             await emit_event(

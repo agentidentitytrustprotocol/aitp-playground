@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import aitp
 import httpx
 import jsonschema
 
@@ -576,7 +577,23 @@ class ScenarioRunner:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 mr = await client.get(ra.manifest_url)
                 mr.raise_for_status()
+                # Verify before reading key material out of the envelope. This
+                # value is pinned into the control plane's trust store, so an
+                # unverified read here would let whatever answered at
+                # manifest_url choose the key the CP trusts for this agent.
+                # The runner launched this agent and knows its AID, so unlike
+                # the peer-manifest sites we can check identity too, not just
+                # authenticity.
+                aitp.verify_manifest_json(mr.text)
                 manifest = mr.json().get("manifest", {})
+            # NOTE: this establishes authenticity (the manifest was minted by
+            # the holder of the AID it declares), not identity — it does not
+            # yet assert that AID equals `ra.aid`, the agent the runner
+            # launched. Without that comparison, whatever answers at this port
+            # gets its key pinned in the CP *under ra.aid*. The pin belongs
+            # with Phase 6's expected-issuer work, which is where the fixture
+            # rework it requires (the fake supervisor issues synthetic AIDs)
+            # is in scope. Tracked in ASSUMPTIONS.md.
             pubkey = (manifest.get("identity_hint") or {}).get("public_key")
             pinned = None
             if pubkey:
@@ -796,7 +813,6 @@ class ScenarioRunner:
             # No agent involved — the playground runs the SDK directly so
             # the demo doesn't have to stand up TLS infrastructure.
             import base64
-            import aitp
 
             if not step.cert_der_b64 or step.pins is None:
                 raise PlaygroundError(

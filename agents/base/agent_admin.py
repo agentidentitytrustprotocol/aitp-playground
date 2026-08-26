@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable, Optional
 
+import aitp
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
@@ -23,6 +24,71 @@ from telemetry import emit_event
 
 CapabilityHandler = Callable[[Any], Awaitable[Any]]
 ManifestProvider = Callable[[], str]
+
+
+async def _verify_peer_manifest(
+    envelope_json: str, source_url: str, bootstrap: dict[str, Any]
+) -> dict[str, Any]:
+    """Verify a fetched peer ManifestEnvelope, then return its inner manifest.
+
+    Every field this agent reads out of a peer manifest — the AID it delegates
+    to, the handshake endpoint it dials, the capabilities it requests — comes
+    from an unauthenticated HTTP fetch. Verifying the envelope first is what
+    makes those fields the peer's own claims rather than whatever answered at
+    that URL.
+
+    What this establishes, and what it does not: `verify_manifest_json` checks
+    the envelope signature against the key embedded in the manifest's own
+    `aid`. AITP AIDs are self-certifying, so that proves the manifest was
+    minted by the holder of that AID. It does **not** prove that AID is the
+    peer you meant — for `did:web` that binding comes from the DID document
+    (`trust/resolver.py`), which the federated stack resolves over plain HTTP
+    under `AITP_DIDWEB_INSECURE_HOSTS`. Verification here closes substitution
+    by anything that cannot produce a self-consistent envelope; it is not a
+    trust anchor.
+
+    Raises `HTTPException(502)` — the failure is in the upstream peer's
+    response, not in this agent's caller.
+    """
+    async def _reject(cause: str, detail: str) -> None:
+        # A verification failure must never be readable as a transport blip.
+        # The `cause` is the field that separates "the peer's manifest does not
+        # verify" from "the peer was unreachable" (which raises upstream and
+        # never reaches here) — the same fetch-vs-verify distinction Phase 6
+        # requires for revocation.
+        await emit_event(
+            "manifest.verify_failed",
+            bootstrap,
+            cause=cause,
+            source_url=source_url,
+        )
+        raise HTTPException(status_code=502, detail=detail)
+
+    try:
+        aitp.verify_manifest_json(envelope_json)
+    except Exception as exc:  # noqa: BLE001 — the SDK raises RuntimeError/ValueError
+        message = str(exc)
+        cause = "expired" if "expired" in message.lower() else "signature_invalid"
+        await _reject(
+            cause,
+            f"peer manifest from {source_url} failed verification ({cause}): "
+            f"{message}. Refusing to read an AID or endpoint out of an "
+            "unverified manifest.",
+        )
+    try:
+        envelope = json.loads(envelope_json)
+    except ValueError as exc:
+        await _reject(
+            "malformed",
+            f"peer manifest from {source_url} is not JSON: {exc}",
+        )
+    manifest = envelope.get("manifest") if isinstance(envelope, dict) else None
+    if not isinstance(manifest, dict):
+        await _reject(
+            "malformed",
+            f"peer manifest from {source_url} has no `manifest` body",
+        )
+    return manifest
 
 
 def build_admin_router(
@@ -77,7 +143,11 @@ def build_admin_router(
             manifest_res.raise_for_status()
             peer_manifest_json = manifest_res.text
 
-            peer_manifest = json.loads(peer_manifest_json)["manifest"]
+            # Verify BEFORE reading any field out of the envelope — the AID
+            # below is handed straight to the handshake as the peer identity.
+            peer_manifest = await _verify_peer_manifest(
+                peer_manifest_json, peer_manifest_url, bootstrap
+            )
             # Wire field is `offered_capabilities` (see aitp-manifest types).
             offered = list(peer_manifest.get("offered_capabilities", []))
             if requested_grants is None or len(requested_grants) == 0:
@@ -416,7 +486,12 @@ def build_admin_router(
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.get(delegatee_manifest_url)
             r.raise_for_status()
-        delegatee_manifest = r.json()["manifest"]
+        # Verify BEFORE reading the AID: this value is the delegation's
+        # recipient. Anything that can answer at delegatee_manifest_url and is
+        # not checked here receives the delegation, scope and all.
+        delegatee_manifest = await _verify_peer_manifest(
+            r.text, delegatee_manifest_url, bootstrap
+        )
         delegatee_aid = delegatee_manifest["aid"]
 
         token_json = agent.build_delegation(
@@ -600,7 +675,7 @@ def build_admin_router(
 
     @router.post("/refresh-revocations")
     async def refresh_revocations(request: Request) -> dict[str, Any]:
-        """Pull the Control Plane's signed revocation list and merge every
+        """Pull the Control Plane's revocation list and merge every
         jti into this agent's local deny-set.
 
         This is how a TCT holder learns that its token was revoked: the

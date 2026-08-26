@@ -14,13 +14,22 @@ dependencies = [
   # scenario coverage, build the wheel with experimental features
   # (`maturin ... --features experimental`); the service detects what's
   # available at runtime via GET /capabilities.
-  # Floor pinned to 0.3.0 = the compact-JWS SDK (protocol `aitp/0.2`); the
-  # pre-0.3 (JCS, protocol `aitp/0.1`) wheels are wire-incompatible. To
-  # develop against unreleased SDK source instead of the PyPI wheel, add a
+  # The floor records wire compatibility, not "the newest we happened to test".
+  # Two breaking changes are behind it:
+  #   0.3.0 — the compact-JWS SDK (protocol `aitp/0.2`). The pre-0.3 wheels
+  #     (JCS, protocol `aitp/0.1`) are wire-incompatible.
+  #   0.5.0 — the JCS signing input moved from the transport wrapper to the
+  #     inner artifact body for revocation snapshots and session trust
+  #     bundles. A snapshot signed by <=0.4.x does not verify under >=0.5.0
+  #     and vice versa; aitp-rs implements no dual-accept, so there is no
+  #     version that reads both. Resolving 0.4.x here would not fail loudly —
+  #     it would fail as a signature mismatch that reads like a network
+  #     problem. The floor is what turns that into a resolver error.
+  # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.4.0",
+  "aitp-sdk>=0.5.0",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",

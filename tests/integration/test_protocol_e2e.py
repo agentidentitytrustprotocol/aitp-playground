@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import os
 import time
+import tomllib
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -32,8 +34,56 @@ PLAYGROUND_URL = os.environ.get("PLAYGROUND_URL", "http://localhost:8000")
 CP_URL = os.environ.get("CP_URL", "http://localhost:4000")
 CP_API_KEY = os.environ.get("CP_API_KEY", "")
 
+# Baked into the image next to the app (Dockerfile stage 2) so the pin the
+# container was built from travels with it. Falls back to the repo copy when
+# the suite runs on a host rather than in the tests container.
+_LOCK_PATH = (
+    Path("/app/uv.lock")
+    if Path("/app/uv.lock").exists()
+    else Path(__file__).resolve().parents[2] / "uv.lock"
+)
+
 _TERMINAL = {"success", "failed", "cancelled"}
 _RUN_DEADLINE_SECS = 180
+
+
+def test_sdk_version_matches_lock() -> None:
+    """The running container must be the SDK this repo pins.
+
+    Until the Dockerfile grew `AITP_SDK_SOURCE`, this could not be asserted at
+    all: the image always compiled the SDK from a sibling `aitp-rs` checkout at
+    whatever `main` was, so `uv.lock` described nothing the container actually
+    ran and a pin/behaviour mismatch was invisible in both directions. An e2e
+    stack that cannot observe the version under test does not give weak
+    evidence — it gives misleading evidence, because green reads as coverage.
+
+    This is deliberately an assertion and not a log line. `docker.yml` printing
+    the version proves only that someone could have read it.
+    """
+    with open(_LOCK_PATH, "rb") as fh:
+        lock = tomllib.load(fh)
+    pinned = [p for p in lock["package"] if p["name"] == "aitp-sdk"]
+    assert pinned, f"aitp-sdk not found in {_LOCK_PATH}"
+    # uv can emit two `[[package]]` blocks for one name under conflicting
+    # resolution markers. It does not today, and if it ever does, silently
+    # taking the first would make this assertion compare against an arbitrary
+    # one of them — so refuse rather than guess.
+    assert len(pinned) == 1, (
+        f"{_LOCK_PATH} has {len(pinned)} aitp-sdk entries; this assertion "
+        "cannot say which one the image should be running"
+    )
+    locked_version = pinned[0]["version"]
+
+    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0) as c:
+        caps = c.get("/capabilities").raise_for_status().json()
+
+    assert caps["sdk_available"] is True, "the container has no usable aitp SDK"
+    assert caps["version"] == locked_version, (
+        f"the running playground reports aitp-sdk {caps['version']!r} but "
+        f"uv.lock pins {locked_version!r}. Either the image was built with "
+        "AITP_SDK_SOURCE=path (unreleased sibling source — never the default "
+        "for CI e2e), or the pin and the image have drifted apart."
+    )
 
 
 @dataclass
