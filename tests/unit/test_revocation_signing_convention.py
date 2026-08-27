@@ -278,3 +278,49 @@ def test_a_tagged_signature_is_rejected_rather_than_silently_mangled(
     tagged = {**minted_envelope, "signature": "p256." + minted_envelope["signature"]}
     with pytest.raises(AssertionError, match="algorithm tag"):
         _verifies_under(tagged, "inner_body")
+
+
+def test_the_vendored_canonicalizer_has_not_drifted_from_its_source() -> None:
+    """`_jcs_reference.py` is a copy. Copies rot; this is the guard.
+
+    It exists because `aitp-verifier` is not installable from PyPI, so the
+    oracle had to be vendored rather than depended on. The risk that carries
+    is not that the copy is wrong today — it is that the original changes and
+    nobody notices, leaving this suite verifying against a stale RFC 8785
+    implementation while believing it is independent.
+
+    Skipped when the sibling checkout is absent, because CI does not check it
+    out and a missing sibling is not a defect. A *present* sibling that
+    disagrees is.
+    """
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[2].parent
+        / "aitp-verifier-py"
+        / "aitp_verifier"
+        / "jcs.py"
+    )
+    if not source.exists():
+        pytest.skip(f"sibling checkout not present at {source}")
+
+    vendored = pathlib.Path(__file__).resolve().parent / "_jcs_reference.py"
+
+    def _body(text: str) -> str:
+        """Everything from the first import on — i.e. the code, not the header.
+
+        The vendored file deliberately replaces the module docstring with a
+        provenance note explaining why it is a copy, so the docstrings differ
+        by design. The code below must not.
+        """
+        marker = "from __future__ import annotations"
+        assert marker in text, "expected a __future__ import to anchor on"
+        return text[text.index(marker):]
+
+    assert _body(vendored.read_text()) == _body(source.read_text()), (
+        f"{vendored.name} has drifted from {source} — the oracle this suite "
+        "verifies against is no longer the implementation it was copied from. "
+        "Re-copy it (keeping the provenance header) or, if aitp-verifier has "
+        "since been published to PyPI, delete the copy and take a dev-group "
+        "dependency instead."
+    )

@@ -257,6 +257,19 @@ def _server(ttl_secs: int = 3600):
     )
 
 
+def _age_manifest(server, seconds: int) -> None:
+    """Back-date the served manifest so its half-life has notionally passed.
+
+    The re-mint deadline is read from the manifest's own `published_at` /
+    `expires_at` rather than a field on the server, so the clock is driven by
+    ageing the artifact — which is also what a real elapsed hour would do.
+    """
+    doc = json.loads(server.manifest_json)
+    doc["manifest"]["published_at"] = int(doc["manifest"]["published_at"]) - seconds
+    doc["manifest"]["expires_at"] = int(doc["manifest"]["expires_at"]) - seconds
+    server.manifest_json = json.dumps(doc)
+
+
 def test_served_manifest_is_stable_while_fresh() -> None:
     """No churn on the hot path — a new signature per request would be waste."""
     server = _server()
@@ -272,7 +285,7 @@ def test_served_manifest_is_reminted_past_half_life_and_still_verifies() -> None
     server = _server(ttl_secs=3600)
     before = server._fresh_manifest_json()
 
-    server._manifest_minted_at -= 1801  # just past ttl/2
+    _age_manifest(server, 1801)  # just past ttl/2
     after = server._fresh_manifest_json()
 
     assert after != before, "manifest was not re-minted past its half-life"
@@ -304,14 +317,33 @@ def test_remint_failure_serves_the_previous_manifest_rather_than_nothing(
     import aitp_server as aitp_server_mod
 
     server = _server(ttl_secs=3600)
-    previous = server._fresh_manifest_json()
-    server._manifest_minted_at -= 1801
+    server._fresh_manifest_json()
+    _age_manifest(server, 1801)
+    # Captured AFTER ageing: the aged bytes are what "the previous manifest"
+    # means at the moment the re-mint is attempted.
+    previous = server.manifest_json
+
+    calls = 0
 
     def _boom(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
         raise RuntimeError("signing unavailable")
 
     monkeypatch.setattr(aitp_server_mod, "get_manifest_json", _boom)
     assert server._fresh_manifest_json() == previous
+
+    # And the cooldown holds: a second request must NOT retry the signature.
+    # Without it every subsequent request retakes the lock, re-signs and logs
+    # a full traceback — a self-inflicted stall the moment signing moves
+    # behind a KMS.
+    assert server._fresh_manifest_json() == previous
+    assert calls == 1, f"re-mint retried during the cooldown ({calls} attempts)"
+
+    # Past the cooldown it tries again rather than giving up for good.
+    server._manifest_remint_cooldown_until = 0.0
+    assert server._fresh_manifest_json() == previous
+    assert calls == 2
 
 
 def test_a_rotation_during_a_remint_does_not_resurrect_the_old_key() -> None:
@@ -324,7 +356,7 @@ def test_a_rotation_during_a_remint_does_not_resurrect_the_old_key() -> None:
     served for up to half a TTL, failing every handshake against it.
     """
     server = _server(ttl_secs=3600)
-    server._manifest_minted_at -= 1801
+    _age_manifest(server, 1801)
 
     rotated_agent = aitp.AitpAgent.generate()
     rotated_manifest = rotated_agent.build_manifest(
@@ -342,7 +374,7 @@ def test_a_rotation_during_a_remint_does_not_resurrect_the_old_key() -> None:
         minted = original(agent, bootstrap)
         server.agent = rotated_agent
         server.manifest_json = rotated_manifest
-        server._manifest_minted_at = time.time()
+        # the rotation's manifest is fresh by construction
         return minted
 
     aitp_server_mod.get_manifest_json = _rotate_midway

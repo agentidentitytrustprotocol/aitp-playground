@@ -30,8 +30,8 @@ Options: fail the suite outright when the surface is missing (turns a `--no-defa
 wheel into a hard CI failure), or add `-ra` to addopts (widens output for every skip in the
 repo). Neither is obviously right; that is why it is here rather than decided.
 
-## P3 — `aitp-verifier` is vendored, not depended on
-**From:** Phase 2 · **Blocks:** nothing · **Cost:** delete a file, add a dev dependency
+## P3 — `aitp-verifier` is vendored, not depended on — **risk mitigated 2026-08-26**
+**From:** Phase 2 · **Blocks:** nothing · **Still open because:** the swap needs `aitp-verifier` published, which needs a release pipeline that repo does not have
 
 `tests/unit/_jcs_reference.py` is a 201-line verbatim copy of
 `aitp-verifier-py/aitp_verifier/jcs.py`, because that package is not on PyPI (404) and a
@@ -111,8 +111,8 @@ Phase 3 criteria 2 and 4 are therefore **met**, on `linux/amd64`, on the `pypi` 
 `revocation-via-cp` included. The arm64 control-plane build fault described above is real and
 local-only; it did not reproduce in CI. Nothing further to do.
 
-## P6 — `aitp-cp` is a symlink to `aitp-control-plane`
-**From:** Phase 3 · **Blocks:** nothing · **Cost:** awareness only
+## ~~P6 — `aitp-cp` is a symlink to `aitp-control-plane`~~ — **CLOSED 2026-08-26**
+**From:** Phase 3 · **Closed by:** documented in `internal_docs/docker.md`, where someone debugging a local-vs-CI divergence in the CP image will actually look
 
 `aitp-cp` → `aitp-control-plane` (a symlink, not a second checkout). Anything that changes
 the branch of one changes what the other builds — `docker-compose.test.yml` builds the CP
@@ -203,27 +203,55 @@ not just authenticity — it needs the same real-AID fixture rework) and P4 (`ex
 currently classified by substring-matching an SDK message; PR #90's typed `.code` removes the
 need).
 
-## P9 — `revocation-via-cp` never enforces from the CP-derived deny-set
-**From:** Phase 7 (found while correcting the docs) · **Blocks:** nothing · **Cost:** one scenario step
+## P9 — the CP-derived deny-set cannot change an outcome, only a diagnosis
+**From:** Phase 7 · **Blocks:** nothing · **Status:** investigated 2026-08-26 — **the original
+entry's fix was wrong**, and this is a design question rather than a missing step
 
-The scenario's summary claimed the writer's follow-up probe is rejected *because* the CP
-advertised the revocation. It is not. `blocked_call` is **writer → researcher**, so its 403
-comes from the **researcher's local** deny-set, written directly by `/admin/revoke-tct`. It
-would fire identically with the entire CP path broken.
+The entry originally said `revocation-via-cp` was "one step away" from demonstrating
+enforcement-from-propagation: add a call *into* the writer after it refreshes from the CP, so
+its CP-derived deny-set produces the 403. **That step cannot work**, and the reason is
+structural.
 
-The writer's CP-derived deny-set is never consulted on that call: `/admin/invoke` attaches the
-held TCT unconditionally, and a deny-set is only read by the peer *serving* a capability
-(`verify_capability_tct`). So the CP half is observable only as `audience_revoked_count` and
-the `revocation.list_fetched` event — the data arrives, and nothing in the run depends on it.
+`verify_capability_tct` rejects any TCT whose `iss` is not this agent
+(`agents/base/aitp_server.py`, the issuer-AID guard). So:
 
-The summary and the docs that echoed it now say this plainly. What is still missing is the
-step that would make the claim true: **a call INTO the writer, presenting the revoked jti,
-after the writer has refreshed from the CP** — so the writer's CP-derived deny-set is the
-thing that produces the 403. That is the federation story the scenario is named for, and it is
-one step away.
+- an agent only ever honours TCTs **it issued** — and for those it already knows the
+  revocation locally, because it is the one that revoked them;
+- a **foreign** TCT is rejected whatever the deny-set says.
 
-Worth doing together with Phase 6: once snapshots are verified, this step is what proves
-verification is load-bearing rather than decorative.
+Verified empirically rather than argued. Presenting the same foreign TCT to an agent, with and
+without the jti in its CP snapshot:
+
+```
+CP entry present -> 403  tct revoked (cp-snapshot): jti=da4f386b-…
+CP entry absent  -> 403  tct issuer mismatch: aid:pubkey:qxb5YQNB…
+```
+
+Same outcome, different explanation. The CP snapshot moves the *diagnosis*, never the
+*decision*. The delegation redeem path does not consult the deny-set at all, so it is not an
+alternative site either.
+
+**What this means.** Snapshot verification (Phase 6) is still worth having — it stops a
+forged or suppressed list from corrupting an agent's view, and the view is real: it is
+reported in `revocation.list_fetched` and observable as `audience_revoked_count`. But the
+"federation story" the scenario narrates — *a peer that consults the CP list refuses a token
+without asking the issuer* — is not reachable while only the issuer honours its own TCTs.
+
+**The real design question, for a human:** where should a CP-published revocation actually
+bite? Three candidates, none of them a one-line change:
+
+1. **Holder-side pre-flight** — a holder checks the CP list before presenting a TCT, so a
+   revoked token is never sent. Changes what `/admin/invoke` does.
+2. **Delegation-chain validation** — a redeemer validating a multi-hop chain checks every
+   intermediate jti against the CP list. This is the case where a third party genuinely needs
+   an issuer-independent source, and where RFC-AITP-0008's distribution model earns its keep.
+3. **Accept it as informational** — the snapshot exists for observability and for the
+   holder's own bookkeeping, and the scenario text says so. Cheapest, and closest to what the
+   code does today.
+
+The scenario text and the docs already describe the current behaviour accurately (Phase 7),
+so nothing is *claiming* more than it does. This entry is now a design decision awaiting an
+owner, not a task.
 
 ## P10 — Manifest re-mint: three refinements to the same trigger
 **From:** reconcile of the Phase 2B freshness decision (`DECISIONS.md` D-9) · **Blocks:** nothing
