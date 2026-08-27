@@ -52,6 +52,31 @@ jobs:
         # toolchain or maturin build needed.
         run: uv sync --locked
 
+      - name: Check out the independent verifier (drift source)
+        # `tests/unit/_jcs_reference.py` is a verbatim copy of
+        # aitp-verifier-py's canonicalizer, vendored because that package is
+        # not on PyPI and a path dependency would make this suite depend on a
+        # checkout CI does not have. Its independence from aitp-sdk is the
+        # whole point: a JCS check that runs against the SDK it is checking is
+        # self-consistent, which is exactly what let the 0.5.0 signing-input
+        # divergence survive a release.
+        #
+        # The drift guard compares the copy to its source and SKIPS when the
+        # source is absent — so without this step it was a permanent no-op in
+        # CI, catching drift only on a developer machine that happened to have
+        # both checkouts. Cloning here makes it a real gate, and against
+        # verifier HEAD rather than some released version, which is stricter
+        # than the dev-dependency this vendoring stands in for.
+        #
+        # Plain `git clone` rather than actions/checkout: the parent of
+        # $GITHUB_WORKSPACE is writable, but actions/checkout refuses paths
+        # outside the workspace. Public repo, so no token needed. A clone
+        # failure is a loud error, not a silent skip.
+        run: |
+          git clone --depth 1 \
+            https://github.com/agentidentitytrustprotocol/aitp-verifier-py \
+            "$(dirname "$GITHUB_WORKSPACE")/aitp-verifier-py"
+
       - name: Run unit + scenario tests with coverage
         run: |
           uv run coverage run -m pytest tests/unit tests/scenarios -q

@@ -208,6 +208,73 @@ async def test_malformed_input_is_its_own_cause(monkeypatch: pytest.MonkeyPatch)
     assert events[0][1]["cause"] in {"signature_invalid", "malformed"}
 
 
+async def test_the_cause_comes_from_the_code_not_the_message_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The P4 drift guard: `.code` is the contract, prose is not.
+
+    This previously read `"expired" in message.lower()`, which pinned the
+    SDK's wording as an expected value — the same bug class the 0.5.0
+    signing-input change exposed. A reworded upstream message would have
+    silently reclassified a stale manifest as a forged one, and the alert
+    that matters is the forged one.
+
+    So the error raised here says nothing about expiry in its text and
+    carries `code="expired"`. Under the old substring match this would have
+    been reported as `signature_invalid`.
+    """
+    import agent_admin
+
+    events: list[tuple[str, dict]] = []
+
+    async def _capture(event_type, _bootstrap, **fields):
+        events.append((event_type, fields))
+
+    class _Reworded(RuntimeError):
+        code = "expired"
+
+    def _raise(_envelope_json):
+        raise _Reworded("manifest verification failed: validity window elapsed")
+
+    monkeypatch.setattr(agent_admin, "emit_event", _capture)
+    monkeypatch.setattr(agent_admin.aitp, "verify_manifest_json", _raise)
+
+    with pytest.raises(HTTPException):
+        await _verify_peer_manifest("{}", "http://peer/m", _BOOTSTRAP)
+
+    assert events[0][1]["cause"] == "expired", (
+        "the cause was derived from the message text, not from `.code` — a "
+        f"reworded SDK message silently reclassified it: {events[0][1]}"
+    )
+
+
+async def test_an_untyped_non_value_error_is_unknown_not_guessed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absence of a code is reported honestly, never as an attack.
+
+    Defaulting an unrecognised failure to `signature_invalid` would page
+    someone about forgery every time an unrelated bug surfaced here.
+    """
+    import agent_admin
+
+    events: list[tuple[str, dict]] = []
+
+    async def _capture(event_type, _bootstrap, **fields):
+        events.append((event_type, fields))
+
+    def _raise(_envelope_json):
+        raise RuntimeError("something else went wrong entirely")
+
+    monkeypatch.setattr(agent_admin, "emit_event", _capture)
+    monkeypatch.setattr(agent_admin.aitp, "verify_manifest_json", _raise)
+
+    with pytest.raises(HTTPException):
+        await _verify_peer_manifest("{}", "http://peer/m", _BOOTSTRAP)
+
+    assert events[0][1]["cause"] == "unknown"
+
+
 def test_signature_is_a_body_member_for_manifests_unlike_revocation(
     peer: "aitp.AitpAgent",
 ) -> None:
