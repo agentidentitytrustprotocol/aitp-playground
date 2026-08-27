@@ -45,6 +45,25 @@ tree, pass `--build-arg AITP_SDK_SOURCE=path` (see
 Source: `Dockerfile`, `Dockerfile.dockerignore`,
 `docker-compose.yml`, `docker-compose.dev.yml`, `docker-compose.test.yml`.
 
+## `aitp-cp` is probably a symlink on your machine
+
+`docker-compose.test.yml` builds the control plane from `../aitp-cp`, but the repo on GitHub
+is `aitp-control-plane`. CI reconciles that by checking the repo out *into* a directory named
+`aitp-cp`; locally the usual setup is a symlink:
+
+```
+aitp-cp -> aitp-control-plane
+```
+
+Worth knowing before you debug a "works in CI, fails locally" divergence, because the two
+setups differ in one way that matters: **with a symlink there is a single working tree, so
+switching branches in `aitp-control-plane` silently changes which control plane the e2e stack
+builds.** CI has no such coupling — it checks out a fresh copy per path, always at the default
+branch.
+
+If a local stack run fails in the CP image and CI is green, check what
+`git -C ../aitp-control-plane branch --show-current` says before looking anywhere else.
+
 ## Why the build context is the parent directory
 
 `aitp-playground` and `aitp-rs` are sibling repos:

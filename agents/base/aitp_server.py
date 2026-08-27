@@ -27,6 +27,11 @@ from telemetry import emit_event
 
 logger = logging.getLogger(__name__)
 
+#: How long to wait after a failed manifest re-mint before trying again.
+#: The previous manifest stays valid for another half-TTL, so there is room
+#: to back off rather than retry on every single request.
+_MANIFEST_REMINT_COOLDOWN_SECS = 30
+
 
 def ready_lifespan(*, aid: str, port: int, server: "Optional[AitpServer]" = None):
     """FastAPI lifespan: signal readiness, and run the revocation poll.
@@ -79,14 +84,14 @@ class AitpServer:
     ) -> None:
         self.agent = agent
         self.manifest_json = manifest_json
-        # When the served manifest was minted, so it can be re-signed before
-        # its TTL elapses — see _fresh_manifest_json. The lock serializes
+        # Backoff after a failed re-mint; see _fresh_manifest_json. The lock
+        # serializes
         # re-minting against /admin/rotate-keys: `get_manifest` runs in a
         # threadpool (sync route) while `rotate_keys` runs on the event loop,
         # so without it a re-mint that started before a rotation could finish
         # after it and overwrite the new-key manifest with an old-key one —
         # served for up to half a TTL, failing every handshake against it.
-        self._manifest_minted_at = time.time()
+        self._manifest_remint_cooldown_until = 0.0
         self._manifest_lock = threading.Lock()
         self.port = port
         self.bootstrap = bootstrap
@@ -332,6 +337,24 @@ class AitpServer:
                 fail_mode=self.revocation_fail_mode,
             )
 
+    def _manifest_deadline(self, manifest_json: str) -> float:
+        """When the served manifest must be re-minted: its own half-life.
+
+        Read out of the manifest itself, not from config plus a timestamp.
+        The earlier version computed this from `bootstrap.ttl_secs` and a
+        `_manifest_minted_at` stamped in the constructor — for a manifest the
+        constructor did not mint. That was correct only because the agent
+        happens to mint milliseconds before constructing, with the same config,
+        and it breaks the moment either stops being true: a manifest loaded
+        from anywhere else, or a `ttl_secs` that disagrees with what was
+        actually baked in. The artifact carries both timestamps; asking it is
+        both simpler and impossible to desynchronise.
+        """
+        body = json.loads(manifest_json)["manifest"]
+        published_at = float(body["published_at"])
+        expires_at = float(body["expires_at"])
+        return published_at + (expires_at - published_at) / 2
+
     def _fresh_manifest_json(self) -> str:
         """The served manifest, re-minted before it can expire.
 
@@ -340,47 +363,63 @@ class AitpServer:
         served verbatim for the life of the process. Nothing noticed, because
         nothing in this family verified a peer manifest.
 
-        Phase 2B makes peers verify, and `verify_manifest_json` checks
-        `expires_at` against the wall clock with no override
-        (`bindings/aitp-py/src/manifest.rs`). A hosted agent alive longer than
-        its TTL would therefore serve a manifest every verifying peer rejects
-        — it would drop off the network an hour after start-up. Re-minting is
-        the fix for the actual defect: serving a credential past its own stated
-        lifetime.
+        Peers verify now, and `verify_manifest_json` checks `expires_at`
+        against the wall clock with no override. A hosted agent alive longer
+        than its TTL would therefore serve a manifest every verifying peer
+        rejects — it would drop off the network an hour after start-up.
+        Re-minting is the fix for the actual defect: serving a credential past
+        its own stated lifetime.
+
+        Re-minting at the **half-life** guarantees a floor: whatever we serve
+        always has between TTL/2 and TTL of validity left. That clears the
+        control plane's own enrollment guard (which rejects manifests expiring
+        within 5 minutes) and `max_staleness_secs` with room to spare, and it
+        is the standard shape for self-issued short-lived credentials.
 
         Re-minting keeps the AID (same key, so same self-certifying
         identifier); only `published_at`, `expires_at` and `signature` move.
-        Peers that pin the AID are unaffected. Rotation (`/admin/rotate-keys`)
-        still replaces the whole thing, key included.
+        Peers that pin the AID are unaffected. Rotation
+        (`/admin/rotate-keys`) still replaces the whole thing, key included.
         """
-        cfg = self.bootstrap.get("aitp", {})
-        ttl = int(cfg.get("ttl_secs", 3600))
-        # Re-mint once past half-life rather than at the edge, so a peer that
-        # fetches and verifies a moment later is never racing the deadline.
-        if time.time() < self._manifest_minted_at + (ttl / 2):
+        now = time.time()
+        if now < self._manifest_deadline(self.manifest_json):
             return self.manifest_json
+        # A failed re-mint sets a cooldown. Without one, every subsequent
+        # request retakes the lock, retries the signature and logs a full
+        # traceback — harmless at Ed25519 speed, a self-inflicted
+        # request-serialization stall the moment signing moves behind a KMS.
+        if now < self._manifest_remint_cooldown_until:
+            return self.manifest_json
+
         with self._manifest_lock:
             # Re-check under the lock: a concurrent request (or a rotation)
             # may already have refreshed it.
-            if time.time() < self._manifest_minted_at + (ttl / 2):
+            if time.time() < self._manifest_deadline(self.manifest_json):
                 return self.manifest_json
             agent = self.agent
             try:
                 minted = get_manifest_json(agent, self.bootstrap)
             except Exception:  # noqa: BLE001
-                # Serving the previous manifest is strictly better than serving
-                # nothing; it stays valid until the full TTL elapses, which
-                # leaves a half-TTL window for the next request to succeed.
-                logger.exception("manifest re-mint failed; serving the previous one")
+                # Serving the previous manifest is strictly better than
+                # serving nothing; it stays valid until the full TTL elapses,
+                # which leaves a half-TTL window for a retry to succeed.
+                self._manifest_remint_cooldown_until = (
+                    time.time() + _MANIFEST_REMINT_COOLDOWN_SECS
+                )
+                logger.exception(
+                    "manifest re-mint failed; serving the previous one and "
+                    "backing off for %ss",
+                    _MANIFEST_REMINT_COOLDOWN_SECS,
+                )
                 return self.manifest_json
             if agent is not self.agent:
                 # A rotation landed while we were signing. The rotation's own
-                # manifest is authoritative; ours is signed by a key this agent
-                # no longer holds. Discard it.
+                # manifest is authoritative; ours is signed by a key this
+                # agent no longer holds. Discard it.
                 logger.info("manifest re-mint superseded by a key rotation")
                 return self.manifest_json
             self.manifest_json = minted
-            self._manifest_minted_at = time.time()
+            self._manifest_remint_cooldown_until = 0.0
         return self.manifest_json
 
     def _build_router(self) -> APIRouter:
@@ -412,21 +451,17 @@ class AitpServer:
             cfg = self.bootstrap.get("aitp", {})
             suite = cfg.get("signing_suite", "ed25519")
             new_agent = aitp.AitpAgent.generate(suite=suite)
-            manifest_kwargs: dict[str, Any] = {
-                "display_name": cfg.get("display_name", ""),
-                "handshake_endpoint": cfg.get("handshake_endpoint", ""),
-                "offered_caps": list(cfg.get("offered_caps", [])),
-                "ttl_secs": int(cfg.get("ttl_secs", 3600)),
-            }
-            if cfg.get("identity_type") == "oidc":
-                manifest_kwargs["identity_type"] = "oidc"
-                manifest_kwargs["oidc_issuer"] = cfg.get("oidc_issuer")
-                manifest_kwargs["oidc_subject"] = cfg.get("oidc_subject")
-            new_manifest = new_agent.build_manifest(**manifest_kwargs)
+            # One mint path, shared with start-up and the half-life re-mint.
+            # This used to re-implement `get_manifest_json` inline, and the
+            # two copies had already drifted (`display_name` handling, and
+            # this one dropped the `identity_type` default) — the same
+            # duplicate-logic shape that produced two signature-blind parses
+            # elsewhere in this repo.
+            new_manifest = get_manifest_json(new_agent, self.bootstrap)
             with self._manifest_lock:
                 self.agent = new_agent
                 self.manifest_json = new_manifest
-                self._manifest_minted_at = time.time()
+                self._manifest_remint_cooldown_until = 0.0
             self._sessions.clear()
 
             await emit_event(
