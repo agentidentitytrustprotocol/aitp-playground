@@ -584,9 +584,9 @@ class AitpServer:
                 # The installed SDK predates the revocation parameter
                 # (aitp-sdk < 0.7.0). Fail closed and say so. Probing with
                 # ``hasattr`` and silently dropping the deny-set would
-                # reinstate exactly the gap this call site exists to close,
-                # and PENDING P8 forbids that shape by name: an old SDK must
-                # never silently downgrade enforcement.
+                # reinstate exactly the gap this call site exists to close:
+                # a capability probe is not consent, so an old SDK must never
+                # silently downgrade enforcement — it must refuse loudly.
                 raise HTTPException(
                     status_code=503,
                     detail=(

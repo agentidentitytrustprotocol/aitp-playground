@@ -203,45 +203,6 @@ class CpClient:
             logger.warning("CP delete_webhook failed (degraded): %s", exc)
             return False
 
-    async def fetch_revocation_list(self) -> list[str]:
-        """GET /.well-known/aitp-revocation-list — return the list of revoked
-        jtis from the envelope. **The signature is not checked** — the CP
-        signs this snapshot and we do not yet verify it, so the deny-set
-        this populates is only as trustworthy as the transport that
-        delivered it (aitp-playground#46, PENDING.md P8). Returns [] when
-        CP is disabled or the
-        call failed.
-
-        The well-known endpoint is public on the CP; no bearer header is
-        sent. The signed-envelope body has the shape
-        ``{"revocation_list": {"entries": [{"jti": ...}, ...]}}`` — we
-        extract just the jtis since the playground's local deny-set is
-        keyed on jti.
-        """
-        if not self.enabled:
-            return []
-        url = f"{self.settings.cp_base_url.rstrip('/')}/.well-known/aitp-revocation-list"
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                r = await client.get(url)
-                r.raise_for_status()
-                data = r.json()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("CP fetch_revocation_list failed (degraded): %s", exc)
-            return []
-        # Tolerate either {"entries": [...]} at the root or a wrapping
-        # envelope; CP's exact field shape may evolve, so probe both.
-        entries: list[Any] = []
-        if isinstance(data, dict):
-            inner = data.get("revocation_list") or data
-            if isinstance(inner, dict):
-                entries = list(inner.get("entries") or [])
-        return [
-            (e.get("jti") if isinstance(e, dict) else str(e))
-            for e in entries
-            if (isinstance(e, dict) and e.get("jti")) or isinstance(e, str)
-        ]
-
     # ── Observability projections (read-only) ───────────────────────────────
 
     async def _get_list(

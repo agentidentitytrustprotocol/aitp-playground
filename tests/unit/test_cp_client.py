@@ -206,66 +206,6 @@ async def test_delete_webhook_disabled_returns_false() -> None:
     assert await cp.delete_webhook("wh-1") is False
 
 
-# ── fetch_revocation_list ───────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_fetch_revocation_list_disabled_returns_empty() -> None:
-    cp = CpClient(Settings(cp_base_url=""))
-    assert await cp.fetch_revocation_list() == []
-
-
-@pytest.mark.asyncio
-async def test_fetch_revocation_list_parses_envelope_shape() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={
-            "revocation_list": {
-                "entries": [
-                    {"jti": "jti-a", "revoked_at": "2026-05-25T00:00:00Z"},
-                    {"jti": "jti-b"},
-                ],
-            },
-        })
-
-    _set_transport(httpx.MockTransport(handler))
-    try:
-        cp = _client(httpx.MockTransport(handler))
-        out = await cp.fetch_revocation_list()
-    finally:
-        _clear_transport()
-    assert set(out) == {"jti-a", "jti-b"}
-
-
-@pytest.mark.asyncio
-async def test_fetch_revocation_list_parses_flat_shape() -> None:
-    """CP's wire shape may evolve; the client should tolerate both
-    {"revocation_list": {"entries": [...]}} and {"entries": [...]}."""
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"entries": [{"jti": "jti-flat"}]})
-
-    _set_transport(httpx.MockTransport(handler))
-    try:
-        cp = _client(httpx.MockTransport(handler))
-        out = await cp.fetch_revocation_list()
-    finally:
-        _clear_transport()
-    assert out == ["jti-flat"]
-
-
-@pytest.mark.asyncio
-async def test_fetch_revocation_list_degrades_on_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, text="unavailable")
-
-    _set_transport(httpx.MockTransport(handler))
-    try:
-        cp = _client(httpx.MockTransport(handler))
-        out = await cp.fetch_revocation_list()
-    finally:
-        _clear_transport()
-    assert out == []
-
-
 # ── fetch_events_history ────────────────────────────────────────────────────
 
 
