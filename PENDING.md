@@ -30,8 +30,29 @@ Options: fail the suite outright when the surface is missing (turns a `--no-defa
 wheel into a hard CI failure), or add `-ra` to addopts (widens output for every skip in the
 repo). Neither is obviously right; that is why it is here rather than decided.
 
-## P3 — `aitp-verifier` is vendored, not depended on — **risk mitigated 2026-08-26**
-**From:** Phase 2 · **Blocks:** nothing · **Still open because:** the swap needs `aitp-verifier` published, which needs a release pipeline that repo does not have
+## ~~P3 — `aitp-verifier` is vendored, not depended on~~ — **CLOSED 2026-08-27**
+**From:** Phase 2 · **Resolved by:** a decision not to publish, plus a real CI gate
+
+**Decision: keep the vendored copy; do not publish `aitp-verifier`.** Publishing means
+building a release pipeline in a repo that has none (`aitp-verifier-py/.github/workflows/`
+holds only `auto-merge.yml` and `ci.yml`) for a package whose sole consumer is one test
+file — and a released dev-dependency then pins a *version*, reintroducing the staleness the
+vendoring was meant to avoid.
+
+What actually needed fixing was different, and worse than the original entry said. The drift
+guard compared the copy against its source but **skipped when the source was absent**, and
+CI does a plain self-checkout — so it was a permanent no-op there, catching drift only on a
+developer machine that happened to have both checkouts. The unit job now clones the sibling
+before pytest, making it a real cross-repo gate against verifier **HEAD**, which is stricter
+than any published pin would be.
+
+Rejected alternatives: a committed checksum verifies the copy against a recorded hash, so
+hash and source rot together and it signals nothing; a submodule pins a SHA that goes stale
+silently. Both are worse than comparing against a fresh clone of HEAD.
+
+The copy must stay independent of `aitp-sdk` either way — that independence is the whole
+point, and a JCS check that runs against the SDK it is checking is exactly the
+self-consistency that let the 0.5.0 signing-input divergence survive a release.
 
 `tests/unit/_jcs_reference.py` is a 201-line verbatim copy of
 `aitp-verifier-py/aitp_verifier/jcs.py`, because that package is not on PyPI (404) and a
@@ -40,8 +61,21 @@ does not check out. If `aitp-verifier` is ever published, delete the copy and ta
 dev-group dependency instead. The copy must stay independent of `aitp-sdk` either way — that
 independence is the whole point.
 
-## P4 — `expired` is classified by substring-matching an SDK error message
-**From:** Phase 2B · **Blocks:** nothing · **Cost:** depends on Phase 5
+## ~~P4 — `expired` is classified by substring-matching an SDK error message~~ — **CLOSED 2026-08-27**
+**From:** Phase 2B · **Resolved by:** aitp-rs#92, shipped in aitp-sdk 0.7.0
+
+`_verify_peer_manifest` now branches on `exc.code`. The SDK floor is `>=0.7.0`, so the code
+is always present on a verification failure; input that is not JSON at all still raises a
+plain `ValueError` with no code, which is reported as `malformed` (there is no envelope to
+classify), and anything else uncoded is `unknown` rather than being guessed at
+`signature_invalid` — reporting a parse bug as an attack would page someone for nothing.
+
+Two guards keep it from regressing: one raises an error whose *text* says nothing about
+expiry but whose `code` is `expired` and asserts the cause is still `expired` (under the old
+substring match it would have read `signature_invalid`), the other pins the `unknown`
+fallback. Both fail if the substring logic is restored.
+
+The original entry below is kept for the history of why this mattered.
 
 `_verify_peer_manifest` distinguishes `cause=expired` from `cause=signature_invalid` by
 looking for "expired" in the SDK's exception text, because the Python binding registers no
@@ -203,9 +237,51 @@ not just authenticity — it needs the same real-AID fixture rework) and P4 (`ex
 currently classified by substring-matching an SDK message; PR #90's typed `.code` removes the
 need).
 
-## P9 — the CP-derived deny-set cannot change an outcome, only a diagnosis
-**From:** Phase 7 · **Blocks:** nothing · **Status:** investigated 2026-08-26 — **the original
-entry's fix was wrong**, and this is a design question rather than a missing step
+## ~~P9 — the CP-derived deny-set cannot change an outcome, only a diagnosis~~ — **CLOSED 2026-08-27**
+**From:** Phase 7 · **Resolved by:** aitp-rs#93 (bindings) + the redeem-path wiring here
+
+**The design question had a factual answer, and it was candidate 2 — but it was never really
+a design choice, because the playground was violating two spec MUSTs.**
+
+`/aitp/delegation/redeem` consulted **no** revocation source at all — not the CP snapshot,
+not even the agent's own local deny list. Both SDK delegation verifiers built their context
+with `VerifyDelegationContext::new`, which hardcodes `revocation_check` and
+`hop_revocation_check` to `None`, and neither binding exposed a parameter, so the hooks were
+unreachable from Python and Node. That skipped **RFC-AITP-0006 §4 step 7** ("the delegation
+token MUST be rejected") and **RFC-AITP-0011 §6** ("the verifier MUST check every hop"). A
+revoked source TCT still bought a freshly minted TCT for the delegatee.
+
+The Rust core was already correct — both hooks, tests for each (`round_trip.rs:307`,
+`multihop.rs:326`), and the `del-mh-004-revoked-hop` conformance fixture. The gap was
+entirely the binding layer.
+
+**This is also where a CP-derived entry finally changes a decision rather than a diagnosis.**
+The analysis below stands for the *capability* path: `verify_capability_tct` rejects any TCT
+whose `iss` is not this agent, so there a foreign jti is refused either way. But hop jtis are
+issued by peers — foreign to the verifier — so the snapshot is the only source it has for
+them. `test_a_cp_snapshot_entry_is_enough_to_refuse` pins exactly that.
+
+**Candidate 1 (holder-side pre-flight) is rejected**: it changes no security outcome, since
+the issuer's own deny list already rejects, and revocation is specified as a verifier-side
+post-signature check (RFC-AITP-0008 §3.3). **Candidate 3 (informational only) is rejected**
+because it leaves the two MUSTs violated.
+
+**One deviation is deliberate and documented in the binding.** §6 wants each hop `jti`
+checked against the deny list of *that hop's issuer*; a flat set cannot express that, so it
+applies to every hop. It can only reject more, never accept a revoked hop — but a set
+aggregated across issuers lets any contributor revoke any hop. Note the CP list is not a
+spec-faithful RFC-AITP-0008 artifact for agent-issued TCTs: §1.5 wants the snapshot's issuer
+to equal the `iss` of every covered TCT, while the CP signs under its own AID and its schema
+carries no issuer attribution. Acceptable intra-org and narrated as such; the spec-faithful
+source is each hop issuer's own `ListRevoked`.
+
+**Revisit when** a cross-org multi-hop scenario exists (only `intra-org/delegation-multihop`
+does today). At that point the CP-as-oracle shortcut stops being narratable, and either the
+CP schema grows issuer attribution plus issuer-proof on POST, or agents fetch each hop
+issuer's `ListRevoked` directly.
+
+The original analysis follows, since its empirical findings about the capability path remain
+correct and are why this was investigated at all.
 
 The entry originally said `revocation-via-cp` was "one step away" from demonstrating
 enforcement-from-propagation: add a call *into* the writer after it refreshes from the CP, so
@@ -253,8 +329,23 @@ The scenario text and the docs already describe the current behaviour accurately
 so nothing is *claiming* more than it does. This entry is now a design decision awaiting an
 owner, not a task.
 
-## P10 — Manifest re-mint: three refinements to the same trigger
-**From:** reconcile of the Phase 2B freshness decision (`DECISIONS.md` D-9) · **Blocks:** nothing
+## ~~P10 — Manifest re-mint: three refinements to the same trigger~~ — **CLOSED 2026-08-27**
+**From:** reconcile of the Phase 2B freshness decision (`DECISIONS.md` D-9)
+
+All three are done. Items 1 and 2 landed in #49 — `_manifest_deadline()` reads
+`published_at`/`expires_at` off the manifest itself (`_manifest_minted_at` is gone),
+`_MANIFEST_REMINT_COOLDOWN_SECS` backs a failed re-mint off by 30s instead of retaking the
+lock on every request, and `/admin/rotate-keys` now calls the shared `get_manifest_json`
+rather than re-implementing the mint (the two copies had already drifted). #49 simply never
+marked this entry closed.
+
+Item 3 is closed here: `/admin/enroll-with-cp` now documents that the push path is one-shot
+and the CP's stored copy goes stale — an agent enrolled at start-up drops out of the CP's
+`listAgents` at `ttl_secs` while its own endpoint serves a fresh manifest. Pre-existing and
+not worsened by the re-mint, but real, and re-enrolling after a re-mint is a
+control-plane-side decision rather than a change to that route.
+
+The original text follows.
 
 The decision to fold serving-side freshness into Phase 2B, and the half-life trigger, are both
 CONFIRMED. Three refinements came out of that review. None changes the decision, so they are

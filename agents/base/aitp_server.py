@@ -553,15 +553,48 @@ class AitpServer:
             cfg = self.bootstrap.get("aitp", {})
             allow_multihop = bool(cfg.get("allow_multihop_delegation"))
             max_hops = int(cfg.get("max_delegation_hops", 3))
+            # RFC-AITP-0006 §4 step 7 / RFC-AITP-0011 §6. Redeeming mints a
+            # *fresh TCT* for the delegatee, so skipping this is not a
+            # bookkeeping miss: a revoked grant keeps minting credentials for
+            # a third party we never re-authorized. The SDK consults the set
+            # only after every signature check (RFC-AITP-0008 §3.3).
+            #
+            # The deny-set is the same union the capability path enforces —
+            # local revocations plus the verified CP snapshot. Hop jtis are
+            # issued by peers, so for those the CP snapshot is the only
+            # source we have; this is the one place a CP-derived entry
+            # changes a decision rather than only a diagnosis.
+            deny_set = self.revocation.effective_jtis
+            # Axis B applies here too, and more sharply than on a capability
+            # call: under ``fail_closed`` we refuse to mint a credential
+            # while we cannot tell whether its source grant is still live.
+            self._enforce_revocation_freshness()
             try:
                 if allow_multihop and hasattr(
                     aitp, "verify_delegation_multihop"
                 ):
                     verified = aitp.verify_delegation_multihop(
-                        token_json, self.agent.aid, max_hops,
+                        token_json, self.agent.aid, max_hops, deny_set,
                     )
                 else:
-                    verified = aitp.verify_delegation(token_json, self.agent.aid)
+                    verified = aitp.verify_delegation(
+                        token_json, self.agent.aid, deny_set,
+                    )
+            except TypeError as exc:
+                # The installed SDK predates the revocation parameter
+                # (aitp-sdk < 0.7.0). Fail closed and say so. Probing with
+                # ``hasattr`` and silently dropping the deny-set would
+                # reinstate exactly the gap this call site exists to close,
+                # and PENDING P8 forbids that shape by name: an old SDK must
+                # never silently downgrade enforcement.
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "installed aitp-sdk cannot enforce delegation "
+                        "revocation (needs >=0.7.0) — refusing to redeem a "
+                        f"delegation we cannot check: {exc}"
+                    ),
+                ) from exc
             except (RuntimeError, ValueError) as exc:
                 await emit_event(
                     "delegation.rejected", self.bootstrap, error=str(exc),

@@ -78,7 +78,21 @@ async def _verify_peer_manifest(
         aitp.verify_manifest_json(envelope_json)
     except Exception as exc:  # noqa: BLE001 — the SDK raises RuntimeError/ValueError
         message = str(exc)
-        cause = "expired" if "expired" in message.lower() else "signature_invalid"
+        # `.code` is the SDK's contract; the message wording is not. This
+        # previously read `"expired" in message.lower()`, which pinned the
+        # SDK's prose as an expected value — the same bug class the 0.5.0
+        # signing-input change exposed, and a wording change upstream would
+        # have silently reclassified a forged manifest as a stale one.
+        # aitp-sdk >=0.7.0 carries the code on every *verification* failure;
+        # the floor in pyproject.toml enforces that. Input that is not JSON
+        # at all still raises a plain ValueError with no code — there is no
+        # envelope to classify — and that is precisely `malformed`. Anything
+        # else without a code is genuinely unexpected, so say `unknown`
+        # rather than guessing at `signature_invalid` and reporting a parse
+        # bug as an attack.
+        cause = getattr(exc, "code", None)
+        if cause is None:
+            cause = "malformed" if isinstance(exc, ValueError) else "unknown"
         await _reject(
             cause,
             f"peer manifest from {source_url} failed verification ({cause}): "
@@ -608,6 +622,23 @@ def build_admin_router(
         We pass the agent's *current* manifest JSON (held by AitpServer
         and threaded into the admin router by the worker's main module
         — see ``manifest_provider`` argument on ``build_admin_router``).
+
+        **The push path is deliberately one-shot, and the stored copy goes
+        stale.** This sends fresh bytes at the moment it is called, but the
+        control plane *stores* them and nothing re-enrolls afterwards — so
+        an agent's half-life manifest re-mint (``AitpServer``) refreshes what
+        this agent *serves* while the CP keeps the copy captured at enrolment.
+        Since the CP's ``listAgents`` drops rows whose ``manifest_expires_at``
+        has passed, an agent enrolled at start-up silently vanishes from the
+        registry at ``ttl_secs`` while its own endpoint serves a perfectly
+        fresh manifest.
+
+        This is pre-existing and not made worse by the re-mint — before it,
+        the stored and served copies expired together — but it is the reason
+        "a peer caching manifest bytes" is a real case rather than a
+        hypothetical one. Fixing it means re-enrolling after a re-mint, which
+        is a control-plane-side conversation (registry churn, rate limits),
+        not a change to this route. Tracked in PENDING P10.
 
         Returns the resulting registry entry shape, the enrollment-token
         ttl, and the agent's AID for cross-checking.
