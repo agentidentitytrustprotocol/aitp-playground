@@ -78,28 +78,34 @@ first or the value is not load-bearing:
 - TCT claims are decoded unverified by `tct_claims.decode_claims` for a precise
   403, an issuer guard, and the declared audience — `verify_tct` is still the
   gate (see "What you can ignore" below);
-- the revocation snapshot is parsed with **no** verification at all, which is
-  the one real exception and is called out next.
+- the revocation snapshot is parsed only after `aitp.verify_revocation_list`
+  has verified the envelope against the pinned issuer AID
+  (`refresh_revocations()` in `agents/base/revocation_refresh.py`).
 
 Parsing is not the property that matters; *deciding* is.
 
-**One exception is open, and it is stated here rather than left implied.** The
-**revocation snapshot** served at `/.well-known/aitp-revocation-list` is parsed
-outside the SDK and **its signature is not checked** —
-`cp_client/client.py:206` and `agent_admin.py` (`/admin/refresh-revocations`)
-both read `entries` straight out of the envelope. The control plane signs that
-snapshot; this repo does not yet verify it, so the deny-set is currently only
-as trustworthy as the transport that delivered it. Anything able to answer as
-the CP could suppress revocations (return `entries: []`, keeping a revoked TCT
-working) or inject them.
+**The revocation snapshot has one ingest, and it verifies.** The snapshot
+served at `/.well-known/aitp-revocation-list` is fetched and checked in exactly
+one place — `refresh_revocations()` in `agents/base/revocation_refresh.py`.
+Three callers reach it: the `/admin/refresh-revocations` route, the start-up
+refresh, and the background poll — the latter two in-process by design, never
+looping back over HTTP. It calls `aitp.verify_revocation_list`
+against the AID pinned in `CP_AID` before reading a single entry; a snapshot
+that fails to verify is **discarded**, and the previously verified one stays
+current (RFC-AITP-0008 §1.5). Absent a pin there is no expected issuer to check
+against, so the snapshot is discarded too — the fail-closed direction. The
+deny-set is no longer only as trustworthy as the transport that delivered it.
 
-Closing it needs `aitp.verify_revocation_list`, which does not exist in any
-released `aitp-sdk` — it is implemented in
-[`aitp-rs#90`](https://github.com/agentidentitytrustprotocol/aitp-rs/pull/90),
-still open, and would ship in 0.6.0. Tracked in `aitp-playground#46` and, with
-the full unblock sequence, in **`PENDING.md` P8**. **Delete this paragraph when
-verification is on** — a caveat with no live tracker behind it becomes
-permanent, and #46 itself closes on the *interlock*, which already shipped.
+`RevocationState` (`agents/base/revocation_state.py`) only *holds* that
+decision; it verifies nothing itself, deliberately, so it cannot become a
+second hand-rolled trust boundary.
+
+`CpClient` has no counterpart. It carried a `fetch_revocation_list()` that
+parsed the envelope signature-blind, and it was deleted rather than taught to
+verify: nothing in `src/` called it, and two ingest paths for the same signed
+artifact is the condition that let the signature-blind version survive in the
+first place. If service-side code ever needs the deny-set, it goes through the
+verifying path — it does not grow a second one.
 
 Peer **manifest signatures** were the same shape of gap and are now checked at
 all three sites that ingest one: the handshake (`/admin/initiate-handshake`),
@@ -358,10 +364,10 @@ fail-closed is all the base demo needs
 defines the signed-list distribution model). The `revoke_tct` step's
 `via_cp: true` mode exercises the **data** path — publish to the Control Plane
 and have an unrelated peer pull `/.well-known/aitp-revocation-list` into its
-deny-set. Two things it does not show, both called out in the scenario's own
-summary: the snapshot's signature is not checked (`PENDING.md` P8), and no step
-drives a call whose outcome depends on the CP-derived deny-set, so the final
-403 comes from the issuer's *local* set. See
+deny-set. The snapshot's signature *is* checked before any entry is applied. What the
+scenario still does not show, as its own summary says, is a step driving a call
+whose outcome depends on the CP-derived deny-set — the final 403 comes from the
+issuer's *local* set. See
 [control-plane.md](control-plane.md#cp-backed-workflow-steps).
 
 ## Post-v0.1 experimental surfaces

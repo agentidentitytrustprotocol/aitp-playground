@@ -42,7 +42,7 @@ One service, ~20 scenarios, each isolating one AITP behavior:
 | **Handshake & TCTs** | the 4-message mutual handshake; per-call capability authorization |
 | **Trust gating** | a call with no/insufficient TCT is rejected (403), then succeeds after handshake; grant intersection |
 | **Delegation** | single-hop and multi-hop delegation chains with scope narrowing (RFC-AITP-0006 / 0011) |
-| **Revocation** | fail-closed local revocation and propagation through the Control Plane's list (RFC-AITP-0008). The CP signs the snapshot; the playground does not yet verify the signature — see `PENDING.md` P8 |
+| **Revocation** | fail-closed local revocation and propagation through the Control Plane's list (RFC-AITP-0008). The CP signs the snapshot and the consuming agent verifies it against the pinned `CP_AID` before applying any entry; an unverifiable snapshot is discarded |
 | **Lifecycle** | key rotation (0007), in-band TCT renewal (0013), a TCT verification cache, session bundles (0010), SPKI pinning |
 | **Discovery** | static localhost, `did:web`, and Control Plane registry — each with graceful fallback |
 | **Control Plane** | optional enrollment, webhooks, trust-anchor provisioning, delegation-tree observability |

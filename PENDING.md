@@ -390,3 +390,15 @@ used to talk once" is a real difference, and this is the first flake seen there.
 matters is whether the failure is agent→CP (CP-side) or engine→agent (our start-up path). If
 the latter, the start-up refresh is holding the event loop longer than the supervisor's
 readiness signal implies.
+
+## P12 — `internal_docs/agents.md` still describes the pre-Phase-6 deny-set
+**From:** Phase 8 verification (round 2, Opus) · **Status:** OPEN
+
+`internal_docs/agents.md:131-138` shows agent wiring as `_revoked_jtis: set[str] = set()`
+/ `revoked_jtis=_revoked_jtis`. The real code is `RevocationState()` / `revocation=_revocation`
+(`agents/writer/main.py:24-37`). This is leftover Phase 6 drift — the last place in the repo
+that still describes the deny-set as a bare monotonic set, which is precisely the structure
+Phase 6 decomposed (CP-derived and local sets held separately, unioned at enforcement).
+
+Out of Phase 8's scope (it makes no claim about signature verification and cites no closed
+ticket), so it was logged rather than folded into that diff. Doc-only; no code impact.

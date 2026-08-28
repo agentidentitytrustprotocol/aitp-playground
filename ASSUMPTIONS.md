@@ -88,3 +88,21 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   kind: it is narrow by *wiring*, not by verification — launch and manifest-fetch are
   separate channels, so anything that takes the port between ready and provisioning serves
   its own genuinely-signed manifest and passes. See `DECISIONS.md` D-8.
+
+## Phase 8 — the revocation-via-cp scenario's *second* caveat
+- **Plan:** `../aitp-control-plane/plans/cross-repo/aitp-playground-revocation-verification.md` (Phase 8)
+- **Assumed:** The scenario text carried two caveats. Phase 8 owns only the first
+  (the snapshot's signature is unverified, citing the now-closed `#46` / `PENDING.md` P8).
+  The second — "no step drives a call whose outcome depends on the CP-derived deny-set,
+  so the final 403 comes from the issuer's local set" — cites neither closed ticket and
+  is outside Phase 8's acceptance criteria.
+- **Chose:** Corrected the signature claim everywhere it appeared and left the second
+  caveat standing, rather than rewriting text I had not re-verified against the code.
+- **Alternatives:** Rewrite both while in the file. Rejected — `PENDING.md` P9 (closed
+  2026-08-27) says the redeem path now consults revocation, so a CP-derived entry *can*
+  change a decision; whether *this scenario* exercises that is a separate question, and
+  asserting it without checking would repeat the exact "claim outlived the condition"
+  defect Phase 8 exists to remove.
+- **Blast radius if wrong:** Docs/scenario prose understates what the scenario shows.
+  No code impact. One-line fix once someone checks the step list against the redeem path.
+- **Status:** UNCONFIRMED

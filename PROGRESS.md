@@ -20,6 +20,7 @@ Plan's own recommended order, not numeric order. Phase 5 lands in `aitp-rs`, not
 | 4 | Run e2e pre-merge on SDK-bump PRs | playground | Sonnet | **DONE** (criterion 4 deferred — PENDING P7) |
 | 6 | Verify the snapshot in the production revocation path | playground | Fable | **DONE** — both axes |
 | 7 | Correct the docs | playground | Opus | **DONE** |
+| 8 | Close the second revocation ingest, in `src/` | playground | Opus | **DONE** |
 
 Phase 6 is blocked on Phase 5 (cross-repo). Phase 7's revocation half tracks Phase 6;
 its manifest half tracks Phase 2B.
@@ -28,15 +29,19 @@ its manifest half tracks Phase 2B.
 
 The plan carries the authoritative map ("## Repo map — aitp-playground"). Condensed:
 
-**Revocation path** — `src/aitp_playground/cp_client/client.py:206` (`fetch_revocation_list`,
-signature-blind) · `agents/base/agent_admin.py:604-665` (`/admin/refresh-revocations`, the
-path the scenario exercises; `:657` `revoked_jtis.add` — monotonic union) · `:499` local
-`/admin/revoke-tct` · `agents/base/aitp_server.py:334` deny-set enforcement.
+**Revocation path** — `agents/base/revocation_refresh.py` `refresh_revocations()` is the
+single ingest and the only verify decision point (`aitp.verify_revocation_list` against the
+pinned `CP_AID`; discard on failure) · `agents/base/revocation_state.py` `RevocationState`
+holds the result and verifies nothing by design, keeping CP-derived and local jtis in
+separate sets unioned at enforcement · reached from `/admin/refresh-revocations`, the
+start-up refresh, and the background poll · `agents/base/aitp_server.py` deny-set
+enforcement. **`CpClient` has no revocation-fetch method** — the signature-blind
+`fetch_revocation_list` was deleted in Phase 8.
 
 **Manifest path (Phase 2B)** — `agents/base/agent_admin.py:415-424` (delegatee AID, unverified)
 · `:85-93` (handshake, raw manifest to `build_hello`) · `src/aitp_playground/trust/resolver.py:33-51`.
 
-**Config plumbing** — `src/aitp_playground/config.py:32` (`cp_base_url`; no `cp_aid`) →
+**Config plumbing** — `src/aitp_playground/config.py:32` (`cp_base_url`), `:46` (`cp_aid`, the pin) →
 `src/aitp_playground/hosting/bootstrap.py:39-43` (`cp_block`) → agent subprocess `bootstrap["cp"]`.
 
 **Build & CI** — `pyproject.toml:23` (floor) · `Dockerfile:33-51` (maturin from `../aitp-rs`)
@@ -253,3 +258,56 @@ the compose stack, without which the shipped demo ran unchecked.
 - **Final:** **490 passed, 0 skipped** against the published `aitp-sdk` 0.6.0 — every test
   that had been skipping is now real coverage. 4 integration, ruff clean, `uv sync --locked`
   clean.
+
+
+### Phase 8 — Close the second revocation ingest, in `src/` — 2026-08-27 — PASS (2 rounds)
+
+Added by the plan's [R3] refresh after phases 1-7 shipped; tracked as `aitp-playground#51`.
+
+- **Verifier:** Opus, both rounds (user constraint for this run: Opus/Sonnet only, no Fable).
+  Tier rationale: the acceptance criteria are repo-wide trust-boundary greps — "no claim
+  anywhere states a signature is unchecked" — not a mechanical line removal, so the review
+  had to be independent enough to hunt claims the executor never thought to grep. It was:
+  round 1 found 7 stale sites and 2 errors in the executor's own rewrites.
+- **Decision:** option (1) DELETE, chosen by the user from the plan's two mutually exclusive
+  options. `CpClient.fetch_revocation_list()` had no production callers — only its own tests.
+- **Files:** `src/aitp_playground/cp_client/client.py` (method deleted, -39),
+  `tests/unit/test_cp_client.py` (its 4 tests, -60), `agents/base/aitp_server.py` (comment
+  reworded off a closed ticket), `docs/aitp-integration.md`, `docs/control-plane.md`,
+  `docs/scenarios.md`, `README.md`,
+  `scenarios/intra-org/revocation-via-cp/1.0.0/scenario.yaml`, `PENDING.md` (P12 logged),
+  `ASSUMPTIONS.md` (1 UNCONFIRMED).
+
+**Round 1 — GAPS (9 items).** The code deletion was clean, but the phase's real content was
+the claim sweep, and the executor had grepped only `src/`, `agents/` and two docs:
+
+1. **7 stale sites still asserting the signature is unverified**, all citing the closed
+   `#46` / `PENDING.md P8`: the scenario YAML's summary *and* step description (the worst —
+   runtime-visible through the `/scenarios` API), `README.md`, `docs/control-plane.md:54`
+   and `docs/aitp-integration.md:361` (each making a file the executor had already edited
+   contradict itself ~60 lines away), and `docs/scenarios.md` twice.
+2. **Two claims the executor's own rewrites introduced, both too strong** — the exact defect
+   class this plan exists to remove, committed while fixing it:
+   - Credited `RevocationState` as the verifier, in the wrong file. The verifier is
+     `refresh_revocations()`; `RevocationState`'s own docstring says it "deliberately
+     performs no verification". A boundary doc naming who verifies had named the one type
+     documenting that it doesn't.
+   - Asserted the agent "verifies against the pinned `CP_AID`" without noting `cp_aid`
+     defaults to `""`, where the snapshot is discarded and nothing propagates at all.
+
+**Round 2 — PASS.** All nine confirmed closed with file:line evidence. One new minor item
+(the "reached via `/admin/refresh-revocations`" clause named one of three callers) fixed
+rather than carried.
+
+**What this phase actually was.** Deleting the method was ~15 minutes; the value was the
+sweep. The plan predicted this in criterion 2 — *"the check that would have caught the
+drift: the claim outlived the condition"* — and the drift was real in 7 places, one of them
+shown to users at runtime. It also demonstrated the failure mode twice over: two of the
+sweep's own replacement claims were themselves too strong on the first pass.
+
+**Out of scope, logged not absorbed:** `PENDING.md` P12 (`internal_docs/agents.md` still
+describes the pre-Phase-6 monotonic deny-set) and one `ASSUMPTIONS.md` entry (the scenario's
+*second* caveat, which cites no closed ticket and was verified still true).
+
+- **Suite:** 497 passed, 21 skipped (all env-gated live-stack tests, pre-existing),
+  ruff clean, `cli validate` green on the edited scenario.
