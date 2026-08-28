@@ -24,9 +24,11 @@ metadata:
     `audience_revoked_count` and the `revocation.list_fetched` event — not
     that it changes an enforcement outcome anywhere in this run.
 
-    Two gaps sit behind that, both tracked: the fetched snapshot's signature
-    is not verified (aitp-playground#46, PENDING.md P8), and no step drives a
-    call *into* the writer to make its refreshed deny-set decide something.
+    The fetched snapshot IS signature-verified before any entry is applied
+    (`aitp.verify_revocation_list` against the pinned CP_AID; an unverifiable
+    snapshot is discarded, never merged). What this scenario still does not
+    show is a step driving a call *into* the writer to make its refreshed
+    deny-set decide something.
   tags: [revocation, rfc-0008, control-plane, federation, intra-org]
 
 spec:
@@ -79,9 +81,10 @@ spec:
           /.well-known/aitp-revocation-list, so the writer fails-closed
           on this jti even though the issuer never called it back.
 
-          The CP signs that snapshot. The playground does not yet verify
-          the signature (aitp-playground#46), so what this step currently
-          demonstrates is propagation, not authenticated propagation.
+          The CP signs that snapshot and the writer verifies it against
+          the AID pinned in CP_AID before applying any entry, so this is
+          authenticated propagation. With no CP_AID pinned the snapshot is
+          discarded rather than trusted — the fail-closed posture.
 
       - id: blocked_call
         type: capability_probe

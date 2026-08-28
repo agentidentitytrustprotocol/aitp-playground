@@ -51,7 +51,7 @@ straight:
 2. **Agent workers** (`agents/base/agent_admin.py`) — an agent talks to
    the CP *directly* for self-enrollment (`enroll_with_cp`) and to pull
    the revocation list (`refresh-revocations`) — the CP signs it, and the
-   playground does not yet verify that signature (`PENDING.md` P8). The playground
+   agent verifies that signature before applying any entry. The playground
    never enrolls on an agent's behalf; it pokes the agent's `/admin`
    route and the agent makes the call itself (the same boundary rule as
    the AITP protocol — see [aitp-integration.md](aitp-integration.md)).
@@ -113,7 +113,7 @@ disabled. Full field reference is in [scenarios.md](scenarios.md#workflow-steps)
 | Step type | What it does | Demo scenario |
 | --- | --- | --- |
 | `enroll_with_cp` | Agent self-enrolls: `POST /api/registry/enroll` to mint a one-time bearer token, then `POST /api/registry/agents` with that token + its manifest. | `intra-org/external-enrollment` |
-| `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries`, then the audience pulls the updated list from `/.well-known/aitp-revocation-list`. The CP signs that snapshot and the audience agent **verifies** it against the pinned `CP_AID` before applying any entry — an unverifiable snapshot is discarded, never merged (RFC-AITP-0008 §1.5). | `intra-org/revocation-via-cp` |
+| `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries`, then the audience pulls the updated list from `/.well-known/aitp-revocation-list`. The CP signs that snapshot and the audience agent **verifies** it against the AID pinned in `CP_AID` before applying any entry — an unverifiable snapshot is discarded, never merged (RFC-AITP-0008 §1.5). With no `CP_AID` pinned there is no expected issuer, so the snapshot is discarded rather than trusted and nothing propagates: fail-closed, and logged as such. The compose stack pins it from the CP's deterministic seed. | `intra-org/revocation-via-cp` |
 | `cp_subscribe_webhook` | `POST /api/webhooks` pointing at this run's `/webhooks/cp/{run_id}` receiver; stores the returned secret on the run record for HMAC verification. | `intra-org/webhook-subscription` |
 | `cp_provision_trust_anchor` | `upsert_pinned_key` + optional `upsert_trust_anchor` (OIDC issuer) for an agent under a namespace, then reads them back. | `intra-org/cp-trust-anchor-provisioning` |
 | `cp_delegation_tree` | Flushes the run's events to the CP (awaiting the ingest, so the projection is populated mid-run), then walks a delegator's chain via `GET /api/delegations` (CP's recursive `root_jti` query) to show the chain as the CP observed it. | `intra-org/cp-delegation-tree` |
@@ -194,13 +194,15 @@ out to webhooks, is the CP's
 - The playground **never** signs revocation lists, mints CP bearer tokens,
   or canonicalizes CP payloads — agents and the CP own that. The
   playground only orchestrates *when* those calls happen.
-- **Snapshot trust lives in `agents/`, and only there.** `RevocationState`
-  (`agents/base/revocation_refresh.py`) is the single owner: it calls
-  `aitp.verify_revocation_list` against the pinned `CP_AID`, discards anything
-  that does not verify, and holds the CP-derived deny-set separately from
-  locally-revoked jtis. `CpClient` deliberately has **no** revocation-fetch
-  method — a second ingest path for the same artifact is what produced the
-  signature-blind divergence this boundary now prevents.
+- **Snapshot trust lives in `agents/`, and only there.** `refresh_revocations()`
+  (`agents/base/revocation_refresh.py`) is the single decision point: it calls
+  `aitp.verify_revocation_list` against the AID pinned in `CP_AID` and discards
+  anything that does not verify. What it decided is then *held* — not
+  re-decided — by `RevocationState` (`agents/base/revocation_state.py`), which
+  performs no verification of its own by design and keeps the CP-derived
+  deny-set separate from locally-revoked jtis. `CpClient` deliberately has
+  **no** revocation-fetch method — a second ingest path for the same artifact
+  is what produced the signature-blind divergence this boundary now prevents.
 - The CP is a separate repo (`aitp-control-plane`); its API contract is
   the source of truth for the endpoint shapes above. The
   envelope-tolerant parsing that survives in `CpClient` covers observability

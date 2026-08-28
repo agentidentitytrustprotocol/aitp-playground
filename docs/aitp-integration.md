@@ -80,18 +80,25 @@ first or the value is not load-bearing:
   gate (see "What you can ignore" below);
 - the revocation snapshot is parsed only after `aitp.verify_revocation_list`
   has verified the envelope against the pinned issuer AID
-  (`agents/base/revocation_refresh.py`).
+  (`refresh_revocations()` in `agents/base/revocation_refresh.py`).
 
 Parsing is not the property that matters; *deciding* is.
 
 **The revocation snapshot has one ingest, and it verifies.** The snapshot
 served at `/.well-known/aitp-revocation-list` is fetched and checked in exactly
-one place — `RevocationState` in `agents/base/revocation_refresh.py`, reached
-via `/admin/refresh-revocations`. It calls `aitp.verify_revocation_list`
+one place — `refresh_revocations()` in `agents/base/revocation_refresh.py`.
+Three callers reach it: the `/admin/refresh-revocations` route, the start-up
+refresh, and the background poll — the latter two in-process by design, never
+looping back over HTTP. It calls `aitp.verify_revocation_list`
 against the AID pinned in `CP_AID` before reading a single entry; a snapshot
 that fails to verify is **discarded**, and the previously verified one stays
-current (RFC-AITP-0008 §1.5). The deny-set is no longer only as trustworthy as
-the transport that delivered it.
+current (RFC-AITP-0008 §1.5). Absent a pin there is no expected issuer to check
+against, so the snapshot is discarded too — the fail-closed direction. The
+deny-set is no longer only as trustworthy as the transport that delivered it.
+
+`RevocationState` (`agents/base/revocation_state.py`) only *holds* that
+decision; it verifies nothing itself, deliberately, so it cannot become a
+second hand-rolled trust boundary.
 
 `CpClient` has no counterpart. It carried a `fetch_revocation_list()` that
 parsed the envelope signature-blind, and it was deleted rather than taught to
@@ -357,10 +364,10 @@ fail-closed is all the base demo needs
 defines the signed-list distribution model). The `revoke_tct` step's
 `via_cp: true` mode exercises the **data** path — publish to the Control Plane
 and have an unrelated peer pull `/.well-known/aitp-revocation-list` into its
-deny-set. Two things it does not show, both called out in the scenario's own
-summary: the snapshot's signature is not checked (`PENDING.md` P8), and no step
-drives a call whose outcome depends on the CP-derived deny-set, so the final
-403 comes from the issuer's *local* set. See
+deny-set. The snapshot's signature *is* checked before any entry is applied. What the
+scenario still does not show, as its own summary says, is a step driving a call
+whose outcome depends on the CP-derived deny-set — the final 403 comes from the
+issuer's *local* set. See
 [control-plane.md](control-plane.md#cp-backed-workflow-steps).
 
 ## Post-v0.1 experimental surfaces
