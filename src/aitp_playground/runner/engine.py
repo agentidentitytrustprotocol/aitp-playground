@@ -212,7 +212,22 @@ class ScenarioRunner:
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("Run %s failed: %s", run_id, exc)
-            ctx.emit(RunEvent(type="run.failed", error=str(exc)))
+            # This is the one failure site that can race `/runs/{id}/cancel`:
+            # steps 1-2 above run before any agent exists, so nothing there
+            # can be mid-flight when a cancel lands, but a step dispatch can.
+            # A cancel kills the subprocesses, which is what turns the next
+            # inter-agent call into the exception landing here — so without
+            # this check, a cancelled run's OWN kill produces a run.failed
+            # event for a run the caller already saw as cancelled. Guarding
+            # only the emit (not just the store, in `_finalize_failure`)
+            # matters: `observability/metrics.py` treats run.complete,
+            # run.failed and run.cancelled identically — decrementing
+            # runs_active and incrementing runs_total once each — so an
+            # unguarded emit here double-counts one run into two labels.
+            # See `DECISIONS.md` D-16.
+            existing = self.store.get(run_id)
+            if existing is None or existing.get("status") != "cancelled":
+                ctx.emit(RunEvent(type="run.failed", error=str(exc)))
             self._cleanup_run(run_id, ports, bootstrap_files)
             return self._finalize_failure(run_id, str(exc), ctx)
         finally:
@@ -270,6 +285,17 @@ class ScenarioRunner:
                 logger.warning("could not remove bootstrap file %s", path)
 
     def _finalize_failure(self, run_id: str, error: str, ctx: RunContext) -> RunResult:
+        """The run FAILED — but if it was already cancelled, the record must
+        say so, not "failed". `api/runs.py`'s `/cancel` route upserts
+        `status="cancelled"` and kills the agent subprocesses; that kill is
+        what turns the in-flight run's next inter-agent call into the
+        exception that lands here. Without this guard that upsert clobbers
+        the cancellation the caller explicitly asked for, one HTTP round-trip
+        later. See `DECISIONS.md` D-16.
+        """
+        existing = self.store.get(run_id)
+        if existing is not None and existing.get("status") == "cancelled":
+            return RunResult.failure(run_id, error, events=ctx.events)
         self.store.upsert(run_id, {
             "run_id": run_id, "status": "failed",
             "outputs": {},

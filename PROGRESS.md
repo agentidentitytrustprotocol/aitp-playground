@@ -447,3 +447,43 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   `DECISIONS.md` entry — Part A applies D-10's existing taxonomy rather than deciding anew.
 - **Tests:** 512 passed (508 + 4), ruff clean.
 - **Next:** Phase 6 — a cancelled run stays cancelled.
+
+### Phase 6 — A cancelled run stays cancelled — 2026-08-28 — PASS (with a live-found correction)
+- **Verifier tier:** Opus (a metrics-double-count trap a mechanical reading would miss — and it
+  did initially, see below).
+- **Decision:** Candidate 2 (guard the store AND the `run.failed` emit) — but the cancel
+  route's kill/mark ordering also had to change, which the plan did not call for. See
+  `DECISIONS.md` D-16 for the race found live and the reasoning.
+- **Files:** `src/aitp_playground/runner/engine.py` (`_finalize_failure` preserves an
+  already-`cancelled` record instead of upserting `failed`; the mid-run exception handler
+  skips the `run.failed` emit under the same condition), `src/aitp_playground/api/runs.py`
+  (`/cancel` now upserts `cancelled` + emits `run.cancelled` **before** killing subprocesses,
+  not after; docstrings corrected), `internal_docs/runner.md` (same ordering fix), new tests in
+  `tests/unit/test_engine_run.py` (2) and `tests/unit/test_metrics.py` (1),
+  `tests/integration/test_runner.py` (assertion tightened from `in {"cancelled","failed"}` to
+  `== "cancelled"`, plus a check that exactly one terminal event lands in the run's log).
+- **What the plan got right vs. what live testing corrected:** the plan called for guarding the
+  store write and the emit (Candidate 2), which was necessary but not sufficient. Running the
+  real `AITP_E2E=1` integration test against the first implementation (guards in place, but the
+  route's original kill-then-mark order) reproduced the race live: `supervisor.kill_run` can
+  fail the background run's in-flight call fast enough that its guard check reads the store
+  *before* the route's own upsert lands, so it still emitted `run.failed` — which then landed
+  in the event log ahead of `run.cancelled`. Reordering the route (mark-then-kill) closes the
+  race at its source; re-ran 5/5 clean where it failed reliably before.
+- **A mutation-testing lesson, recorded in D-16 rather than glossed over:** after the reorder,
+  mutating `_finalize_failure` to remove its guard did **not** turn the live E2E test red — the
+  reorder narrowed the timing window enough that the same mutation no longer reliably
+  reproduces through real subprocess timing. The unit-tier `_finalize_failure` test (store
+  pre-seeded directly, no subprocess involved) does turn red on the identical mutation,
+  deterministically. The E2E test remains valuable end-to-end corroboration; the unit test is
+  the actual mutation gate for this guard.
+- **Mutation results:**
+  | Check | Vehicle | Result |
+  |---|---|---|
+  | Remove `_finalize_failure`'s guard | `tests/unit/test_engine_run.py` (deterministic) | RED — 1 failed |
+  | Remove `_finalize_failure`'s guard | `AITP_E2E=1` integration test (post-reorder) | did NOT turn red — see above |
+- **Live E2E confirmation, 5 consecutive runs:** `AITP_E2E=1 uv run pytest tests/integration/test_runner.py -k cancel_inflight` — 5/5 passed after the reorder.
+- **Docs:** `docs/observability.md`'s metric table needed no change — it lists the label set,
+  not a reachability claim, so it was already accurate.
+- **Tests:** 515 passed (512 + 3 unit-tier), ruff clean.
+- **Next:** Phase 7 — negative-case tests for untested rejection branches; federated test into CI.

@@ -260,3 +260,50 @@ logic into the SDK so `.code` is always present and no playground-side classific
 all (correct long-term, cross-repo, out of scope here — revisit-when the SDK adds it).
 
 See `plans/audit-2026-08-28-cleanup.md` Phase 4.
+
+## D-16 — A cancelled run's record stays cancelled; mark before kill, not after
+**2026-08-28 · found live, not just reasoned**
+
+`POST /runs/{id}/cancel` upserted `status="cancelled"` and returned, but killing the agent
+subprocesses turns the background run's next inter-agent HTTP call into an exception, and
+`_finalize_failure` (`runner/engine.py`) unconditionally upserted `status="failed"` — clobbering
+the cancellation one HTTP round-trip later. `run.cancelled` was also emitted by nothing in the
+repo, so the documented `aitp_playground_runs_total{status=cancelled}` metric label was
+unreachable.
+
+**Chosen: guard both the store write and the `run.failed` emit in `_finalize_failure`/the
+mid-run exception handler, AND reorder the cancel route to mark-then-kill rather than
+kill-then-mark.** Guarding only the store (not the emit) was rejected outright:
+`observability/metrics.py` treats `run.complete`/`run.failed`/`run.cancelled` identically —
+one `runs_active` decrement and one `runs_total` label increment each — so an unguarded
+`run.failed` emit for an already-cancelled run double-counts one run into two labels even with
+the store itself correctly preserved.
+
+**The ordering fix was not in the original plan and was found by running the real
+`AITP_E2E=1` integration test, not by reasoning about the code.** The first implementation
+guarded the store and the emit but left the cancel route's original order (kill subprocesses,
+*then* upsert `cancelled`). Live, this raced: `supervisor.kill_run` runs on the request thread
+while the background run's task lives on its own asyncio loop, and killing a subprocess can
+fail the in-flight inter-agent call fast enough that the background task's guard check reads
+the store *before* the cancel route's own upsert has landed — so it saw a non-cancelled status
+and correctly (by its own logic) proceeded to emit `run.failed`, which then landed in the event
+log ahead of `run.cancelled`. Reordering the route (upsert + emit `run.cancelled` first, kill
+subprocesses last) closes the race at its source: by the time anything can observe a failure
+from the kill, the store already says `cancelled`. Re-ran the live integration test 5/5 clean
+after the reorder, where it failed reliably before.
+
+**Deferred: having the engine itself own cancellation** (a cancel flag `_dispatch_step` checks,
+so the engine is the one place that can emit the terminal event, removing the race by
+construction rather than closing it with ordering). Correct long-term — revisit if this area
+gets touched again — but it means threading a cancellation token through every step type, which
+is a runner refactor, not a fix to the two failure sites this defect lives in.
+
+Also pinned at the unit tier, not only behind `AITP_E2E`: a `_finalize_failure` test that
+pre-seeds the store as `cancelled` and asserts the record survives. The live integration test
+alone would not have been a reliable mutation gate — a first mutation attempt (removing
+`_finalize_failure`'s guard alone, post-reorder) did NOT turn the E2E test red, because the
+reorder made the specific race window it used to hit close enough that it no longer reproduces
+reliably within that test's timing; the unit-tier test, driving `_finalize_failure` directly
+with no subprocess or timing involved, does turn red on the same mutation, deterministically.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 6.

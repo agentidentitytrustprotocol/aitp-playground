@@ -14,7 +14,9 @@ from pydantic import BaseModel
 from ..cp_client.client import CpClient
 from ..errors import RunNotFoundError
 from ..hosting.supervisor import AgentSupervisor
+from ..observability.metrics import record_event
 from ..observability.narrator import narrate_events
+from ..runner.context import RunEvent
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
 from ._deps import get_cp_client, get_run_store, get_runner, get_supervisor
@@ -304,10 +306,23 @@ def cancel_run(
     store: RunStore = Depends(get_run_store),
     supervisor: AgentSupervisor = Depends(get_supervisor),
 ) -> dict[str, Any]:
-    """Cancel an in-flight run. Kills the spawned agent subprocesses; the
-    background task will subsequently fail on the next inter-agent HTTP call
-    and finalize the run as failed (a follow-up upsert here promotes that to
-    `cancelled`). No-op for terminal runs."""
+    """Cancel an in-flight run. Marks the record `cancelled` and emits
+    `run.cancelled` BEFORE killing the spawned agent subprocesses — order
+    matters here, not just presence: killing a subprocess can turn the
+    background task's next inter-agent HTTP call into an exception almost
+    immediately (a different thread, no synchronization with this
+    function), so upserting `cancelled` only after the kill is a real race —
+    `_finalize_failure`'s guard reads a store that may not say `cancelled`
+    yet. Mark first, kill second, and the guard always has something to see.
+    No-op for terminal runs.
+
+    Emits `run.cancelled` directly (there is no `RunContext` at this layer —
+    the background task owns that) via the same two side effects
+    `RunContext.emit` performs: append to the store's event log, and record
+    into the metrics registry. `_finalize_failure`'s guard is what keeps this
+    from being followed by a `run.failed` for the same run, which would
+    double-count one run into two `runs_total` labels. See `DECISIONS.md`
+    D-16 for the race this ordering closes, found live rather than reasoned."""
     record = store.get(run_id)
     if record is None:
         raise RunNotFoundError(f"Run {run_id} not found")
@@ -318,8 +333,14 @@ def cancel_run(
             "cancelled": False,
             "reason": "already terminal",
         }
-    supervisor.kill_run(run_id)
     store.upsert(run_id, {"status": "cancelled"})
+    event = RunEvent(type="run.cancelled", run_id=run_id)
+    store.append_event(run_id, event.model_dump())
+    try:
+        record_event(event.model_dump())
+    except Exception:  # noqa: BLE001 — metrics must never break cancellation
+        logger.exception("record_event failed for run.cancelled on %s", run_id)
+    supervisor.kill_run(run_id)
     return {"run_id": run_id, "status": "cancelled", "cancelled": True}
 
 

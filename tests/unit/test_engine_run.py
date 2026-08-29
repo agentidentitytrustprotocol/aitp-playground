@@ -1237,3 +1237,45 @@ async def test_unknown_fault_kind_fails_run(agent_http) -> None:
     result = await _run(env)
     assert result.status == "failed"
     assert "unknown fault kind 'chaos'" in result.error
+
+
+# --- Phase 6: a cancelled run stays cancelled ---
+
+
+def test_finalize_failure_preserves_an_already_cancelled_record() -> None:
+    """`_finalize_failure` must not clobber a cancellation with `failed`.
+
+    `/runs/{id}/cancel` upserts `status="cancelled"` before killing the
+    agent subprocesses; that kill is what turns the background task's next
+    inter-agent call into the exception `_finalize_failure` handles. Pinned
+    at the unit tier (deterministic, store pre-seeded directly) rather than
+    relying only on the timing-sensitive `AITP_E2E` integration test, which
+    has to actually race a real subprocess kill to exercise this at all.
+    """
+    from aitp_playground.runner.context import RunContext
+
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False, steps=[])
+    env.store.upsert("run-1", {"run_id": "run-1", "status": "cancelled"})
+    ctx = RunContext(run_id="run-1", scenario_ref=SCENARIO_REF, store=env.store)
+
+    result = env.runner._finalize_failure("run-1", "connection refused", ctx)
+
+    assert result.status == "failed", "the RunResult itself reports what happened"
+    record = env.store.get("run-1")
+    assert record["status"] == "cancelled", (
+        "the STORE record must stay cancelled — the caller already saw that "
+        "outcome via /runs/{id}/cancel's response"
+    )
+
+
+def test_finalize_failure_upserts_failed_normally_when_not_cancelled() -> None:
+    """The guard must not swallow every failure — only ones already cancelled."""
+    from aitp_playground.runner.context import RunContext
+
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False, steps=[])
+    env.store.upsert("run-1", {"run_id": "run-1", "status": "running"})
+    ctx = RunContext(run_id="run-1", scenario_ref=SCENARIO_REF, store=env.store)
+
+    env.runner._finalize_failure("run-1", "boom", ctx)
+
+    assert env.store.get("run-1")["status"] == "failed"

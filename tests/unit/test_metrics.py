@@ -36,6 +36,23 @@ def test_record_event_run_failed_counts_as_failed() -> None:
     assert snap["counters"][("aitp_playground_runs_total", (("status", "failed"),))] == 1.0
 
 
+def test_record_event_run_cancelled_counts_as_cancelled_and_decrements_once() -> None:
+    """`run.cancelled` is emitted directly by `api/runs.py`'s cancel route
+    (no `run.failed` follow-up — `runner/engine.py`'s `_finalize_failure`
+    guards against that double-emit). One run must land in exactly one
+    `runs_total` label and decrement `runs_active` exactly once — if the
+    guard elsewhere ever regresses and both events fire for the same run,
+    `runs_active` goes negative before the `max(0.0, ...)` floor, which is
+    itself a symptom worth surfacing, not something to silently tolerate here.
+    """
+    record_event({"type": "run.started", "run_id": "r"})
+    record_event({"type": "run.cancelled", "run_id": "r"})
+    snap = metrics.snapshot()
+    assert snap["counters"][("aitp_playground_runs_total", (("status", "cancelled"),))] == 1.0
+    assert snap["counters"].get(("aitp_playground_runs_total", (("status", "failed"),))) is None
+    assert snap["gauges"][("aitp_playground_runs_active", ())] == 0.0
+
+
 def test_record_event_handshake_and_tct() -> None:
     record_event({"type": "trust.established"})
     record_event({"type": "trust.established"})

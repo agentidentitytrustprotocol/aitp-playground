@@ -314,11 +314,15 @@ appended to the same run record.
 `POST /runs/{id}/cancel`:
 - No-op for runs already in a terminal state.
 - Otherwise kills every subprocess for the run via
-  `supervisor.kill_run`, then marks the record `cancelled`.
+  `supervisor.kill_run`, marks the record `cancelled`, and emits
+  `run.cancelled`.
 - The background run task usually fails its next inter-agent HTTP
-  call once subprocesses die and finalizes the run as failed; the
-  cancel handler's `upsert(status=cancelled)` re-promotes that to
-  `cancelled`.
+  call once subprocesses die — but `_finalize_failure` checks the
+  store for an already-`cancelled` status before upserting `failed`
+  and before emitting `run.failed`, so the cancel handler's upsert
+  (which runs first, over HTTP, before the background task's next
+  call can fail) is what sticks. `GET /runs/{id}` reports `cancelled`
+  deterministically, not "either terminal outcome is acceptable".
 
 The cleanup path in `finally` always runs — bootstrap files are
 unlinked, ports released, processes killed. None of it can raise out
