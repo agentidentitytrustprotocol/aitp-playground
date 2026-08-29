@@ -154,8 +154,11 @@ from `../aitp-cp`, so switching branches in `aitp-control-plane` silently change
 plane the e2e stack tests. Worth knowing before debugging a "works in CI, fails locally"
 divergence: CI checks the CP out fresh into its own path and has no such coupling.
 
-## P7 — `docker-compose e2e` runs pre-merge but does not *block* merge
-**From:** Phase 4 · **Blocks:** the point of Phase 4 · **Cost:** one branch-protection change — **your call, not mine**
+## ~~P7 — `docker-compose e2e` runs pre-merge but does not *block* merge~~ — **CLOSED 2026-08-28**
+**From:** Phase 4 · **Closed by:** user decision to make it required (see `DECISIONS.md` D-12's
+reversal and D-13) — added via the `required_status_checks` sub-resource `PATCH`, both
+directions demonstrated live on PR #53 (`.md`-only, skipped cleanly, stayed `CLEAN`) and PR #54
+(throwaway `uv.lock` bump, `BLOCKED` while the job ran, `CLEAN` once it passed, closed unmerged)
 
 Phase 4 widened the `e2e` job so it fires on any PR touching `uv.lock`.
 It now runs before a bump PR merges. It does **not** stop that merge.
