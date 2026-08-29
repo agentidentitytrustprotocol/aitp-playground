@@ -602,3 +602,27 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   test red.
 - **Tests:** 533 passed (532 + 1), ruff clean.
 - **Next:** Phase 11 — `internal_docs/agents.md`: routes, layout, telemetry catalog.
+
+### Phase 11 — `internal_docs/agents.md`: routes, layout, telemetry catalog — 2026-08-28 — PASS
+- **Verifier tier:** Opus (the previous effort's Phase 8 showed a doc sweep's own replacement
+  claims are what goes wrong — grepped the claims against source rather than reading the diff).
+- **Files:** `internal_docs/agents.md` only. `PENDING.md` P13 struck through as CLOSED.
+- **Route list:** confirmed 13 `build_admin_router` routes (not the 6 P13.1 named — the six
+  plus the seven already-listed ones), added all six missing. Also found, not in the original
+  audit: `AitpServer` itself mounts two more `/admin/*` routes directly
+  (`/admin/rotate-keys`, `/admin/tct-cache-stats`) that the "From `AitpServer`" section never
+  listed — added, with a note that they live outside `build_admin_router` on purpose (key
+  material stays with the server, not the admin router).
+- **Layout tree:** added `oidc.py` and `tct_claims.py` to `base/`, matching P13.1.
+- **Telemetry catalog:** enumerated every event type actually emitted under `agents/`
+  (`rg -o '"[a-z]+\.[a-z_.]+"' agents/`), filtered capability-name false positives
+  (`analyze.data`, `research.deep`, `research.query`, `write.content` — payload strings, not
+  telemetry types) from the remaining 23. Documented the 12 missing ones with their real field
+  sets, checked per-site — including **`identity.key.rotated`** (`aitp_server.py:475-478`,
+  `/admin/rotate-keys`), which the original audit's 11-item list missed entirely. Kept the
+  `verify_failed`/`refresh_failed` split explicit (D-5/D-14's non-aliasing requirement) and did
+  not assert a field set `delegation.redeemed`'s three emit sites don't all provide.
+  `docs/observability.md` needed no edit — it already lists taxonomy families and points here as
+  the catalog, confirmed accurate as written.
+- **Tests:** 533 passed, unchanged (docs-only phase; `agents.md` is not loaded at runtime).
+- **Next:** Phase 12 — prose accuracy: SDK call shapes, CP URL prefix, scenario summaries.

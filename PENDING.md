@@ -423,8 +423,14 @@ Phase 6 drift — the last place in the repo that still described the deny-set a
 monotonic set, which is precisely the structure Phase 6 decomposed (CP-derived and local sets
 held separately, unioned at enforcement).
 
-## P13 — Two more doc gaps found while closing P12, out of its scope
-**From:** P12 close-out · **Status:** OPEN (P13.1) — **P13.2 corrected 2026-08-28, see below**
+## ~~P13 — Two more doc gaps found while closing P12, out of its scope~~ — **CLOSED 2026-08-28**
+**From:** P12 close-out · **Closed by:** `plans/audit-2026-08-28-cleanup.md`. P13.1 closed by
+Phase 11 — `internal_docs/agents.md`'s route list, layout tree, and telemetry catalog brought
+current against the live source (the six originally-named missing routes, plus two more
+`AitpServer`-mounted `/admin/*` routes found while cross-checking that weren't in the original
+list, the two missing `agents/base/` modules, and every telemetry event emitted anywhere under
+`agents/` — including `identity.key.rotated`, found fresh during the sweep). P13.2 corrected
+then closed by Phase 10 (see below).
 
 Found while checking `internal_docs/agents.md` and `docs/aitp-integration.md` for the same
 staleness class as P12; neither is the same defect (no claim citing a closed ticket), so
