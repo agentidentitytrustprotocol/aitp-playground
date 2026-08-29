@@ -214,8 +214,10 @@ exactly the unchecked posture the phase exists to remove.
 
 **All four steps done.** `aitp-rs#90` merged; `v0.6.0` released (release-plz's computed
 v0.5.1 was overridden — the issuer-mismatch reclassification is a behavioural change and in
-0.x the minor is the breaking position); `aitp-sdk` 0.6.0 is on PyPI; the floor here is
-`>=0.6.0` and the suite runs **490 passed, 0 skipped** against the pinned wheel.
+0.x the minor is the breaking position); `aitp-sdk` 0.6.0 is on PyPI; the floor at the time
+was `>=0.6.0` and the suite ran **490 passed, 0 skipped** against the pinned wheel. (The floor
+has since moved to `>=0.7.0` — see `pyproject.toml`'s rationale comment; this paragraph is a
+historical record of the 0.6.0 release, not a claim about the current floor.)
 
 Two operational notes worth keeping. The binding cascade was wedged by a GitHub Actions
 outage and had to be re-dispatched by hand (`gh workflow run release-bindings.yml -f

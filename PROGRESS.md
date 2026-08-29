@@ -315,3 +315,23 @@ describes the pre-Phase-6 monotonic deny-set) and one `ASSUMPTIONS.md` entry (th
 
 - **Suite:** 497 passed, 21 skipped (all env-gated live-stack tests, pre-existing),
   ruff clean, `cli validate` green on the edited scenario.
+
+## Plan 2 — 2026-08-28 audit cleanup
+
+**Plan:** `plans/audit-2026-08-28-cleanup.md` (local, gitignored). Follows an adversarial
+file:line audit run after the revocation-verification effort above closed. 12 phases, executor
+Sonnet with a per-phase verifier tier (Fable/Opus where a negative assertion must be shown to
+fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
+
+### Phase 1 — SDK-floor citation rot — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet (four version strings, one right answer).
+- **Files:** `pyproject.toml` (new 0.7.0 bullet in the floor-rationale comment, citing
+  `agent_admin.py:93-95` and `aitp_server.py:576-593`), `docs/getting-started.md:41`
+  (`>=0.4.0` → `>=0.7.0`), `DECISIONS.md:126` (D-11's version citation), `PENDING.md:217-218`
+  (P8's closing sentence — reworded to mark it historical rather than a claim about the
+  current floor).
+- **Acceptance:** `grep -rn "0\.6\.0|0\.4\.0" pyproject.toml docs/getting-started.md` returns
+  only the historical-rationale bullets (0.6.0's own bullet, by design). `uv.lock` unchanged
+  (`git diff --stat uv.lock` empty). `uv sync --locked` clean.
+- **Tests:** 497 passed, unchanged from baseline (no test touches version strings).
+- **Next:** Phase 2 — test-suite integrity.

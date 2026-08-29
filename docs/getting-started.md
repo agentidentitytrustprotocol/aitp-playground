@@ -38,8 +38,9 @@ details (features, wheels) are the SDK's own docs:
 and [sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build).
 
 See the comments in `pyproject.toml` for the authoritative story (and
-note the floor pin: `aitp-sdk>=0.4.0` — pre-0.3 wheels speak the
-wire-incompatible `aitp/0.1` protocol).
+note the floor pin: `aitp-sdk>=0.7.0` — pre-0.3 wheels speak the
+wire-incompatible `aitp/0.1` protocol; 0.5.0 and 0.7.0 are later breaking
+bumps for the same reason, recorded there).
 
 ## Install the service
 

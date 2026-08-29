@@ -121,7 +121,7 @@ forgery case) are now hard assertions.
 
 Two reasons the skip stopped being defensible. First, the condition is unreachable where it
 was supposed to protect: both `sign_revocation_list` and `verify_revocation_list` are
-unconditional in the binding (no `#[cfg(feature)]`), and the floor is now `aitp-sdk>=0.6.0`,
+unconditional in the binding (no `#[cfg(feature)]`), and the floor is now `aitp-sdk>=0.7.0`,
 so CI's `uv sync --locked` cannot produce a wheel without them. Second, the one path that
 *does* still reach it — `maturin develop` from an old sibling `aitp-rs` checkout, which
 bypasses the resolver entirely — is exactly where a silent skip does the most damage.
