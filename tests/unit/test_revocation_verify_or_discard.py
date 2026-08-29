@@ -406,3 +406,49 @@ async def test_a_quiet_poll_success_stays_quiet(monkeypatch) -> None:
     events: list[dict[str, Any]] = []
     assert await _apply(monkeypatch, state, env, aid, quiet=True, events=events) is None
     assert events == [], "a quiet successful refresh must not emit list_fetched"
+
+
+# --- Phase 5: a snapshot that verifies but has a malformed body ---
+
+
+async def test_a_verified_but_malformed_body_is_discarded_not_a_500(monkeypatch) -> None:
+    """`revocation_refresh.py`'s post-verification parse.
+
+    The installed SDK's own deserialization is strict enough that it rejects
+    every malformed shape tried here (missing `expires_at`, non-numeric
+    timestamps, non-UUID `jti`) *before* the signature check even runs —
+    `aitp.verify_revocation_list` cannot itself be made to accept a body this
+    module's own parse then chokes on. So `verify_revocation_list` is
+    monkeypatched to a no-op here, isolating this module's own defensive
+    parse from the SDK's: "if verification passes — by whatever means, on
+    whatever future SDK — a malformed body must still discard, not crash."
+    Exposure in the real system requires the CP's own private key (only the
+    CP can produce something that verifies), so this is a taxonomic gap, not
+    a security hole — but before this fix it raised `KeyError` out of the
+    function rather than reaching `_discard`, so the admin route returned a
+    bare 500.
+    """
+    aid = "aid:pubkey:does-not-matter-verification-is-stubbed"
+    envelope = json.dumps({
+        "revocation_list": {
+            "version": "aitp/0.2",
+            "issuer": aid,
+            "published_at": int(time.time()),
+            # "expires_at" deliberately omitted.
+            "entries": [{"jti": _jti("jti-1"), "revoked_at": int(time.time())}],
+        },
+        "signature": "irrelevant-verification-is-stubbed",
+    })
+    monkeypatch.setattr(
+        revocation_refresh.aitp, "verify_revocation_list", lambda *a, **k: None
+    )
+
+    state = RevocationState()
+    state.revoke_local(_jti("mine"))  # must survive a discard, like any other
+    events: list[dict[str, Any]] = []
+    cause = await _apply(monkeypatch, state, envelope, aid, events=events)
+    assert cause == "malformed_body"
+    assert not state.is_revoked(_jti("jti-1")), "the malformed snapshot must not apply"
+    assert state.is_revoked(_jti("mine")), "a local revocation must survive the discard"
+    assert [e["type"] for e in events] == ["revocation.verify_failed"]
+    assert events[0]["cause"] == "malformed_body"

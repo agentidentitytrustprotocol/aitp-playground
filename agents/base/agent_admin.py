@@ -28,6 +28,41 @@ CapabilityHandler = Callable[[Any], Awaitable[Any]]
 ManifestProvider = Callable[[], str]
 
 
+async def _post_to_cp_or_502(
+    client: httpx.AsyncClient, url: str, *, content: str, headers: dict[str, str],
+    stage: str, bootstrap: dict[str, Any],
+) -> httpx.Response:
+    """A CP request that cannot reach the network is a 500 without this.
+
+    Before this wrapper, only a non-success HTTP *status* from the CP emitted
+    `cp.enroll_failed` and raised 502 — matching this module's own documented
+    taxonomy (412 caller-state, 404 unknown capability, 500 wiring bug here,
+    502 downstream peer). A connection refusal, DNS failure, or timeout out of
+    `client.post` was uncaught, so it became a bare FastAPI 500 — "wiring bug
+    here" — for a downstream peer that simply was not there, and with no
+    `cp.enroll_failed` event to explain why. That is also why `PENDING.md` P11
+    (a flaky e2e failure at this exact call) was undiagnosable: there was
+    nothing to capture.
+    """
+    try:
+        return await client.post(url, content=content, headers=headers)
+    except httpx.HTTPError as exc:
+        await emit_event(
+            "cp.enroll_failed", bootstrap, stage=stage, transport=str(exc),
+        )
+        raise HTTPException(
+            status_code=502, detail=f"CP {stage} request failed: {exc}",
+        ) from exc
+
+
+def _decode_cp_json_or_none(resp: httpx.Response) -> Optional[dict[str, Any]]:
+    """A 2xx CP response that is not JSON. Caller decides the stage/detail."""
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
 def classify_manifest_verify_failure(exc: BaseException) -> str:
     """`.code` is the SDK's contract; the message wording is not.
 
@@ -675,10 +710,11 @@ def build_admin_router(
         base = cp_base_url.rstrip("/")
         # Step 1 — enroll, get a one-time token.
         async with httpx.AsyncClient(timeout=10.0) as client:
-            enroll = await client.post(
-                f"{base}/api/registry/enroll",
+            enroll = await _post_to_cp_or_502(
+                client, f"{base}/api/registry/enroll",
                 content=manifest_json,
                 headers={"Content-Type": "application/json"},
+                stage="enroll", bootstrap=bootstrap,
             )
             if not enroll.is_success:
                 await emit_event(
@@ -690,7 +726,15 @@ def build_admin_router(
                     status_code=502,
                     detail=f"CP /enroll returned {enroll.status_code}: {enroll.text}",
                 )
-            enroll_resp = enroll.json()
+            enroll_resp = _decode_cp_json_or_none(enroll)
+            if enroll_resp is None:
+                await emit_event(
+                    "cp.enroll_failed", bootstrap, stage="enroll", decode=enroll.text,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"CP /enroll returned a non-JSON 2xx body: {enroll.text!r}",
+                )
             token = enroll_resp.get("token")
             if not token:
                 raise HTTPException(
@@ -698,13 +742,14 @@ def build_admin_router(
                 )
 
             # Step 2 — register the manifest using the token.
-            register = await client.post(
-                f"{base}/api/registry/agents",
+            register = await _post_to_cp_or_502(
+                client, f"{base}/api/registry/agents",
                 content=manifest_json,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}",
                 },
+                stage="register", bootstrap=bootstrap,
             )
             if not register.is_success:
                 await emit_event(
@@ -716,7 +761,15 @@ def build_admin_router(
                     status_code=502,
                     detail=f"CP /agents returned {register.status_code}: {register.text}",
                 )
-            registered = register.json()
+            registered = _decode_cp_json_or_none(register)
+            if registered is None:
+                await emit_event(
+                    "cp.enroll_failed", bootstrap, stage="register", decode=register.text,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"CP /agents returned a non-JSON 2xx body: {register.text!r}",
+                )
 
         await emit_event(
             "cp.enroll_succeeded", bootstrap,

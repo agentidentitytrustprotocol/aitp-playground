@@ -417,3 +417,33 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   pre-Phase-2B line numbers and labelled the delegatee site "unverified"; both were wrong.
 - **Tests:** 508 passed (503 + 5 — 1 engine test + 4 parametrized parity cases), ruff clean.
 - **Next:** Phase 5 — failure observability at the enroll and post-verify-parse boundaries.
+
+### Phase 5 — Failure observability at the enroll and post-verify-parse boundaries — 2026-08-28 — PASS
+- **Verifier tier:** Opus (Part A explains a standing `PENDING.md` watch item; deciding what to
+  record there is a judgement call).
+- **Files:** `agents/base/agent_admin.py` (new `_post_to_cp_or_502` and `_decode_cp_json_or_none`
+  helpers; `/admin/enroll-with-cp`'s two `client.post` calls and two `.json()` decodes now
+  route through them), `agents/base/revocation_refresh.py` (the post-verification snapshot
+  parse wrapped in `try`/`except (KeyError, TypeError, ValueError)`, routed through `_discard`
+  as cause `malformed_body`), `tests/unit/test_agent_admin_enroll.py` (new file, 3 tests),
+  `tests/unit/test_revocation_verify_or_discard.py` (1 new test — this is Phase 2's deferred
+  item 4, landing here in its fixed form).
+- **Part A finding worth recording:** the real SDK's own deserialization is strict enough that
+  every malformed-body shape tried (missing `expires_at`, non-numeric timestamps, non-UUID
+  `jti`) is rejected by `aitp.verify_revocation_list` itself, before the signature check runs —
+  so the post-verify parse guard is genuinely unreachable through the real SDK today. The new
+  test stubs `verify_revocation_list` to a no-op to isolate this module's own defensive parse
+  from the SDK's, which is the only way to demonstrate it fires (D-2).
+- **Mutation results, all run not reasoned:**
+  | Check | Result |
+  |---|---|
+  | Remove `_post_to_cp_or_502`'s try/except | RED — 2 failed |
+  | Remove the post-verify-parse try/except | RED — 1 failed |
+- **`rg "status_code=500" agent_admin.py`** — one match, the pre-existing (and correct)
+  wiring-bug guard for a missing `manifest_provider`; no new 500s introduced.
+- **Docs:** `PENDING.md` P11 updated, not closed — the flake itself is still unreproduced, but
+  the reason its own "capture the agent's stderr" instruction had nothing to capture is now
+  fixed (`cp.enroll_failed` fires on transport failure, not just a non-success status). No new
+  `DECISIONS.md` entry — Part A applies D-10's existing taxonomy rather than deciding anew.
+- **Tests:** 512 passed (508 + 4), ruff clean.
+- **Next:** Phase 6 — a cancelled run stays cancelled.

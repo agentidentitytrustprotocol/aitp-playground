@@ -396,6 +396,18 @@ matters is whether the failure is agent→CP (CP-side) or engine→agent (our st
 the latter, the start-up refresh is holding the event loop longer than the supervisor's
 readiness signal implies.
 
+**Updated 2026-08-28 — the reason this was undiagnosable is now fixed, the flake itself is
+still open.** `plans/audit-2026-08-28-cleanup.md` Phase 5 found why "capture the agent's
+stderr" above had nothing to capture: `/admin/enroll-with-cp`'s `cp.enroll_failed` event fired
+only for a non-success HTTP *status*; a transport exception (`All connection attempts failed`
+is exactly that shape) out of either `client.post` was uncaught, surfaced as a bare 500, and
+emitted nothing. Both posts now go through `_post_to_cp_or_502`, which emits
+`cp.enroll_failed(stage=..., transport=...)` on exactly this failure and returns 502. A
+recurrence now yields the agent→CP vs engine→agent discriminator this entry originally asked
+for, in the events stream rather than by inference from stderr. Not closing P11 itself — it
+remains a non-reproducible flake with no confirmed root cause; what changed is that it is now
+diagnosable if it recurs.
+
 ## ~~P12 — `internal_docs/agents.md` still describes the pre-Phase-6 deny-set~~ — **CLOSED 2026-08-28**
 **From:** Phase 8 verification (round 2, Opus) · **Closed by:** the worker-scaffolding snippet
 and route list in `internal_docs/agents.md` rewritten to match `agents/researcher/main.py`

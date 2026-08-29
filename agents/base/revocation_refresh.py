@@ -132,21 +132,28 @@ async def refresh_revocations(
     # Verified. Parse the exact RFC-AITP-0008 §1.5 envelope — no tolerant
     # fallback. Once the signature is checked, accepting a second shape is a
     # downgrade path: a body the parser accepts but the verifier did not sign
-    # over.
-    body_obj = json.loads(envelope_json)["revocation_list"]
-    jtis = [
-        e["jti"]
-        for e in body_obj.get("entries", [])
-        if isinstance(e, dict) and isinstance(e.get("jti"), str)
-    ]
+    # over. A snapshot that VERIFIES (so it was signed by the pinned CP key)
+    # but whose body is malformed still goes through `_discard` rather than
+    # raising — every other discard cause reaches the admin route as a result
+    # dict, and this one needs to as well, not a bare 500. Exposure to this
+    # path requires the CP's own private key, so it is a taxonomic gap, not a
+    # security one.
+    try:
+        body_obj = json.loads(envelope_json)["revocation_list"]
+        jtis = [
+            e["jti"]
+            for e in body_obj.get("entries", [])
+            if isinstance(e, dict) and isinstance(e.get("jti"), str)
+        ]
+        published_at = int(body_obj["published_at"])
+        expires_at = int(body_obj["expires_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        return await _discard("malformed_body", str(exc))
+
     previous = revocation.snapshot_entry_count
     # Wholesale replacement, not a merge — a snapshot is the issuer's complete
     # current deny-set, so a jti it no longer lists is no longer revoked.
-    revocation.apply_snapshot(
-        jtis,
-        published_at=int(body_obj["published_at"]),
-        expires_at=int(body_obj["expires_at"]),
-    )
+    revocation.apply_snapshot(jtis, published_at=published_at, expires_at=expires_at)
 
     if not quiet:
         await emit(
