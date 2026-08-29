@@ -626,3 +626,35 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   the catalog, confirmed accurate as written.
 - **Tests:** 533 passed, unchanged (docs-only phase; `agents.md` is not loaded at runtime).
 - **Next:** Phase 12 — prose accuracy: SDK call shapes, CP URL prefix, scenario summaries.
+
+### Phase 12 — Prose accuracy: SDK call shapes, CP URL prefix, scenario summaries — 2026-08-28 — PASS
+- **Verifier tier:** Opus (every item is "text asserting an API shape the code does not have" —
+  checked by grep against source, not by reading the diff).
+- **Files:** `docs/aitp-integration.md` (3 call-shape fixes: `verify_delegation` and
+  `verify_delegation_multihop`'s missing deny-set arguments in the table and the ASCII sequence
+  diagram; the `/api/registry/agents` URL prefix), `docs/architecture.md` (`aitp.verify_tct` →
+  `agent.verify_tct`, matching the one correct form already in `aitp-integration.md`),
+  `scenarios/intra-org/delegation-multihop/1.0.0/scenario.yaml` and
+  `.../cp-trust-anchor-provisioning/1.0.0/scenario.yaml` (both summaries updated to state what
+  they now enforce post-P9/D-8, without claiming more precision than the implementation has),
+  `ASSUMPTIONS.md` (last entry flipped to CONFIRMED).
+- **`docs/scenarios.md` checked, not edited** — its per-scenario table entries for both
+  touched scenarios are brief and don't overclaim; no site to fix.
+- **Both edited scenario files validate:** `cli validate` → `ok` for both.
+- **Acceptance checks, all clean:** `rg "verify_delegation\("` / `"verify_delegation_multihop\("`
+  in `docs/` show no bare 2-arg forms (the one apparent grep hit is the ASCII diagram's call
+  split across two lines — the `deny_set)` continuation is on the next line); `rg
+  "aitp\.verify_tct"` returns nothing; `rg "<CP_BASE_URL>/"` shows only the now `/api/`-prefixed
+  form; `ASSUMPTIONS.md` has zero `UNCONFIRMED` entries.
+- **Tests:** 533 passed, unchanged (docs/scenario-only phase), ruff clean repo-wide.
+
+## Plan 2 close-out — all 12 phases PASS, 2026-08-28
+
+`plans/audit-2026-08-28-cleanup.md` complete. Summary: 3 code-behavior fixes (Phases 3, 4, 6),
+2 observability fixes (Phase 5), 1 CI gate change (Phase 8) plus 1 CI/process-doc phase
+(Phase 9), 3 doc-correction phases (10, 11, 12), 1 test-integrity phase (2) plus one dedicated
+negative-case-test phase (7), and 1 citation-rot cleanup (1). 6 new `DECISIONS.md` entries
+(D-14 through D-19). `PENDING.md` P13 closed; `ASSUMPTIONS.md` has no open entries.
+Every negative assertion added was demonstrated by mutation before being trusted (D-2).
+Suite grew from 497 to 533 tests across the run; `agents/base` coverage moved from an
+unmeasured 0% (outside the gate entirely) to a measured, gated 55.2%.

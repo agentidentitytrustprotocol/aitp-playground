@@ -6,9 +6,10 @@ metadata:
   version: 1.0.0
   name: CP Trust-Anchor Provisioning
   summary: >
-    Pushes trust configuration to the Control Plane. The writer's pinned
-    Ed25519 key (read from its published manifest) is registered via
-    POST /api/pinned-keys and an OIDC issuer is registered via
+    Pushes trust configuration to the Control Plane. The writer's manifest
+    is fetched and verified (signature and the AID the runner itself
+    launched it under) before its pinned Ed25519 key is read out of it and
+    registered via POST /api/pinned-keys; an OIDC issuer is registered via
     POST /api/trust-anchors, both scoped to the intra-org namespace. The step
     then reads both registries back to confirm the registration landed.
     Afterwards the researcher and writer handshake and exchange work as usual,

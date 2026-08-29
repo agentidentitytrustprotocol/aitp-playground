@@ -44,7 +44,7 @@ engine.
 | `agent.new_session()` + `build_hello`, `process_hello_ack`, `complete` | `agents/base/agent_admin.py` (in `/admin/initiate-handshake`) | The initiator side. |
 | `agent.verify_tct(tct_token, required_grant, expected_audience=…, revoked_jtis=…)` | `agents/base/aitp_server.py` (`verify_capability_tct`) | Per-call authorization on `/capabilities/<name>`. |
 | `agent.build_delegation(held_tct, delegatee_aid, pk, scope, ttl)` | `agents/base/agent_admin.py` (`/admin/delegate`) | Mint a DelegationToken from a held TCT. |
-| `aitp.verify_delegation(token_json, my_aid)` | `agents/base/aitp_server.py` (`/aitp/delegation/redeem`) | Verify a presented DelegationToken before issuing a fresh TCT. |
+| `aitp.verify_delegation(token_json, my_aid, revoked_jtis)` | `agents/base/aitp_server.py` (`/aitp/delegation/redeem`) | Verify a presented DelegationToken before issuing a fresh TCT. The deny-set argument is RFC-AITP-0006 §4 step 7 — a revoked source jti MUST refuse a fresh TCT. |
 | `agent.issue_tct_for_delegatee(verified)` | `agents/base/aitp_server.py` (`/aitp/delegation/redeem`) | Mint the redeemed TCT bound to the delegatee's key. |
 
 That covers the **core surface**. The post-v0.1 surfaces below add a
@@ -60,7 +60,7 @@ degrade cleanly ([capabilities.md](capabilities.md)):
 | `agent.build_renewal_request(tct_token)` / `agent.process_renewal_request(req, …)` | `agent_admin.py` (`/admin/renew-tct`, `/admin/process-renewal`) | RFC-AITP-0013 in-band TCT renewal (holder + issuer sides). |
 | `aitp.SessionBundleBuilder(agent)` + `aitp.verify_session_bundle(env, aid)` | `agent_admin.py` (`/admin/export…`, `/admin/verify-session-bundle`) | RFC-AITP-0010 session-bundle export + verify. |
 | `aitp.verify_manifest_json(envelope)` | `agent_admin.py` (`/admin/initiate-handshake`, `/admin/delegate`), `runner/engine.py` (`cp_provision_trust_anchor`) | Verify a peer `ManifestEnvelope` before reading the AID or endpoint out of it. |
-| `aitp.verify_delegation_multihop(token, aid)` | `aitp_server.py` (`/aitp/delegation/redeem`) | RFC-AITP-0011 multi-hop delegation verify (replaces `verify_delegation` when enabled). |
+| `aitp.verify_delegation_multihop(token, aid, max_hops, revoked_jtis)` | `aitp_server.py` (`/aitp/delegation/redeem`) | RFC-AITP-0011 multi-hop delegation verify (replaces `verify_delegation` when enabled). `revoked_jtis` is consulted once for the root voucher's `src_jti` and once per hop (RFC-AITP-0011 §6). |
 | `aitp.AitpAgent.generate(suite=…)` + `agent.build_manifest(...)` | `aitp_server.py` (`/admin/rotate-keys`) | RFC-AITP-0007 key rotation — fresh keypair + republished manifest. |
 | `aitp.compute_spki_hash(der)` + `aitp.SpkiPinVerifier(...)` | engine (`spki_pin_check` step) | SPKI client-cert pin computation + verification. |
 
@@ -186,7 +186,7 @@ embed `localhost:8101` and friends to keep it on-machine).
 
 ### `cp_registry`
 For agents marked `org: external`:
-1. Query `GET <CP_BASE_URL>/registry/agents?capability=<hint>` where
+1. Query `GET <CP_BASE_URL>/api/registry/agents?capability=<hint>` where
    the hint is the first workflow capability the runner sees for that
    agent.
 2. If the CP responds with anything, take the first result's
@@ -335,7 +335,8 @@ delegator (researcher)            delegatee (sub-researcher)        verifier (wr
   ── returns DT ──►          (DT in hand)
                               /admin/redeem-delegation              
                                 POST DT to writer /aitp/delegation/redeem ──►
-                                                                    verify_delegation(DT, writer.aid)
+                                                                    verify_delegation(DT, writer.aid,
+                                                                      deny_set)
                                                                     issue_tct_for_delegatee(verified)
                                                                     → TCT_BC bound to sub's key
                               ◄── fresh TCT_BC ──────────────────── 

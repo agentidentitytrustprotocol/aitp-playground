@@ -105,4 +105,10 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   defect Phase 8 exists to remove.
 - **Blast radius if wrong:** Docs/scenario prose understates what the scenario shows.
   No code impact. One-line fix once someone checks the step list against the redeem path.
-- **Status:** UNCONFIRMED
+- **Status:** **CONFIRMED (2026-08-28)** — checked, not assumed.
+  `scenarios/intra-org/revocation-via-cp/1.0.0/scenario.yaml` has exactly four workflow steps:
+  `handshake`, `first_call`, `revoke` (type `revoke_tct`), `blocked_call` (type
+  `capability_probe`). No `delegate` or `redeem_delegation` step exists, so P9's redeem-path
+  deny-set enforcement (`aitp_server.py`'s `/aitp/delegation/redeem`) is never reached by this
+  scenario — the caveat's text is accurate as written and needs no change. See
+  `plans/audit-2026-08-28-cleanup.md` Phase 12.
