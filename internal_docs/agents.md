@@ -22,6 +22,8 @@ agents/
 │   ├── agent_admin.py          # Builds /admin/* routes called by the runner
 │   ├── revocation_state.py     # Local revocations + the CP snapshot, held apart
 │   ├── revocation_refresh.py   # The one verifying ingest of the CP's signed list
+│   ├── oidc.py                 # Agent-side OIDC helpers for OIDC-typed handshakes
+│   ├── tct_claims.py           # Reads TCT/voucher claims for observability only, never trust
 │   ├── telemetry.py            # POSTs events to playground /internal/telemetry
 │   └── llm.py                  # Shared OpenAI/Anthropic selector
 ├── researcher/                 # CrewAI worker
@@ -210,6 +212,12 @@ From `AitpServer`:
   emits `handshake.complete`.
 - `POST /aitp/delegation/redeem` — accept a `DelegationToken`, verify
   it against our AID, mint a fresh TCT bound to the delegatee's key.
+- `POST /admin/rotate-keys` — replace this agent's keypair and
+  republish its manifest under the new identity. `AitpServer` mounts
+  this `/admin/*` route directly (not via `build_admin_router` below) —
+  key material lives here, not in the admin router.
+- `GET  /admin/tct-cache-stats` — RFC-AITP-0005 verification-cache
+  counters (`enabled` is `False` on a wheel without `TctStore`).
 
 From `build_admin_router`:
 - `POST /admin/initiate-handshake` — fetch peer manifest, drive a
@@ -227,6 +235,19 @@ From `build_admin_router`:
   snapshot, verify it against the pinned `CP_AID`, and put it into force
   (replacing any previous snapshot). Discarded wholesale if it does not
   verify.
+- `GET  /admin/held-tct` — return the TCT this agent currently holds
+  from a peer, keyed by peer port.
+- `POST /admin/renew-tct` — request a fresh TCT (new jti, same subject
+  and grants) from the issuer before the held one expires.
+- `POST /admin/export-session-bundle` — RFC-AITP-0010 coordinator side:
+  package the TCTs this agent has issued into a `SessionBundleEnvelope`.
+- `POST /admin/verify-session-bundle` — RFC-AITP-0010 verifier side:
+  verify a `SessionBundleEnvelope` and report active/dropped AIDs.
+- `POST /admin/process-renewal` — issuer side of TCT renewal: verify
+  the request, mint a fresh `TctEnvelope`.
+- `POST /admin/enroll-with-cp` — self-enroll this agent into the
+  control plane's registry (two-step: `/enroll` for a token, then
+  `/agents` to register).
 
 Per worker:
 - `POST /capabilities/<name>` — one per `offered_caps` entry.
@@ -328,9 +349,62 @@ Conventions used by current workers:
 - `delegation.issued` / `delegation.rejected` / `delegation.redeemed` —
   RFC-AITP-0006 flow milestones.
 - `tct.revoked` — when `/admin/revoke-tct` adds a jti.
+- `identity.key.rotated` — when `/admin/rotate-keys` replaces this
+  agent's keypair. Carries `old_aid`, `new_aid`.
 - `capability.self_execute` — when `/admin/self-execute` runs.
 - `llm.started` / `llm.complete` — wraps the LLM call so the run log
   shows when real work happened.
+- `manifest.verify_failed` — a fetched peer manifest failed
+  `aitp.verify_manifest_json`. Carries `cause`
+  (`signature_invalid | expired | malformed | unknown` — from the
+  SDK's `.code`, never guessed at from message text) and `source_url`.
+- `tct.renewal.requested` / `tct.renewal.issued` — holder requests a
+  fresh TCT before the held one expires / issuer mints it. Both carry
+  `jti` and enough of the TCT to identify it (`tct_event(...)`);
+  `.requested` also carries `peer_port`, `.issued` also carries
+  `subject`.
+- `session.bundle.exported` — RFC-AITP-0010 coordinator built a
+  `SessionBundleEnvelope`. Carries `session_id`, `participant_count`.
+- `session.bundle.verified` — RFC-AITP-0010 verifier checked one.
+  Carries `kind` (the SDK's `BundleOutcome.kind`) and `active_count`.
+- `cp.enroll_succeeded` — `/admin/enroll-with-cp` completed. Carries
+  `aid`, `registered_at`.
+- `cp.enroll_failed` — either step of `/admin/enroll-with-cp` failed.
+  Always carries `stage` (`"enroll"` or `"register"`); a non-2xx CP
+  response also carries `status_code` + `body`, a transport failure
+  (connection refused, DNS, timeout) carries `transport`, and a 2xx
+  response that is not JSON carries `decode`. Never aliases a
+  transport failure as a status-code failure or vice versa — the same
+  fetch-vs-verify discipline `revocation.*` below applies.
+- `revocation.list_fetched` — a snapshot verified and was applied.
+  Carries `jti_count`, `added`, `verified`, `issuer`. Suppressed on the
+  poll loop's `quiet` calls (routine, not worth an event every tick).
+- `revocation.refresh_failed` — the snapshot fetch itself failed
+  (transport, not verification). Carries `error`. Also suppressed
+  under `quiet` — an ordinary CP outage fires this once per poll tick
+  otherwise.
+- `revocation.verify_failed` — a fetched snapshot did NOT verify
+  (forged, wrong issuer, expired, malformed body, or the SDK/config
+  cannot check one at all). Carries `cause` and `detail`. **Never**
+  suppressed by `quiet`, unlike the two events above — a discard means
+  the CP answered with something that does not verify, which is the
+  signal `quiet` exists to preserve, not silence. See `DECISIONS.md`
+  D-14. The `verify_failed` / `refresh_failed` split is deliberate:
+  collapsing "the CP didn't answer" and "the CP answered with garbage"
+  is how a signing-convention break gets triaged as a network blip.
+- `revocation.poll` — the background poll loop's own heartbeat, layered
+  on top of `verify_failed`/`refresh_failed` above (not a replacement
+  for them — `healthy` alone cannot distinguish a down CP from a
+  forged snapshot). Carries `healthy`, `changed`, `posture`
+  (`unchecked | current | degraded`). Rate-limited to state changes
+  plus a low-frequency heartbeat, not emitted on every tick.
+- `revocation.degraded_serve` — Axis B served a call in `soft_fail`
+  degraded posture. Carries `reason`, `serves` (a running count),
+  `fail_mode`. Rate-limited to the first occurrence and every 100th —
+  once degraded, every call would otherwise take this path.
+
+`run.cancelled` is emitted by the **runner**, not an agent worker — see
+the runner's own event catalog, not this list.
 
 The runner emits a separate, overlapping set (`trust.establishing`,
 `step.started`, `step.complete`, etc.). Together they form the

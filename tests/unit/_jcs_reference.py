@@ -13,9 +13,12 @@ wrong one — which is exactly how the pre-0.5.0 wrapped-form signing input
 survived a full release across this family. The oracle has to be independent
 of the artifact under test.
 
-`aitp-verifier` is not installable from PyPI (404 as of 2026-08-25), and a
-git/path dependency on a sibling checkout would make this repo's unit suite
-depend on a repo that CI does not check out. So: a copy, with this note.
+`aitp-verifier` is not installable from PyPI (404 as of 2026-08-25). CI *does*
+clone the sibling checkout before running this suite (`ci.yml`), specifically
+so `test_the_vendored_canonicalizer_has_not_drifted_from_its_source` is a real
+gate rather than a developer-machine-only check — but a released PyPI package
+would pin a *version*, reintroducing exactly the staleness vendoring avoids
+(`PENDING.md` P3). So: a copy, with this note.
 
 If `aitp-verifier` is ever published, delete this file and take a dev-group
 dependency on it instead.

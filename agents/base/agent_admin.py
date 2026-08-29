@@ -28,6 +28,64 @@ CapabilityHandler = Callable[[Any], Awaitable[Any]]
 ManifestProvider = Callable[[], str]
 
 
+async def _post_to_cp_or_502(
+    client: httpx.AsyncClient, url: str, *, content: str, headers: dict[str, str],
+    stage: str, bootstrap: dict[str, Any],
+) -> httpx.Response:
+    """A CP request that cannot reach the network is a 500 without this.
+
+    Before this wrapper, only a non-success HTTP *status* from the CP emitted
+    `cp.enroll_failed` and raised 502 — matching this module's own documented
+    taxonomy (412 caller-state, 404 unknown capability, 500 wiring bug here,
+    502 downstream peer). A connection refusal, DNS failure, or timeout out of
+    `client.post` was uncaught, so it became a bare FastAPI 500 — "wiring bug
+    here" — for a downstream peer that simply was not there, and with no
+    `cp.enroll_failed` event to explain why. That is also why `PENDING.md` P11
+    (a flaky e2e failure at this exact call) was undiagnosable: there was
+    nothing to capture.
+    """
+    try:
+        return await client.post(url, content=content, headers=headers)
+    except httpx.HTTPError as exc:
+        await emit_event(
+            "cp.enroll_failed", bootstrap, stage=stage, transport=str(exc),
+        )
+        raise HTTPException(
+            status_code=502, detail=f"CP {stage} request failed: {exc}",
+        ) from exc
+
+
+def _decode_cp_json_or_none(resp: httpx.Response) -> Optional[dict[str, Any]]:
+    """A 2xx CP response that is not JSON. Caller decides the stage/detail."""
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+def classify_manifest_verify_failure(exc: BaseException) -> str:
+    """`.code` is the SDK's contract; the message wording is not.
+
+    aitp-sdk >=0.7.0 carries a `.code` on every *verification* failure — the
+    floor in `pyproject.toml` enforces that. Input that is not JSON at all
+    still raises a plain `ValueError` with no code — there is no envelope to
+    classify — and that is precisely `malformed`. Anything else without a
+    code is genuinely unexpected, so say `unknown` rather than guessing at
+    `signature_invalid` and reporting a parse bug as an attack.
+
+    Mirrored at `runner/engine.py`'s `_classify_manifest_verify_failure` — see
+    that copy's comment, and `DECISIONS.md` D-15, for why this is a second
+    copy rather than a shared import: `agents/base` and `src/aitp_playground`
+    are not reliably importable from each other under the documented local
+    dev command. The two copies are pinned in sync by
+    `tests/unit/test_manifest_verification.py`'s parity test.
+    """
+    cause = getattr(exc, "code", None)
+    if cause is None:
+        cause = "malformed" if isinstance(exc, ValueError) else "unknown"
+    return cause
+
+
 async def _verify_peer_manifest(
     envelope_json: str, source_url: str, bootstrap: dict[str, Any]
 ) -> dict[str, Any]:
@@ -78,21 +136,11 @@ async def _verify_peer_manifest(
         aitp.verify_manifest_json(envelope_json)
     except Exception as exc:  # noqa: BLE001 — the SDK raises RuntimeError/ValueError
         message = str(exc)
-        # `.code` is the SDK's contract; the message wording is not. This
-        # previously read `"expired" in message.lower()`, which pinned the
-        # SDK's prose as an expected value — the same bug class the 0.5.0
-        # signing-input change exposed, and a wording change upstream would
-        # have silently reclassified a forged manifest as a stale one.
-        # aitp-sdk >=0.7.0 carries the code on every *verification* failure;
-        # the floor in pyproject.toml enforces that. Input that is not JSON
-        # at all still raises a plain ValueError with no code — there is no
-        # envelope to classify — and that is precisely `malformed`. Anything
-        # else without a code is genuinely unexpected, so say `unknown`
-        # rather than guessing at `signature_invalid` and reporting a parse
-        # bug as an attack.
-        cause = getattr(exc, "code", None)
-        if cause is None:
-            cause = "malformed" if isinstance(exc, ValueError) else "unknown"
+        # This previously read `"expired" in message.lower()`, which pinned
+        # the SDK's prose as an expected value — the same bug class the
+        # 0.5.0 signing-input change exposed, and a wording change upstream
+        # would have silently reclassified a forged manifest as a stale one.
+        cause = classify_manifest_verify_failure(exc)
         await _reject(
             cause,
             f"peer manifest from {source_url} failed verification ({cause}): "
@@ -662,10 +710,11 @@ def build_admin_router(
         base = cp_base_url.rstrip("/")
         # Step 1 — enroll, get a one-time token.
         async with httpx.AsyncClient(timeout=10.0) as client:
-            enroll = await client.post(
-                f"{base}/api/registry/enroll",
+            enroll = await _post_to_cp_or_502(
+                client, f"{base}/api/registry/enroll",
                 content=manifest_json,
                 headers={"Content-Type": "application/json"},
+                stage="enroll", bootstrap=bootstrap,
             )
             if not enroll.is_success:
                 await emit_event(
@@ -677,7 +726,15 @@ def build_admin_router(
                     status_code=502,
                     detail=f"CP /enroll returned {enroll.status_code}: {enroll.text}",
                 )
-            enroll_resp = enroll.json()
+            enroll_resp = _decode_cp_json_or_none(enroll)
+            if enroll_resp is None:
+                await emit_event(
+                    "cp.enroll_failed", bootstrap, stage="enroll", decode=enroll.text,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"CP /enroll returned a non-JSON 2xx body: {enroll.text!r}",
+                )
             token = enroll_resp.get("token")
             if not token:
                 raise HTTPException(
@@ -685,13 +742,14 @@ def build_admin_router(
                 )
 
             # Step 2 — register the manifest using the token.
-            register = await client.post(
-                f"{base}/api/registry/agents",
+            register = await _post_to_cp_or_502(
+                client, f"{base}/api/registry/agents",
                 content=manifest_json,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}",
                 },
+                stage="register", bootstrap=bootstrap,
             )
             if not register.is_success:
                 await emit_event(
@@ -703,7 +761,15 @@ def build_admin_router(
                     status_code=502,
                     detail=f"CP /agents returned {register.status_code}: {register.text}",
                 )
-            registered = register.json()
+            registered = _decode_cp_json_or_none(register)
+            if registered is None:
+                await emit_event(
+                    "cp.enroll_failed", bootstrap, stage="register", decode=register.text,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"CP /agents returned a non-JSON 2xx body: {register.text!r}",
+                )
 
         await emit_event(
             "cp.enroll_succeeded", bootstrap,
@@ -728,7 +794,10 @@ def build_admin_router(
         Body (all optional):
           - cp_base_url / cp_api_key: overrides; default to
             ``bootstrap['cp']``, set by the supervisor at spawn time.
-          - quiet: suppress per-attempt telemetry (used by the poll loop).
+          - quiet: suppress `revocation.list_fetched` / `revocation.refresh_failed`
+            (used by the poll loop). Does NOT suppress `revocation.verify_failed`
+            — a caller passing ``quiet: true`` still gets that event on a
+            discarded snapshot; see `DECISIONS.md` D-14.
 
         The pinned issuer AID is deliberately NOT overridable — see the module
         docstring for why a caller-chosen issuer would make verification a

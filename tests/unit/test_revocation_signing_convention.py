@@ -289,12 +289,23 @@ def test_the_vendored_canonicalizer_has_not_drifted_from_its_source() -> None:
     nobody notices, leaving this suite verifying against a stale RFC 8785
     implementation while believing it is independent.
 
-    Skipped when the sibling checkout is absent, because CI does not check it
-    out and a missing sibling is not a defect. A *present* sibling that
-    disagrees is.
+    Skipped when the sibling checkout is absent on a developer machine — most
+    developers legitimately have only this one checkout, and turning that into
+    a red suite would not be a defect. In CI, absence is a hard failure: unlike
+    D-11's three wheel-surface guards (which the floor makes unreachable),
+    `ci.yml` clones `aitp-verifier-py` specifically to make this a real gate
+    (`PENDING.md` P3's close-out mechanism), so a missing checkout there means
+    the gate itself is gone, not that nothing needs guarding.
     """
+    import os
     import pathlib
 
+    # This path agrees with ci.yml's clone location only because ci.yml
+    # checks this repo out with no `path:` input (so `$GITHUB_WORKSPACE` IS
+    # this repo's root, and the sibling lands in its parent). docker.yml
+    # already uses a different sibling-layout convention (`path:
+    # aitp-playground`); if ci.yml ever adopts it, this resolution and the
+    # clone step diverge and this guard starts skipping in CI silently.
     source = (
         pathlib.Path(__file__).resolve().parents[2].parent
         / "aitp-verifier-py"
@@ -302,6 +313,12 @@ def test_the_vendored_canonicalizer_has_not_drifted_from_its_source() -> None:
         / "jcs.py"
     )
     if not source.exists():
+        assert not os.environ.get("CI"), (
+            f"sibling checkout absent at {source} — ci.yml clones "
+            "aitp-verifier-py before pytest, so in CI this means the clone "
+            "step is gone or the layout changed; the drift guard is NOT "
+            "passing, it is not running"
+        )
         pytest.skip(f"sibling checkout not present at {source}")
 
     vendored = pathlib.Path(__file__).resolve().parent / "_jcs_reference.py"

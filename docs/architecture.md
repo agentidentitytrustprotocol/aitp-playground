@@ -191,7 +191,7 @@ runner
               POST /capabilities/<name> (on target)
                  headers: X-AITP-TCT: <held compact-JWS TCT token>
                  └─ target.AitpServer.verify_capability_tct(...)
-                       └─ aitp.verify_tct(...)  ✓ or 403
+                       └─ agent.verify_tct(...)  ✓ or 403
                  └─ capability handler runs
                        └─ result returned as JSON
         └─ /admin/invoke wraps non-2xx into {error:true, status_code, body}

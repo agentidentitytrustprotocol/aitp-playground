@@ -121,7 +121,7 @@ forgery case) are now hard assertions.
 
 Two reasons the skip stopped being defensible. First, the condition is unreachable where it
 was supposed to protect: both `sign_revocation_list` and `verify_revocation_list` are
-unconditional in the binding (no `#[cfg(feature)]`), and the floor is now `aitp-sdk>=0.6.0`,
+unconditional in the binding (no `#[cfg(feature)]`), and the floor is now `aitp-sdk>=0.7.0`,
 so CI's `uv sync --locked` cannot produce a wheel without them. Second, the one path that
 *does* still reach it — `maturin develop` from an old sibling `aitp-rs` checkout, which
 bypasses the resolver entirely — is exactly where a silent skip does the most damage.
@@ -136,6 +136,19 @@ still leaves a green job in a state the reason text calls "a coverage hole, not 
 
 Verified by installing 0.5.0: the suite is red with 8 named failures where it previously
 reported a green count.
+
+**A fourth guard, found later, took a different shape (2026-08-28).**
+`test_revocation_signing_convention.py`'s vendored-canonicalizer drift guard had the same false
+"CI does not check this out" justification for its `pytest.skip` — false since `ci.yml` clones
+`aitp-verifier-py` specifically to make it a real gate (`PENDING.md` P3). It was **not**
+converted to an unconditional assertion like the three above: those three guard a property of
+the *installed wheel*, which every developer has; this one guards the presence of a *second git
+checkout*, which most developers legitimately do not have. Making it unconditional would turn a
+fresh clone of this repo into a red suite for a reason that is not a defect. Gated on
+`os.environ.get("CI")` instead — skip on a developer machine, hard-fail in CI — which keeps
+D-11's property (no silent green where the gate is supposed to run) without that cost.
+Demonstrated all three paths live: `CI=1` + sibling absent → red; `CI` unset + absent → skip;
+sibling present → compares normally. See `plans/audit-2026-08-28-cleanup.md` Phase 2.
 
 ## D-12 — `docker-compose e2e` stays advisory, not required
 **2026-08-26 · user decision · REVERSED 2026-08-28, see below**
@@ -180,3 +193,235 @@ Not closing this by pinning the job to a workflow path instead — GitHub's requ
 model doesn't support that — so it is recorded as a standing trap rather than solved. Anyone
 touching `docker.yml`'s `e2e` job name should land the protection-settings update in the same
 PR as the rename.
+
+**Widened 2026-08-28 — the trap applies to three more required contexts, and one of them is a
+*higher*-probability trigger than the one this entry originally named.** Live branch protection
+(`gh api .../branches/main/protection/required_status_checks`) requires all five of:
+
+```
+Lint (ruff)                         — ci.yml's `lint` job, name: "Lint (ruff)"
+Tests (Python 3.11)                 — ci.yml's `test` job, matrix-derived
+Tests (Python 3.13)                 — ci.yml's `test` job, matrix-derived
+Integration (agent subprocess e2e)  — ci.yml's `integration` job
+docker-compose e2e                  — docker.yml's `e2e` job
+```
+
+`Tests (Python 3.11)` / `Tests (Python 3.13)` are **matrix-derived** — `name: Tests (Python
+${{ matrix.python-version }})` combined with `python-version: ["3.11", "3.13"]`. A routine
+Python-version bump (adding 3.14, or moving the floor off 3.11 once it's out of support) changes
+the reported context names. Unlike `docker-compose e2e`, this job is unconditional — there is no
+`skipped` conclusion to fall back on, so the required context simply never reports again.
+Version bumps are also the single most predictable future edit to this file, which makes this a
+*higher*-probability trigger than the `docker-compose e2e` rename this entry originally covered.
+`Lint (ruff)` and the two per-job base names carry the same trap in principle but are far less
+likely to be touched incidentally.
+
+Warning comments landed at `ci.yml`'s jobs block, the `test` job's matrix, and `docker.yml`'s
+`e2e` job name (Phase 9 close-out). No config change — branch protection stays repo admin's
+call, per this decision's own history. See `plans/audit-2026-08-28-cleanup.md` Phase 9.
+
+## D-14 — `revocation.verify_failed` is exempt from `quiet`; `refresh_failed` and
+`list_fetched` are not
+**2026-08-28 · recorded**
+
+The background poll calls `refresh_revocations_now(quiet=True)`
+(`aitp_server.py:223`), and `revocation_refresh.py`'s `_discard` gated its own emit on
+`if not quiet:`. So a discarded snapshot in steady state — forged, wrong-issuer, expired,
+or unverifiable for lack of a pinned issuer or SDK surface — emitted **nothing**. The only
+steady-state signal was `revocation.poll`'s `healthy` flag, which is `False` identically for
+a CP that is down and for an attacker-signed snapshot. Two docstrings
+(`aitp_server.py`'s poll loop, `revocation_refresh.py`'s module docstring) already claimed
+`verify_failed` was the one thing `quiet` must not suppress; the code just didn't do it.
+
+Two candidates considered. **Chosen: `_discard` emits unconditionally; `quiet` still governs
+`revocation.list_fetched` and `revocation.refresh_failed`.** One line
+(`revocation_refresh.py`'s `_discard`, dropping the `if not quiet:` guard). The volume
+argument that motivated `quiet` in the first place is weak for discard causes specifically: a
+discard means the CP is reachable and answering with something that does not verify, which is
+not the routine state `quiet` was introduced for (an ordinary CP outage, which still fires
+`refresh_failed` once per poll tick and stays suppressed).
+
+**Rejected: also suppress the two static-configuration causes** (`no_expected_issuer`,
+`sdk_cannot_verify`) **under `quiet`.** These are true on every tick forever once true at all,
+so under the chosen candidate they emit once per `revocation_poll_secs` (default 60)
+indefinitely on a misconfigured deployment. Rejected anyway: that deployment — `CP_BASE_URL`
+set with `CP_AID` empty, or an old SDK — already has every capability call refused under the
+default `fail_closed`, so being loud about it is correct, not noisy. It also keeps
+`revocation_refresh.py` a single decision site with one rule rather than two.
+
+**Rejected outright: have the poll loop emit `verify_failed` itself from the returned
+`discarded` cause**, rather than fixing `_discard`. `refresh_revocations_now` collapses the
+result to a bool, so this would need a wider return type *and* recreate a second decision site
+in a module whose own docstring already forbids exactly that duplication.
+
+Demonstrated by mutation: restoring `if not quiet:` inside `_discard` turns
+`tests/unit/test_revocation_verify_or_discard.py` red. See
+`plans/audit-2026-08-28-cleanup.md` Phase 3.
+
+## D-15 — The manifest verify-failure classifier is duplicated on purpose, not shared
+**2026-08-28 · recorded**
+
+Two of three manifest ingest sites (`agent_admin.py`'s handshake and delegatee fetches) had a
+`signature_invalid | expired | malformed | unknown` cause taxonomy and `manifest.verify_failed`
+telemetry; the third (`runner/engine.py`'s CP trust-anchor provisioning — the site that pins a
+key into the control plane's trust store) had neither: a bare `aitp.verify_manifest_json(mr.text)`
+call whose raw SDK error propagated with no cause and no event.
+
+The obvious fix — a shared classifier function both sides import — does not work. Verified: an
+agent subprocess's `PYTHONPATH` carries `agents/base`+`agents` but never `src`
+(`hosting/adapters/base.py`'s env builder), and this service gets `agents/base` on `sys.path`
+only in Docker and under pytest, **not** under the documented local dev command (`uv run
+uvicorn aitp_playground.main:app`). A module placed in either package and imported by the other
+passes CI and Docker and breaks local `uvicorn` at start-up, and pytest's own `pythonpath`
+setting (both dirs) means the test suite cannot catch it.
+
+**Chosen: mirror the classifier in both places, pinned in sync by a parity test.**
+`agent_admin.classify_manifest_verify_failure` (extracted, no behaviour change) and
+`runner.engine._classify_manifest_verify_failure` (new) must return identical results for the
+same exception; `tests/unit/test_manifest_verification.py`'s parity test asserts that and is
+demonstrated non-vacuous by mutation — swapping one copy's branch order turns it red.
+
+**Rejected:** a shared module in either package (breaks local dev, above); pushing the fallback
+logic into the SDK so `.code` is always present and no playground-side classification exists at
+all (correct long-term, cross-repo, out of scope here — revisit-when the SDK adds it).
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 4.
+
+## D-16 — A cancelled run's record stays cancelled; mark before kill, not after
+**2026-08-28 · found live, not just reasoned**
+
+`POST /runs/{id}/cancel` upserted `status="cancelled"` and returned, but killing the agent
+subprocesses turns the background run's next inter-agent HTTP call into an exception, and
+`_finalize_failure` (`runner/engine.py`) unconditionally upserted `status="failed"` — clobbering
+the cancellation one HTTP round-trip later. `run.cancelled` was also emitted by nothing in the
+repo, so the documented `aitp_playground_runs_total{status=cancelled}` metric label was
+unreachable.
+
+**Chosen: guard both the store write and the `run.failed` emit in `_finalize_failure`/the
+mid-run exception handler, AND reorder the cancel route to mark-then-kill rather than
+kill-then-mark.** Guarding only the store (not the emit) was rejected outright:
+`observability/metrics.py` treats `run.complete`/`run.failed`/`run.cancelled` identically —
+one `runs_active` decrement and one `runs_total` label increment each — so an unguarded
+`run.failed` emit for an already-cancelled run double-counts one run into two labels even with
+the store itself correctly preserved.
+
+**The ordering fix was not in the original plan and was found by running the real
+`AITP_E2E=1` integration test, not by reasoning about the code.** The first implementation
+guarded the store and the emit but left the cancel route's original order (kill subprocesses,
+*then* upsert `cancelled`). Live, this raced: `supervisor.kill_run` runs on the request thread
+while the background run's task lives on its own asyncio loop, and killing a subprocess can
+fail the in-flight inter-agent call fast enough that the background task's guard check reads
+the store *before* the cancel route's own upsert has landed — so it saw a non-cancelled status
+and correctly (by its own logic) proceeded to emit `run.failed`, which then landed in the event
+log ahead of `run.cancelled`. Reordering the route (upsert + emit `run.cancelled` first, kill
+subprocesses last) closes the race at its source: by the time anything can observe a failure
+from the kill, the store already says `cancelled`. Re-ran the live integration test 5/5 clean
+after the reorder, where it failed reliably before.
+
+**Deferred: having the engine itself own cancellation** (a cancel flag `_dispatch_step` checks,
+so the engine is the one place that can emit the terminal event, removing the race by
+construction rather than closing it with ordering). Correct long-term — revisit if this area
+gets touched again — but it means threading a cancellation token through every step type, which
+is a runner refactor, not a fix to the two failure sites this defect lives in.
+
+Also pinned at the unit tier, not only behind `AITP_E2E`: a `_finalize_failure` test that
+pre-seeds the store as `cancelled` and asserts the record survives. The live integration test
+alone would not have been a reliable mutation gate — a first mutation attempt (removing
+`_finalize_failure`'s guard alone, post-reorder) did NOT turn the E2E test red, because the
+reorder made the specific race window it used to hit close enough that it no longer reproduces
+reliably within that test's timing; the unit-tier test, driving `_finalize_failure` directly
+with no subprocess or timing involved, does turn red on the same mutation, deterministically.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 6.
+
+## D-17 — `agents/base` gets its own coverage gate, not folded into one aggregate
+**2026-08-28 · measured, not estimated**
+
+`agents/base/` holds every revocation, manifest, TCT, and delegation security decision in the
+repo and was entirely outside `pyproject.toml`'s `source_pkgs = ["aitp_playground"]` — D-11
+noted this in passing (*"these modules exercise `agents/base`, outside `source_pkgs`, so
+skipping them costs zero coverage and clears `--fail-under=88`"*) without closing it.
+
+Measured on the tree after Phase 7's new tests, 530 tests passing: `src/aitp_playground` 89.4%,
+`agents/base` 55.2%. `revocation_refresh.py` alone moved from 18.2% (measured before Phase 2)
+to 97.9% — A1's own numbers, closed.
+
+**Chosen: two separate `coverage report --include` gates over one `coverage run` data file** —
+`src/*` stays at `--fail-under=88`, `agents/base/*` gets its own `--fail-under=54` (the measured
+55.2%, rounded down and given one point of headroom so an unrelated PR adding one uncovered
+defensive line does not block on it). Verified both gates pass on the real `ci.yml` invocation,
+and that dropping the `agents/base` gate is detectable: hiding three of Phase 2/5/7's test files
+drops `agents/base` to 43.1% (gate fails, exit code 2) while `src/*` stays at 89.4% (gate still
+passes) — proving the two gates are actually independent, not one number in two clothes.
+
+**Rejected: fold `agents/base` into the same measured source and re-baseline `--fail-under` to
+the combined ~78% aggregate.** This *lowers* the effective floor on `src/` by ten points — a
+regression that drops `src/` from 89% to 79% would still pass, hidden behind `agents/base`'s
+much lower number. A single aggregate gate that gets weaker the moment a second, worse-covered
+package joins it is not a gate anyone should trust.
+
+**Rejected: add `agents/base` and keep `--fail-under=88` on the aggregate.** The combined number
+is 78% today — a job that goes red on day one for coverage that was never actually claimed gets
+disabled by the next person who touches CI, which defeats the point of adding it at all.
+
+**Not omitted:** `agents/base/llm.py` (0.0%, the LLM provider selector, largely untestable
+without live keys) drags the `agents/base` number down materially. Left in the measured source
+rather than `[tool.coverage.report] omit`-ed — the ratchet threshold already accounts for it,
+and omitting anything needs its own justification recorded, which this repo's convention
+(nothing security-relevant hidden from the gate) argues against doing casually.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 8.
+
+## D-18 — Floor-comment drift is caught by a test, not a checklist
+**2026-08-28 · recorded**
+
+`.github/workflows/bump-aitp.yml` delegates to `aitp-ci`'s shared `bump-consume.yml` with
+`ecosystem: uv`, which runs `uv lock --upgrade-package` — confirmed empirically, `f18447f`
+("bump aitp to 0.8.0") touched only `uv.lock`. `pyproject.toml`'s floor specifier and its
+rationale comment move only by hand, and Phase 1 of this cleanup (the comment stopping at
+0.6.0 while the specifier read `>=0.7.0`) is the second time this exact defect has landed —
+the original effort's own Phase 1 fixed the same class once already, at 0.3.0-vs-0.4.0.
+
+**Chosen: a unit test** (`tests/unit/test_sdk_floor_comment_matches_specifier.py`) that parses
+the declared specifier and the comment's highest rationale bullet and fails when they disagree.
+Runs on both Python versions for free, in the coverage job, and a failing assertion names
+itself better than a grep step buried in a workflow.
+
+**Rejected: a checklist line in a bump PR template.** Relies on a human reading a template on a
+PR that `auto-merge.yml` is designed to merge unattended — the exact failure mode this guards
+against is nobody looking. Moot here anyway: `.github/` has no PR template, and one was not
+created for this.
+
+**Rejected, recorded as revisit-when: teach `bump-consume.yml` to edit `pyproject.toml`
+directly.** Out of scope — it lives in the shared `aitp-ci` repo across every consumer, and the
+rationale comment is prose no generic bump workflow can write. Revisit if `aitp-ci` ever grows
+a hook for repo-specific post-bump edits.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 9.
+
+## D-19 — The did:web-insecure-hosts allowlist stays out of `Settings`
+**2026-08-28 · recorded**
+
+`config.py` declared `didweb_insecure_hosts: str = ""` (binding `DIDWEB_INSECURE_HOSTS`), and
+nothing read it — `rg "didweb_insecure_hosts"` matched only the declaration and its own
+comment. The live allowlist is read directly from the environment at
+`trust/resolver.py:22`, as `AITP_DIDWEB_INSECURE_HOSTS` — a **different** variable name. The
+`config.py` comment claimed the resolver reads that var "too", implying the `Settings` field
+was also consulted; it was not.
+
+**Chosen: delete the unread field.** `resolve_did_web` (`trust/resolver.py`) is a module-level
+coroutine with no `Settings` access, called from both `api/hosted.py` and
+`trust/orchestrator.py`. Threading `Settings` into it for a test-only escape hatch used only
+by the Level 1 federated stack is more machinery than the feature deserves. The env var name
+is already load-bearing in four places outside this repo's Python
+(`federated/docker-compose.federated.yml`, `federated/README.md`, `docs/aitp-integration.md`,
+`tests/unit/test_federation.py`) — deleting the unread field and leaving the resolver's direct
+read is the change that makes the code agree with every one of those.
+
+**Rejected: keep the field with `validation_alias="AITP_DIDWEB_INSECURE_HOSTS"` and thread it
+into the resolver.** Two call sites, a signature change, and a fixture rework across
+`tests/unit/test_trust_resolver.py` and `test_federation.py`, all to move a test-only value
+from one lookup style to another. Recorded as the tidier long-term shape if the resolver ever
+needs other configuration — revisit then, not now.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 10.

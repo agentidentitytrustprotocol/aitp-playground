@@ -38,8 +38,9 @@ details (features, wheels) are the SDK's own docs:
 and [sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build).
 
 See the comments in `pyproject.toml` for the authoritative story (and
-note the floor pin: `aitp-sdk>=0.4.0` — pre-0.3 wheels speak the
-wire-incompatible `aitp/0.1` protocol).
+note the floor pin: `aitp-sdk>=0.7.0` — pre-0.3 wheels speak the
+wire-incompatible `aitp/0.1` protocol; 0.5.0 and 0.7.0 are later breaking
+bumps for the same reason, recorded there).
 
 ## Install the service
 
@@ -87,6 +88,12 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `CP_BASE_URL` | _(empty)_ | Optional Control Plane base URL ([control-plane.md](control-plane.md)) |
 | `CP_API_KEY` | _(empty)_ | Optional CP bearer |
 | `CP_TIMEOUT_MS` | `5000` | Per-request timeout for CP calls |
+| `CP_AID` | _(empty)_ | The control plane's pinned AID. With `CP_BASE_URL` set and this empty, every revocation snapshot is verified against no expected issuer and **discarded** (logged loudly at start-up) — the agent runs unchecked, not un-configured. Required to actually verify revocation. |
+| `REVOCATION_FAIL_MODE` | `fail_closed` | Axis B: what to do about the *absence* of a fresh verified snapshot. `fail_closed` refuses capability calls while degraded (the spec's own default); `soft_fail` serves on the last verified deny-set. Never governs authenticity — a forged snapshot is discarded either way. |
+| `REVOCATION_MAX_STALENESS_SECS` | `300` | Axis B: how old the last verified snapshot may be before the posture is "degraded" |
+| `REVOCATION_POLL_SECS` | `60` | Cadence for the background revocation-snapshot refresh |
+| `PUBLIC_HOST` / `PUBLIC_SCHEME` | _(empty)_ / `http` | Public origin this service advertises for agents it hosts via `POST /hosted-agents` (federated/cross-domain demos). Empty `PUBLIC_HOST` means "no public origin" — hosted agents advertise `http://localhost:{port}` as before. |
+| `AITP_DIDWEB_INSECURE_HOSTS` | _(empty)_ | Comma-separated host (or `.suffix`) allowlist for which `did:web` hosts may be resolved over plain `http` instead of `https`. Test-only escape hatch for the Level 1 federated stack; production leaves this empty. **Not** a `Settings` field — read directly from the environment by `trust/resolver.py`, so a value in `.env` reaches it only if the process also exports it (`Settings`' `.env` loader does not set raw `os.environ`). |
 | `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | _(empty)_ | Required for real LLM output |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |

@@ -38,8 +38,10 @@ start-up refresh, and the background poll · `agents/base/aitp_server.py` deny-s
 enforcement. **`CpClient` has no revocation-fetch method** — the signature-blind
 `fetch_revocation_list` was deleted in Phase 8.
 
-**Manifest path (Phase 2B)** — `agents/base/agent_admin.py:415-424` (delegatee AID, unverified)
-· `:85-93` (handshake, raw manifest to `build_hello`) · `src/aitp_playground/trust/resolver.py:33-51`.
+**Manifest path** — `agents/base/agent_admin.py:172` (handshake) and `:516` (delegatee), both
+verified via `_verify_peer_manifest` · `src/aitp_playground/runner/engine.py:587` (the
+CP-trust-anchor site — verified as of the 2026-08-28 audit cleanup, Phase 4; previously the one
+unverified ingest site) · `src/aitp_playground/trust/resolver.py:33-51`.
 
 **Config plumbing** — `src/aitp_playground/config.py:32` (`cp_base_url`), `:46` (`cp_aid`, the pin) →
 `src/aitp_playground/hosting/bootstrap.py:39-43` (`cp_block`) → agent subprocess `bootstrap["cp"]`.
@@ -315,3 +317,344 @@ describes the pre-Phase-6 monotonic deny-set) and one `ASSUMPTIONS.md` entry (th
 
 - **Suite:** 497 passed, 21 skipped (all env-gated live-stack tests, pre-existing),
   ruff clean, `cli validate` green on the edited scenario.
+
+## Plan 2 — 2026-08-28 audit cleanup
+
+**Plan:** `plans/audit-2026-08-28-cleanup.md` (local, gitignored). Follows an adversarial
+file:line audit run after the revocation-verification effort above closed. 12 phases, executor
+Sonnet with a per-phase verifier tier (Fable/Opus where a negative assertion must be shown to
+fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
+
+### Phase 1 — SDK-floor citation rot — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet (four version strings, one right answer).
+- **Files:** `pyproject.toml` (new 0.7.0 bullet in the floor-rationale comment, citing
+  `agent_admin.py:93-95` and `aitp_server.py:576-593`), `docs/getting-started.md:41`
+  (`>=0.4.0` → `>=0.7.0`), `DECISIONS.md:126` (D-11's version citation), `PENDING.md:217-218`
+  (P8's closing sentence — reworded to mark it historical rather than a claim about the
+  current floor).
+- **Acceptance:** `grep -rn "0\.6\.0|0\.4\.0" pyproject.toml docs/getting-started.md` returns
+  only the historical-rationale bullets (0.6.0's own bullet, by design). `uv.lock` unchanged
+  (`git diff --stat uv.lock` empty). `uv sync --locked` clean.
+- **Tests:** 497 passed, unchanged from baseline (no test touches version strings).
+- **Next:** Phase 2 — test-suite integrity.
+
+### Phase 2 — Test-suite integrity: real ingest under test, fourth sibling guard — 2026-08-28 — PASS
+- **Verifier tier:** Fable/Opus (D-2: the phase's value is entirely whether the new
+  assertions can fire).
+- **Files:** `tests/unit/test_revocation_verify_or_discard.py` (rewritten — `_apply` is now a
+  thin wrapper over the real `revocation_refresh.refresh_revocations`, transport stubbed via a
+  module-local `httpx` rebind so `agent_admin`'s shared `httpx` import is untouched; 3 new
+  negative-case tests), `tests/unit/test_revocation_signing_convention.py` (drift guard's
+  `pytest.skip` → `CI`-conditional hard assertion), `tests/unit/_jcs_reference.py` (header no
+  longer claims CI doesn't clone the sibling).
+- **Part A — real ingest under test.** `grep -rn "refresh_revocations" tests/` previously
+  matched nothing; the nine existing tests now drive the production function through a
+  `MockTransport`-backed `httpx.AsyncClient`, with `revocation_refresh`'s own module-global
+  `httpx` name rebound via `monkeypatch.setattr(revocation_refresh, "httpx", ...)` — this
+  rebinds only that module's local name, not the shared `httpx` module object other importers
+  see.
+- **Mutation results, all run not reasoned:**
+  | Guard deleted / aliased | Result |
+  |---|---|
+  | `no_expected_issuer` (`revocation_refresh.py:103-108`) | RED — 1 failed |
+  | `sdk_cannot_verify` (`:109-114`) | RED — 1 failed |
+  | Transport-failure emit aliased to `revocation.verify_failed` | RED — 1 failed |
+- **Post-verification parse guard (Phase 2's item 4) deliberately deferred to Phase 5**, per
+  the plan: asserting today's `KeyError`-raising behaviour here would need rewriting the moment
+  Phase 5 lands the fix. Not forgotten — tracked in the plan.
+- **Part B — fourth sibling guard.** `test_the_vendored_canonicalizer_has_not_drifted_from_its_source`
+  skipped silently when the sibling checkout was absent, with a docstring claiming CI doesn't
+  clone it — false, `ci.yml` clones `aitp-verifier-py` specifically as this guard's real gate
+  (`PENDING.md` P3's close-out). Unlike D-11's three wheel-surface guards, made `CI`-conditional
+  rather than unconditional (see `DECISIONS.md` D-11 addendum for why). Demonstrated live with
+  the sibling checkout temporarily renamed: `CI=1` + absent → 1 failed; `CI` unset + absent → 1
+  skipped; sibling restored → 1 passed (real comparison).
+- **Tests:** 500 passed (497 + 3 new negative cases), ruff clean.
+- **Next:** Phase 3 — `revocation.verify_failed` survives the poll.
+
+### Phase 3 — `revocation.verify_failed` survives the poll — 2026-08-28 — PASS
+- **Verifier tier:** Opus (a telemetry-volume judgement call).
+- **Decision:** Candidate 1 (`_discard` emits unconditionally; `quiet` still governs
+  `list_fetched`/`refresh_failed`) — see `DECISIONS.md` D-14 for the full reasoning and the
+  two rejected alternatives.
+- **Files:** `agents/base/revocation_refresh.py` (`_discard`'s `if not quiet:` removed; both
+  docstrings corrected to state what `quiet` actually suppresses), `agents/base/aitp_server.py`
+  (poll-loop docstring corrected — it no longer implies `revocation.poll` is the only
+  steady-state signal), `agents/base/agent_admin.py` (the admin route's `quiet` param doc
+  states the exemption), `tests/unit/test_revocation_verify_or_discard.py` (3 new tests).
+- **Mutation result, run not reasoned:** restoring `if not quiet:` inside `_discard` turns
+  `tests/unit/test_revocation_verify_or_discard.py` red (1 failed, `IndexError` on the now-empty
+  captured-events list) — demonstrated, then the file was restored from a pre-mutation copy
+  rather than `git checkout --`, which would have discarded this phase's own uncommitted edits
+  along with the mutation (it did, once, mid-phase; redone from a fresh read of the reverted
+  file).
+- **Tests:** 503 passed (500 + 3), ruff clean.
+- **Next:** Phase 4 — one verify-failure taxonomy across all three manifest ingest sites.
+
+### Phase 4 — One verify-failure taxonomy across all three manifest ingest sites — 2026-08-28 — PASS
+- **Verifier tier:** Opus (a module-placement decision a mechanical executor gets wrong in a
+  way only local `uvicorn` catches, not the test suite).
+- **Decision:** Candidate C — mirror the classifier, pin with a parity test — over a shared
+  import (breaks local dev; see `DECISIONS.md` D-15 for the two path facts that rule it out).
+- **Files:** `agents/base/agent_admin.py` (classifier extracted to module-level
+  `classify_manifest_verify_failure`, no behaviour change), `src/aitp_playground/runner/engine.py`
+  (new `_classify_manifest_verify_failure` mirror; `cp_provision_trust_anchor`'s
+  `aitp.verify_manifest_json(mr.text)` call now wrapped, emitting `manifest.verify_failed` and
+  raising `PlaygroundError` with a named cause instead of letting the raw SDK error propagate),
+  `src/aitp_playground/runner/context.py` (`RunEvent` gained `cause`/`source_url` fields —
+  pydantic's default `extra="ignore"` was silently dropping them, confirmed empirically before
+  adding), `tests/unit/test_engine_run.py` (new: tampered-manifest-with-matching-AID case),
+  `tests/unit/test_manifest_verification.py` (new: 4-case classifier parity test).
+- **Mutation results, all run not reasoned:**
+  | Check | Result |
+  |---|---|
+  | Delete the `try`/classify/emit wrapper at `engine.py:587` | RED — 1 failed |
+  | Swap one classifier's branch order (parity test) | RED — 3 failed |
+- **`uv run uvicorn aitp_playground.main:app` starts clean with no `PYTHONPATH` set** —
+  confirmed live (`GET /capabilities` → 200), ruling out the shared-import approach empirically
+  rather than by argument alone.
+- **`PROGRESS.md`'s own repo map corrected** (audit B12) — the manifest-path line cited stale
+  pre-Phase-2B line numbers and labelled the delegatee site "unverified"; both were wrong.
+- **Tests:** 508 passed (503 + 5 — 1 engine test + 4 parametrized parity cases), ruff clean.
+- **Next:** Phase 5 — failure observability at the enroll and post-verify-parse boundaries.
+
+### Phase 5 — Failure observability at the enroll and post-verify-parse boundaries — 2026-08-28 — PASS
+- **Verifier tier:** Opus (Part A explains a standing `PENDING.md` watch item; deciding what to
+  record there is a judgement call).
+- **Files:** `agents/base/agent_admin.py` (new `_post_to_cp_or_502` and `_decode_cp_json_or_none`
+  helpers; `/admin/enroll-with-cp`'s two `client.post` calls and two `.json()` decodes now
+  route through them), `agents/base/revocation_refresh.py` (the post-verification snapshot
+  parse wrapped in `try`/`except (KeyError, TypeError, ValueError)`, routed through `_discard`
+  as cause `malformed_body`), `tests/unit/test_agent_admin_enroll.py` (new file, 3 tests),
+  `tests/unit/test_revocation_verify_or_discard.py` (1 new test — this is Phase 2's deferred
+  item 4, landing here in its fixed form).
+- **Part A finding worth recording:** the real SDK's own deserialization is strict enough that
+  every malformed-body shape tried (missing `expires_at`, non-numeric timestamps, non-UUID
+  `jti`) is rejected by `aitp.verify_revocation_list` itself, before the signature check runs —
+  so the post-verify parse guard is genuinely unreachable through the real SDK today. The new
+  test stubs `verify_revocation_list` to a no-op to isolate this module's own defensive parse
+  from the SDK's, which is the only way to demonstrate it fires (D-2).
+- **Mutation results, all run not reasoned:**
+  | Check | Result |
+  |---|---|
+  | Remove `_post_to_cp_or_502`'s try/except | RED — 2 failed |
+  | Remove the post-verify-parse try/except | RED — 1 failed |
+- **`rg "status_code=500" agent_admin.py`** — one match, the pre-existing (and correct)
+  wiring-bug guard for a missing `manifest_provider`; no new 500s introduced.
+- **Docs:** `PENDING.md` P11 updated, not closed — the flake itself is still unreproduced, but
+  the reason its own "capture the agent's stderr" instruction had nothing to capture is now
+  fixed (`cp.enroll_failed` fires on transport failure, not just a non-success status). No new
+  `DECISIONS.md` entry — Part A applies D-10's existing taxonomy rather than deciding anew.
+- **Tests:** 512 passed (508 + 4), ruff clean.
+- **Next:** Phase 6 — a cancelled run stays cancelled.
+
+### Phase 6 — A cancelled run stays cancelled — 2026-08-28 — PASS (with a live-found correction)
+- **Verifier tier:** Opus (a metrics-double-count trap a mechanical reading would miss — and it
+  did initially, see below).
+- **Decision:** Candidate 2 (guard the store AND the `run.failed` emit) — but the cancel
+  route's kill/mark ordering also had to change, which the plan did not call for. See
+  `DECISIONS.md` D-16 for the race found live and the reasoning.
+- **Files:** `src/aitp_playground/runner/engine.py` (`_finalize_failure` preserves an
+  already-`cancelled` record instead of upserting `failed`; the mid-run exception handler
+  skips the `run.failed` emit under the same condition), `src/aitp_playground/api/runs.py`
+  (`/cancel` now upserts `cancelled` + emits `run.cancelled` **before** killing subprocesses,
+  not after; docstrings corrected), `internal_docs/runner.md` (same ordering fix), new tests in
+  `tests/unit/test_engine_run.py` (2) and `tests/unit/test_metrics.py` (1),
+  `tests/integration/test_runner.py` (assertion tightened from `in {"cancelled","failed"}` to
+  `== "cancelled"`, plus a check that exactly one terminal event lands in the run's log).
+- **What the plan got right vs. what live testing corrected:** the plan called for guarding the
+  store write and the emit (Candidate 2), which was necessary but not sufficient. Running the
+  real `AITP_E2E=1` integration test against the first implementation (guards in place, but the
+  route's original kill-then-mark order) reproduced the race live: `supervisor.kill_run` can
+  fail the background run's in-flight call fast enough that its guard check reads the store
+  *before* the route's own upsert lands, so it still emitted `run.failed` — which then landed
+  in the event log ahead of `run.cancelled`. Reordering the route (mark-then-kill) closes the
+  race at its source; re-ran 5/5 clean where it failed reliably before.
+- **A mutation-testing lesson, recorded in D-16 rather than glossed over:** after the reorder,
+  mutating `_finalize_failure` to remove its guard did **not** turn the live E2E test red — the
+  reorder narrowed the timing window enough that the same mutation no longer reliably
+  reproduces through real subprocess timing. The unit-tier `_finalize_failure` test (store
+  pre-seeded directly, no subprocess involved) does turn red on the identical mutation,
+  deterministically. The E2E test remains valuable end-to-end corroboration; the unit test is
+  the actual mutation gate for this guard.
+- **Mutation results:**
+  | Check | Vehicle | Result |
+  |---|---|---|
+  | Remove `_finalize_failure`'s guard | `tests/unit/test_engine_run.py` (deterministic) | RED — 1 failed |
+  | Remove `_finalize_failure`'s guard | `AITP_E2E=1` integration test (post-reorder) | did NOT turn red — see above |
+- **Live E2E confirmation, 5 consecutive runs:** `AITP_E2E=1 uv run pytest tests/integration/test_runner.py -k cancel_inflight` — 5/5 passed after the reorder.
+- **Docs:** `docs/observability.md`'s metric table needed no change — it lists the label set,
+  not a reachability claim, so it was already accurate.
+- **Tests:** 515 passed (512 + 3 unit-tier), ruff clean.
+- **Next:** Phase 7 — negative-case tests for untested rejection branches; federated test into CI.
+
+### Phase 7 — Negative-case tests for untested rejection branches; federated test into CI — 2026-08-28 — PASS
+- **Verifier tier:** Fable/Opus (D-2: a test that cannot fail is the thing being fixed — every
+  item below was demonstrated by deleting the branch it covers).
+- **Files:** `tests/unit/test_delegation_revocation.py` (+4: old-SDK 503, Axis B freshness on
+  mint, multihop deny-set, capability-TCT issuer mismatch), `tests/unit/test_agent_admin_routes.py`
+  (new file, 7 tests: five 412s, one 500, one 404, plus the session-bundle forgery case),
+  `tests/unit/test_federation.py` (+4: non-did:web 400, loopback 409, the opt-out's other
+  direction, origin-mismatch 409), `.github/workflows/ci.yml` (integration job now also runs
+  `test_federated_handshake.py`).
+- **Two audit corrections, both narrower-than-stated, neither needing a new test:** "redeem
+  single-hop rejection when `allow_multihop_delegation` unset" was already covered by the five
+  existing tests in `test_delegation_revocation.py` (their harness never sets the flag).
+  `engine.py:587` manifest authenticity (item 5) was delivered by Phase 4 — not duplicated here.
+- **Mutation results, all run not reasoned:**
+  | # | Branch | Result |
+  |---|---|---|
+  | 1 | Old-SDK `TypeError` → 503 (`aitp_server.py`) | RED — 1 failed |
+  | 2 | Axis B freshness on the redeem/mint path | RED — 1 failed |
+  | 3 | Multihop branch's deny-set argument | RED — 1 failed |
+  | 4 | `verify_capability_tct` issuer-AID mismatch | RED — 1 failed |
+  | 9 | `AITP_FEDERATION_ALLOW_LOOPBACK` opt-out clause | RED — 1 failed (`tests/unit`, 381 passed) |
+  Items 6, 7, 8, 10 are precondition/shape checks with a single obvious failure mode each (the
+  guard IS the branch); their tests pin current behaviour directly rather than needing a
+  separate delete-and-rerun step.
+- **One item's real behaviour was honestly weaker than the rest of the module's taxonomy, and
+  the test says so rather than asserting an improvement that wasn't made:**
+  `/admin/verify-session-bundle` has no `try`/`except` around `aitp.verify_session_bundle` — a
+  tampered bundle raises an uncaught `RuntimeError`, reaching the client as a bare 500 rather
+  than the 403/502 shape every other verify site in this module uses. The new test pins that a
+  forged bundle IS rejected (never a 200), not that it is rejected *cleanly* — fixing the shape
+  is a follow-up, not something to claim was already done.
+- **`test_federated_handshake.py` confirmed live, not just wired:**
+  `AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py -v`
+  — 4 passed in 3.47s locally, well inside the 10-minute job timeout. `ci.yml:86`'s job `name:`
+  is byte-identical before and after, so this does not trip the D-13 required-check trap.
+- **Tests:** 530 passed (515 + 15 new), ruff clean.
+- **Next:** Phase 8 — bring `agents/base` inside the coverage gate.
+
+### Phase 8 — Bring `agents/base` inside the coverage gate — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet (mechanical once the decision is taken; the verifier re-ran the
+  numbers rather than trusting them, per the plan).
+- **Decision:** Candidate 2 — two separate `coverage report --include` gates over one
+  `coverage run` data file, `agents/base`'s floor set from a fresh measurement (55.2%, minus
+  headroom → 54) rather than folding into one aggregate. See `DECISIONS.md` D-17.
+- **Files:** `pyproject.toml` (`[tool.coverage.run]` gains `source = ["agents/base"]` — no
+  `agents/__init__.py` exists, so it cannot be named via `source_pkgs`), `.github/workflows/ci.yml`
+  (one `coverage report --fail-under=88` → two, `--include="src/*"` and
+  `--include="agents/base/*" --fail-under=54`).
+- **Measured, not estimated, on the post-Phase-7 tree (530 tests):**
+  | Scope | Stmts | Miss | Cover |
+  |---|---|---|---|
+  | `src/aitp_playground` | 3052 | 324 | **89.4%** |
+  | `agents/base` | 819 | 367 | **55.2%** |
+
+  Per-module `agents/base`: `agent_admin.py` 46.3%, `aitp_server.py` 55.3%, `bootstrap.py` 52.0%,
+  `llm.py` 0.0% (not omitted — see D-17), `oidc.py` 41.9%, `revocation_refresh.py` **97.9%**
+  (was 18.2% pre-Phase-2 — A1's own number, closed), `revocation_state.py` 100.0%,
+  `tct_claims.py` 91.7%, `telemetry.py` 70.6%.
+- **Both gates verified against the real `ci.yml` invocation** (not the scratch rcfile used to
+  take the measurement): `coverage run -m pytest tests/unit tests/scenarios -q`, then both
+  `coverage report` calls — both exit 0.
+- **Criterion 4, demonstrated:** hid three of the test files Phases 2/5/7 added
+  (`test_agent_admin_routes.py`, `test_delegation_revocation.py`,
+  `test_revocation_verify_or_discard.py`) and re-ran both gates. `agents/base` dropped to 43.1%
+  and the gate failed with **exit code 2**; `src/*` stayed at 89.4% and passed — the two gates
+  are independently meaningful, not one number wearing two labels.
+- **Tests:** no new tests (this phase adds a gate over tests earlier phases wrote); suite stays
+  at 530 passed, ruff clean.
+- **Next:** Phase 9 — required-check traps and floor-comment drift.
+
+### Phase 9 — Required-check traps and floor-comment drift — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet, re-read live branch protection rather than trusting the plan's
+  snapshot — confirmed unchanged (`gh api .../branches/main/protection/required_status_checks`
+  → the same five contexts before and after).
+- **Part A — the matrix-derived required-check trap, widened beyond D-13's original scope.**
+  `DECISIONS.md` D-13 documented the self-block trap for `docker-compose e2e` only. Widened to
+  cover `Tests (Python 3.11)`/`Tests (Python 3.13)` (matrix-derived, `ci.yml`'s `test` job) —
+  a *higher*-probability trap than the one already documented, since it has no `skipped`
+  fallback and a Python-version bump is the single most predictable future edit to that file.
+  Warning comments landed at `ci.yml`'s jobs block, the `test` job's matrix, and `docker.yml`'s
+  `e2e` job name — all five required contexts now have a comment at their source naming the
+  trap. No config change; branch protection stays a repo-admin decision per D-12's history.
+- **Part B — floor-comment drift, mechanically caught.** New
+  `tests/unit/test_sdk_floor_comment_matches_specifier.py` parses `pyproject.toml`'s declared
+  `aitp-sdk>=X.Y.Z` specifier and the floor-rationale comment's highest bullet, failing when
+  they disagree. Chose a test over a PR-template checklist (`DECISIONS.md` D-18) — and moot
+  either way, since `.github/` has no PR template and one was not created for this.
+- **Mutation result, run not reasoned:** bumping the specifier to `0.8.0` without adding a
+  rationale bullet turns the new test red; reverted, and `uv sync --locked` confirms the lock
+  is untouched by the revert.
+- **Tests:** 532 passed (530 + 2), ruff clean.
+- **Next:** Phase 10 — config surface: env table, `.env.example`, one dead setting.
+
+### Phase 10 — Config surface: env table, `.env.example`, one dead setting — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet (doc edits mechanical; the dead-field decision stated in advance).
+- **Part A — `PENDING.md` P13.2 corrected before closing.** Its original grep (`fail_mode`
+  undocumented everywhere) is stale — `docs/aitp-integration.md:255,277-288` already covers it.
+  Rewrote P13.2 to the real gap (`CP_AID` + three `REVOCATION_*` vars missing from the env
+  table/`.env.example`) and struck it through as closed; P13.1 (route list) stays open for
+  Phase 11.
+- **Part B — files:** `docs/getting-started.md` (7 new env-table rows: `CP_AID`,
+  `REVOCATION_FAIL_MODE`, `REVOCATION_MAX_STALENESS_SECS`, `REVOCATION_POLL_SECS`,
+  `PUBLIC_HOST`/`PUBLIC_SCHEME`, `AITP_DIDWEB_INSECURE_HOSTS`), `.env.example` (same 7,
+  commented, after `CP_TIMEOUT_MS` — noting `AITP_DIDWEB_INSECURE_HOSTS` is read via raw
+  `os.environ`, so a `.env`-only value needs the process to also export it).
+- **Part C — decision:** deleted the dead `didweb_insecure_hosts` `Settings` field rather than
+  wiring it to the resolver — see `DECISIONS.md` D-19. `rg "didweb_insecure_hosts" src/`
+  confirmed only the declaration existed before deletion.
+- **NEW test** `tests/unit/test_config_env_table.py` — asserts every `Settings` field name
+  appears in the env table; not noisy (all 19 current fields map cleanly to `NAME.upper()`).
+- **Mutation result, run not reasoned:** adding an undocumented `Settings` field turns the new
+  test red.
+- **Tests:** 533 passed (532 + 1), ruff clean.
+- **Next:** Phase 11 — `internal_docs/agents.md`: routes, layout, telemetry catalog.
+
+### Phase 11 — `internal_docs/agents.md`: routes, layout, telemetry catalog — 2026-08-28 — PASS
+- **Verifier tier:** Opus (the previous effort's Phase 8 showed a doc sweep's own replacement
+  claims are what goes wrong — grepped the claims against source rather than reading the diff).
+- **Files:** `internal_docs/agents.md` only. `PENDING.md` P13 struck through as CLOSED.
+- **Route list:** confirmed 13 `build_admin_router` routes (not the 6 P13.1 named — the six
+  plus the seven already-listed ones), added all six missing. Also found, not in the original
+  audit: `AitpServer` itself mounts two more `/admin/*` routes directly
+  (`/admin/rotate-keys`, `/admin/tct-cache-stats`) that the "From `AitpServer`" section never
+  listed — added, with a note that they live outside `build_admin_router` on purpose (key
+  material stays with the server, not the admin router).
+- **Layout tree:** added `oidc.py` and `tct_claims.py` to `base/`, matching P13.1.
+- **Telemetry catalog:** enumerated every event type actually emitted under `agents/`
+  (`rg -o '"[a-z]+\.[a-z_.]+"' agents/`), filtered capability-name false positives
+  (`analyze.data`, `research.deep`, `research.query`, `write.content` — payload strings, not
+  telemetry types) from the remaining 23. Documented the 12 missing ones with their real field
+  sets, checked per-site — including **`identity.key.rotated`** (`aitp_server.py:475-478`,
+  `/admin/rotate-keys`), which the original audit's 11-item list missed entirely. Kept the
+  `verify_failed`/`refresh_failed` split explicit (D-5/D-14's non-aliasing requirement) and did
+  not assert a field set `delegation.redeemed`'s three emit sites don't all provide.
+  `docs/observability.md` needed no edit — it already lists taxonomy families and points here as
+  the catalog, confirmed accurate as written.
+- **Tests:** 533 passed, unchanged (docs-only phase; `agents.md` is not loaded at runtime).
+- **Next:** Phase 12 — prose accuracy: SDK call shapes, CP URL prefix, scenario summaries.
+
+### Phase 12 — Prose accuracy: SDK call shapes, CP URL prefix, scenario summaries — 2026-08-28 — PASS
+- **Verifier tier:** Opus (every item is "text asserting an API shape the code does not have" —
+  checked by grep against source, not by reading the diff).
+- **Files:** `docs/aitp-integration.md` (3 call-shape fixes: `verify_delegation` and
+  `verify_delegation_multihop`'s missing deny-set arguments in the table and the ASCII sequence
+  diagram; the `/api/registry/agents` URL prefix), `docs/architecture.md` (`aitp.verify_tct` →
+  `agent.verify_tct`, matching the one correct form already in `aitp-integration.md`),
+  `scenarios/intra-org/delegation-multihop/1.0.0/scenario.yaml` and
+  `.../cp-trust-anchor-provisioning/1.0.0/scenario.yaml` (both summaries updated to state what
+  they now enforce post-P9/D-8, without claiming more precision than the implementation has),
+  `ASSUMPTIONS.md` (last entry flipped to CONFIRMED).
+- **`docs/scenarios.md` checked, not edited** — its per-scenario table entries for both
+  touched scenarios are brief and don't overclaim; no site to fix.
+- **Both edited scenario files validate:** `cli validate` → `ok` for both.
+- **Acceptance checks, all clean:** `rg "verify_delegation\("` / `"verify_delegation_multihop\("`
+  in `docs/` show no bare 2-arg forms (the one apparent grep hit is the ASCII diagram's call
+  split across two lines — the `deny_set)` continuation is on the next line); `rg
+  "aitp\.verify_tct"` returns nothing; `rg "<CP_BASE_URL>/"` shows only the now `/api/`-prefixed
+  form; `ASSUMPTIONS.md` has zero `UNCONFIRMED` entries.
+- **Tests:** 533 passed, unchanged (docs/scenario-only phase), ruff clean repo-wide.
+
+## Plan 2 close-out — all 12 phases PASS, 2026-08-28
+
+`plans/audit-2026-08-28-cleanup.md` complete. Summary: 3 code-behavior fixes (Phases 3, 4, 6),
+2 observability fixes (Phase 5), 1 CI gate change (Phase 8) plus 1 CI/process-doc phase
+(Phase 9), 3 doc-correction phases (10, 11, 12), 1 test-integrity phase (2) plus one dedicated
+negative-case-test phase (7), and 1 citation-rot cleanup (1). 6 new `DECISIONS.md` entries
+(D-14 through D-19). `PENDING.md` P13 closed; `ASSUMPTIONS.md` has no open entries.
+Every negative assertion added was demonstrated by mutation before being trusted (D-2).
+Suite grew from 497 to 533 tests across the run; `agents/base` coverage moved from an
+unmeasured 0% (outside the gate entirely) to a measured, gated 55.2%.

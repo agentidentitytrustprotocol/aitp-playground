@@ -942,6 +942,43 @@ async def test_cp_provision_refuses_a_manifest_from_a_different_agent(agent_http
     assert env.cp.pinned == [], "nothing may be pinned when identity does not match"
 
 
+async def test_cp_provision_refuses_a_manifest_that_fails_signature_verification(agent_http) -> None:
+    """The authenticity check this step actually performs — not just the AID pin.
+
+    The AID-substitution test above is caught by the identity comparison
+    regardless of whether `aitp.verify_manifest_json` runs at all, because a
+    substituted manifest is self-consistently signed. This one tampers the
+    manifest body *after* signing while leaving `aid` untouched, so the AID
+    pin cannot be what catches it — only `aitp.verify_manifest_json` can.
+    Before this test, deleting that call left `tests/unit` green.
+    """
+    def _tampered_manifest(req: httpx.Request) -> httpx.Response:
+        # Derive from the same cached-per-port fixture the fake supervisor
+        # uses for `ra.aid` (see FakeSupervisor.launch above), so the `aid`
+        # here always agrees with the AID pin regardless of which port the
+        # allocator happened to give "alice" — only the tamper is new.
+        genuine = json.loads(_fake_agent_manifest(req.url.port))
+        genuine["manifest"]["display_name"] = "tampered-after-signing"
+        return httpx.Response(200, text=json.dumps(genuine))
+
+    agent_http.overrides["/.well-known/aitp-manifest"] = _tampered_manifest
+
+    env = make_env(
+        agents={"alice": ["cap.a"]}, eager=False, cp=FakeCp(enabled=True),
+        steps=[{"id": "prov", "type": "cp_provision_trust_anchor",
+                "agent": "alice", "issuer_url": "https://issuer.test"}],
+    )
+    result = await _run(env)
+
+    assert result.status == "failed"
+    assert "failed verification (signature_invalid)" in (result.error or "")
+    assert env.cp.pinned == [], "nothing may be pinned from an unverified manifest"
+    failures = [e for e in result.events if e.type == "manifest.verify_failed"]
+    assert len(failures) == 1
+    assert failures[0].cause == "signature_invalid"
+    assert failures[0].source_url == env.supervisor.agents["alice"].manifest_url
+
+
 async def test_cp_delegation_tree_skips_without_cp(agent_http) -> None:
     env = make_env(
         agents={"alice": ["cap.a"]}, eager=False,
@@ -1200,3 +1237,45 @@ async def test_unknown_fault_kind_fails_run(agent_http) -> None:
     result = await _run(env)
     assert result.status == "failed"
     assert "unknown fault kind 'chaos'" in result.error
+
+
+# --- Phase 6: a cancelled run stays cancelled ---
+
+
+def test_finalize_failure_preserves_an_already_cancelled_record() -> None:
+    """`_finalize_failure` must not clobber a cancellation with `failed`.
+
+    `/runs/{id}/cancel` upserts `status="cancelled"` before killing the
+    agent subprocesses; that kill is what turns the background task's next
+    inter-agent call into the exception `_finalize_failure` handles. Pinned
+    at the unit tier (deterministic, store pre-seeded directly) rather than
+    relying only on the timing-sensitive `AITP_E2E` integration test, which
+    has to actually race a real subprocess kill to exercise this at all.
+    """
+    from aitp_playground.runner.context import RunContext
+
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False, steps=[])
+    env.store.upsert("run-1", {"run_id": "run-1", "status": "cancelled"})
+    ctx = RunContext(run_id="run-1", scenario_ref=SCENARIO_REF, store=env.store)
+
+    result = env.runner._finalize_failure("run-1", "connection refused", ctx)
+
+    assert result.status == "failed", "the RunResult itself reports what happened"
+    record = env.store.get("run-1")
+    assert record["status"] == "cancelled", (
+        "the STORE record must stay cancelled — the caller already saw that "
+        "outcome via /runs/{id}/cancel's response"
+    )
+
+
+def test_finalize_failure_upserts_failed_normally_when_not_cancelled() -> None:
+    """The guard must not swallow every failure — only ones already cancelled."""
+    from aitp_playground.runner.context import RunContext
+
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False, steps=[])
+    env.store.upsert("run-1", {"run_id": "run-1", "status": "running"})
+    ctx = RunContext(run_id="run-1", scenario_ref=SCENARIO_REF, store=env.store)
+
+    env.runner._finalize_failure("run-1", "boom", ctx)
+
+    assert env.store.get("run-1")["status"] == "failed"

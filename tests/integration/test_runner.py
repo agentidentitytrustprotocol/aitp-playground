@@ -68,8 +68,10 @@ def test_intra_org_research_and_write_end_to_end() -> None:
 def test_cancel_inflight_run_reaches_terminal_state() -> None:
     """Cancel a run while its agents are up. The cancel endpoint kills the
     subprocesses and marks the run cancelled; the background task then fails
-    on its next inter-agent call and finalizes. Either terminal outcome is
-    acceptable — what must NOT happen is the run hanging or succeeding.
+    on its next inter-agent call, but `_finalize_failure` checks for an
+    already-cancelled status before upserting `failed` — so `cancelled` is
+    the one terminal outcome that survives, deterministically. What must NOT
+    happen is the run hanging, succeeding, or ending up `failed`.
 
     TestClient executes FastAPI background tasks synchronously (the POST
     would only return after the run finished), so the POST runs on a side
@@ -122,7 +124,15 @@ def test_cancel_inflight_run_reaches_terminal_state() -> None:
         if status in _TERMINAL:
             break
         time.sleep(0.5)
-    assert status in {"cancelled", "failed"}, status
+    assert status == "cancelled", (
+        f"a cancelled run's own kill produced a run.failed that clobbered "
+        f"the cancellation the caller asked for: status={status}"
+    )
+    events = client.get(f"/runs/{rid}").json().get("events", [])
+    terminal_types = [e["type"] for e in events if e["type"] in ("run.failed", "run.cancelled")]
+    assert terminal_types == ["run.cancelled"], (
+        f"exactly one terminal event must be recorded, got {terminal_types}"
+    )
 
     # Cancelling a terminal run is a no-op, not an error.
     again = client.post(f"/runs/{rid}/cancel")

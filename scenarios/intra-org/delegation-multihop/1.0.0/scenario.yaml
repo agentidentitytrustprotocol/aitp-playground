@@ -18,7 +18,10 @@ metadata:
     DelegationToken envelope — each redemption produces a TCT whose
     issuer is the original resource server (writer). The SDK enforces the
     scope-narrowing invariant at every hop: a delegatee can never receive
-    grants its delegator did not hold.
+    grants its delegator did not hold. Each redemption also enforces the
+    revocation deny-set and Axis B freshness at that hop (RFC-AITP-0011
+    §6) before minting the next TCT — one flat deny-set applied to every
+    hop, not per-issuer as the RFC's ideal shape describes.
   tags: [delegation, multi-hop, rfc-0011, intra-org]
 
 spec:

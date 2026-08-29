@@ -23,12 +23,14 @@ class Settings(BaseSettings):
     # Empty (the default) means "no public origin" — behaves exactly as before.
     public_host: str = ""
     public_scheme: str = "http"
-    # Comma-separated host (or ".suffix") allowlist for which did:web hosts may
-    # be resolved over plain http instead of https. Test-only escape hatch for
-    # the Level 1 federated stack (e.g. ".aitp.test"); production leaves this
-    # empty so did:web always resolves over https. Read directly by
-    # trust/resolver.py from the AITP_DIDWEB_INSECURE_HOSTS env var too.
-    didweb_insecure_hosts: str = ""
+    # NOTE: the did:web-over-http allowlist (test-only escape hatch for the
+    # Level 1 federated stack) is deliberately NOT a Settings field.
+    # `trust/resolver.py` reads `AITP_DIDWEB_INSECURE_HOSTS` directly from
+    # `os.environ` — a raw read, not through pydantic — because `resolve_did_web`
+    # is a module-level coroutine with no Settings access, called from both
+    # `api/hosted.py` and `trust/orchestrator.py`. Threading Settings into it
+    # for a test-only value would be more machinery than the feature deserves.
+    # See DECISIONS.md D-19.
     cp_base_url: str = ""
     cp_api_key: str = ""
     # The control plane's AID, pinned. Verifying a revocation snapshot without

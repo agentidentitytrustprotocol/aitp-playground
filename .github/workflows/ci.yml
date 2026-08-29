@@ -11,6 +11,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # WARNING: every job `name:` in this file (and docker.yml's `e2e` job) is a
+  # literal string in main's required status checks — GitHub has no other
+  # handle for a required check. Renaming a job here (or the matrix values
+  # below, which become part of the "Tests (Python X.Y)" name) makes the
+  # required context stop reporting; the PR making the change blocks itself,
+  # not fails loudly. Land a `required_status_checks` update in the SAME PR
+  # as any such rename. See DECISIONS.md D-13.
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
@@ -36,6 +43,14 @@ jobs:
       fail-fast: false
       matrix:
         # Floor (requires-python) and latest.
+        # WARNING: these values become the required-check context NAMES via
+        # `name: Tests (Python ${{ matrix.python-version }})` above. main's
+        # branch protection requires "Tests (Python 3.11)" and
+        # "Tests (Python 3.13)" literally. Changing this list renames the
+        # contexts, the required checks never report, and the PR making the
+        # change blocks itself with no skip fallback (unlike docker.yml's
+        # `e2e` job, which always reports skipped-or-real). Land the
+        # required_status_checks update in the SAME PR. See DECISIONS.md D-13.
         python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v7
@@ -80,7 +95,11 @@ jobs:
       - name: Run unit + scenario tests with coverage
         run: |
           uv run coverage run -m pytest tests/unit tests/scenarios -q
-          uv run coverage report --fail-under=88
+          # Two gates over one measurement, not one aggregate: a single
+          # combined number would let a regression in src/ hide behind
+          # agents/base's lower floor (or vice versa). See DECISIONS.md D-17.
+          uv run coverage report --include="src/*" --fail-under=88
+          uv run coverage report --include="agents/base/*" --fail-under=54
 
   integration:
     name: Integration (agent subprocess e2e)
@@ -101,5 +120,9 @@ jobs:
       - name: Run gated runner integration tests
         # Spawns real agent subprocesses (deterministic stubs, no LLM keys)
         # and drives a full scenario run through the API.
-        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v
+        # test_federated_handshake.py needs no Docker stack — it drives an
+        # in-process TestClient over two real loopback ports — and until
+        # this line it ran nowhere in CI: the only coverage of the
+        # cross-origin handshake path and the loopback fail-closed guard.
+        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py -v
         timeout-minutes: 10

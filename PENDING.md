@@ -214,8 +214,10 @@ exactly the unchecked posture the phase exists to remove.
 
 **All four steps done.** `aitp-rs#90` merged; `v0.6.0` released (release-plz's computed
 v0.5.1 was overridden — the issuer-mismatch reclassification is a behavioural change and in
-0.x the minor is the breaking position); `aitp-sdk` 0.6.0 is on PyPI; the floor here is
-`>=0.6.0` and the suite runs **490 passed, 0 skipped** against the pinned wheel.
+0.x the minor is the breaking position); `aitp-sdk` 0.6.0 is on PyPI; the floor at the time
+was `>=0.6.0` and the suite ran **490 passed, 0 skipped** against the pinned wheel. (The floor
+has since moved to `>=0.7.0` — see `pyproject.toml`'s rationale comment; this paragraph is a
+historical record of the 0.6.0 release, not a claim about the current floor.)
 
 Two operational notes worth keeping. The binding cascade was wedged by a GitHub Actions
 outage and had to be re-dispatched by hand (`gh workflow run release-bindings.yml -f
@@ -394,6 +396,18 @@ matters is whether the failure is agent→CP (CP-side) or engine→agent (our st
 the latter, the start-up refresh is holding the event loop longer than the supervisor's
 readiness signal implies.
 
+**Updated 2026-08-28 — the reason this was undiagnosable is now fixed, the flake itself is
+still open.** `plans/audit-2026-08-28-cleanup.md` Phase 5 found why "capture the agent's
+stderr" above had nothing to capture: `/admin/enroll-with-cp`'s `cp.enroll_failed` event fired
+only for a non-success HTTP *status*; a transport exception (`All connection attempts failed`
+is exactly that shape) out of either `client.post` was uncaught, surfaced as a bare 500, and
+emitted nothing. Both posts now go through `_post_to_cp_or_502`, which emits
+`cp.enroll_failed(stage=..., transport=...)` on exactly this failure and returns 502. A
+recurrence now yields the agent→CP vs engine→agent discriminator this entry originally asked
+for, in the events stream rather than by inference from stderr. Not closing P11 itself — it
+remains a non-reproducible flake with no confirmed root cause; what changed is that it is now
+diagnosable if it recurs.
+
 ## ~~P12 — `internal_docs/agents.md` still describes the pre-Phase-6 deny-set~~ — **CLOSED 2026-08-28**
 **From:** Phase 8 verification (round 2, Opus) · **Closed by:** the worker-scaffolding snippet
 and route list in `internal_docs/agents.md` rewritten to match `agents/researcher/main.py`
@@ -409,8 +423,14 @@ Phase 6 drift — the last place in the repo that still described the deny-set a
 monotonic set, which is precisely the structure Phase 6 decomposed (CP-derived and local sets
 held separately, unioned at enforcement).
 
-## P13 — Two more doc gaps found while closing P12, out of its scope
-**From:** P12 close-out · **Status:** OPEN
+## ~~P13 — Two more doc gaps found while closing P12, out of its scope~~ — **CLOSED 2026-08-28**
+**From:** P12 close-out · **Closed by:** `plans/audit-2026-08-28-cleanup.md`. P13.1 closed by
+Phase 11 — `internal_docs/agents.md`'s route list, layout tree, and telemetry catalog brought
+current against the live source (the six originally-named missing routes, plus two more
+`AitpServer`-mounted `/admin/*` routes found while cross-checking that weren't in the original
+list, the two missing `agents/base/` modules, and every telemetry event emitted anywhere under
+`agents/` — including `identity.key.rotated`, found fresh during the sweep). P13.2 corrected
+then closed by Phase 10 (see below).
 
 Found while checking `internal_docs/agents.md` and `docs/aitp-integration.md` for the same
 staleness class as P12; neither is the same defect (no claim citing a closed ticket), so
@@ -420,8 +440,46 @@ neither was folded into that fix:
    `/admin/held-tct`, `/admin/renew-tct`, `/admin/export-session-bundle`,
    `/admin/verify-session-bundle`, `/admin/process-renewal`, `/admin/enroll-with-cp`
    (`agents/base/agent_admin.py:287,304,357,428,446,605`) — and the repo-layout tree omits
-   `oidc.py` and `tct_claims.py`.
-2. **Axis B (`revocation_fail_mode` / `revocation_max_staleness_secs`) is undocumented in
+   `oidc.py` and `tct_claims.py`. **Still open** — Phase 11 of
+   `plans/audit-2026-08-28-cleanup.md` closes this.
+2. ~~**Axis B (`revocation_fail_mode` / `revocation_max_staleness_secs`) is undocumented in
    every public doc.** `grep -rln "fail_mode" docs/ internal_docs/ README.md` returns nothing;
    both settings exist only in `src/aitp_playground/config.py` and `hosting/bootstrap.py`. A
-   real section, not a one-line mention.
+   real section, not a one-line mention.~~
+
+   **Corrected and closed 2026-08-28.** That grep is now stale — `docs/aitp-integration.md:255`
+   and a substantial explanatory paragraph at `:277-288` already cover `fail_closed` vs
+   `soft_fail` and the Axis A/B separation correctly. The conceptual gap this item named does
+   not exist. What IS still missing, verified fresh: none of `CP_AID`, `REVOCATION_FAIL_MODE`,
+   `REVOCATION_MAX_STALENESS_SECS`, `REVOCATION_POLL_SECS` appear in
+   `docs/getting-started.md`'s env table or `.env.example` — an environment-variable gap, not a
+   conceptual one. `CP_AID` appears in prose in five docs but is never listed as a variable a
+   deployment sets — the one that matters most, since an empty value silently discards every
+   revocation snapshot. Closed by `plans/audit-2026-08-28-cleanup.md` Phase 10, which added all
+   four to both the env table and `.env.example`.
+
+## P14 — `test_cancel_inflight_run_reaches_terminal_state` flaked once after the D-16 reorder
+**From:** post-Phase-6 validation of `plans/audit-2026-08-28-cleanup.md` · **Blocks:** nothing
+· **Cost:** a watch item, not a fix
+
+While running the full close-out validation for the audit-cleanup branch (all 12 phases),
+`AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py`
+failed once at `test_cancel_inflight_run_reaches_terminal_state` (1 failed, 3 passed). Ten
+immediately-following re-runs — five of `test_runner.py` alone, five of the combined pair — all
+passed cleanly. Not reproducible on demand; the failing run's specific assertion output was not
+captured (only a truncated tail), so which of the test's checks failed is unknown.
+
+`DECISIONS.md` D-16 already documents why this class of test is not fully deterministic even
+after the fix: it races a real subprocess kill (`supervisor.kill_run`, OS-level) against a real
+background `asyncio` task on its own event loop, and D-16's own mutation-testing note records
+that the reorder narrowed the timing window without provably eliminating every interleaving —
+it converted a reliably-reproducible race into (apparently) a rare one, not a proven-impossible
+one. This entry exists so a recurrence is recorded against a known cause rather than treated as
+a fresh mystery.
+
+**If it recurs:** capture the full assertion failure (which of `status == "cancelled"`, the
+terminal-event-count check, or something upstream) and the run's event log via
+`GET /runs/{id}`. If it is the store status flipping to `failed`, `_finalize_failure`'s guard
+did not see `cancelled` in time — the race D-16 already names, just rarer post-reorder than
+pre-reorder. If it is something else entirely (a hang, a different assertion), that is new
+information this entry does not yet have.

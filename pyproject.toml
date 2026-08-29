@@ -30,6 +30,12 @@ dependencies = [
   #     agents now require. On an older wheel every snapshot is discarded
   #     (cause=sdk_cannot_verify) and a CP-pinned agent runs degraded, so the
   #     floor is what makes that a resolver error rather than a runtime one.
+  #   0.7.0 — two verify calls gained a required argument, not a wire change:
+  #     `verify_manifest_json` failures carry a typed `.code` (agent_admin.py
+  #     classifies it; a missing code on an older wheel reports every failure
+  #     as `unknown`), and `verify_delegation`/`verify_delegation_multihop`
+  #     take a deny-set parameter (aitp_server.py:576-593; an older wheel
+  #     raises TypeError, turned into a 503 rather than a silent downgrade).
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
@@ -104,6 +110,12 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.coverage.run]
 source_pkgs = ["aitp_playground"]
+# `agents/base` holds every revocation/manifest/TCT/delegation security
+# decision in the repo and has no `agents/__init__.py` (so it is not an
+# importable package `source_pkgs` can name) — measured via `source` instead,
+# alongside `aitp_playground`. Two separate `coverage report --include` gates
+# in ci.yml, not one aggregate: see DECISIONS.md D-17.
+source = ["agents/base"]
 
 [tool.coverage.report]
 precision = 1

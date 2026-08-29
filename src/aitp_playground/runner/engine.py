@@ -29,6 +29,30 @@ from .store import RunStore
 logger = logging.getLogger(__name__)
 
 
+def _classify_manifest_verify_failure(exc: BaseException) -> str:
+    """Mirror of `agent_admin.classify_manifest_verify_failure`.
+
+    Not a shared import. `agents/base` and `src/aitp_playground` are not
+    reliably importable from each other: an agent subprocess gets
+    `agents/base`+`agents` on `PYTHONPATH`
+    (`hosting/adapters/base.py:_build_env`) but never `src`, while this
+    service gets `agents/base` on `sys.path` only in Docker
+    (`Dockerfile:PYTHONPATH`) and under pytest (`pyproject.toml`'s
+    `pythonpath`) — NOT under the documented local dev command (`uv run
+    uvicorn aitp_playground.main:app`). A shared import would pass CI and
+    Docker and break local `uvicorn` with an `ImportError` nothing in the
+    test suite would catch, since pytest puts both paths on `sys.path`.
+
+    The two copies are pinned in sync by
+    `tests/unit/test_manifest_verification.py`'s classifier-parity test — see
+    `DECISIONS.md` D-15.
+    """
+    cause = getattr(exc, "code", None)
+    if cause is None:
+        cause = "malformed" if isinstance(exc, ValueError) else "unknown"
+    return cause
+
+
 class ScenarioRunner:
     def __init__(
         self,
@@ -188,7 +212,22 @@ class ScenarioRunner:
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("Run %s failed: %s", run_id, exc)
-            ctx.emit(RunEvent(type="run.failed", error=str(exc)))
+            # This is the one failure site that can race `/runs/{id}/cancel`:
+            # steps 1-2 above run before any agent exists, so nothing there
+            # can be mid-flight when a cancel lands, but a step dispatch can.
+            # A cancel kills the subprocesses, which is what turns the next
+            # inter-agent call into the exception landing here — so without
+            # this check, a cancelled run's OWN kill produces a run.failed
+            # event for a run the caller already saw as cancelled. Guarding
+            # only the emit (not just the store, in `_finalize_failure`)
+            # matters: `observability/metrics.py` treats run.complete,
+            # run.failed and run.cancelled identically — decrementing
+            # runs_active and incrementing runs_total once each — so an
+            # unguarded emit here double-counts one run into two labels.
+            # See `DECISIONS.md` D-16.
+            existing = self.store.get(run_id)
+            if existing is None or existing.get("status") != "cancelled":
+                ctx.emit(RunEvent(type="run.failed", error=str(exc)))
             self._cleanup_run(run_id, ports, bootstrap_files)
             return self._finalize_failure(run_id, str(exc), ctx)
         finally:
@@ -246,6 +285,17 @@ class ScenarioRunner:
                 logger.warning("could not remove bootstrap file %s", path)
 
     def _finalize_failure(self, run_id: str, error: str, ctx: RunContext) -> RunResult:
+        """The run FAILED — but if it was already cancelled, the record must
+        say so, not "failed". `api/runs.py`'s `/cancel` route upserts
+        `status="cancelled"` and kills the agent subprocesses; that kill is
+        what turns the in-flight run's next inter-agent call into the
+        exception that lands here. Without this guard that upsert clobbers
+        the cancellation the caller explicitly asked for, one HTTP round-trip
+        later. See `DECISIONS.md` D-16.
+        """
+        existing = self.store.get(run_id)
+        if existing is not None and existing.get("status") == "cancelled":
+            return RunResult.failure(run_id, error, events=ctx.events)
         self.store.upsert(run_id, {
             "run_id": run_id, "status": "failed",
             "outputs": {},
@@ -584,7 +634,20 @@ class ScenarioRunner:
                 # The runner launched this agent and knows its AID, so unlike
                 # the peer-manifest sites we can check identity too, not just
                 # authenticity.
-                aitp.verify_manifest_json(mr.text)
+                try:
+                    aitp.verify_manifest_json(mr.text)
+                except Exception as exc:  # noqa: BLE001 — SDK raises RuntimeError/ValueError
+                    cause = _classify_manifest_verify_failure(exc)
+                    ctx.emit(RunEvent(
+                        type="manifest.verify_failed", step_id=step.id,
+                        agent_id=step.agent, cause=cause,
+                        source_url=ra.manifest_url,
+                    ))
+                    raise PlaygroundError(
+                        f"manifest at {ra.manifest_url} failed verification "
+                        f"({cause}): {exc} — refusing to pin a trust anchor "
+                        "from an unverified manifest"
+                    ) from exc
                 manifest = mr.json().get("manifest", {})
             # Authenticity is not enough here. Verification proves the envelope
             # was minted by the holder of the AID it declares — but this step
