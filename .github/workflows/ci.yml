@@ -101,5 +101,9 @@ jobs:
       - name: Run gated runner integration tests
         # Spawns real agent subprocesses (deterministic stubs, no LLM keys)
         # and drives a full scenario run through the API.
-        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v
+        # test_federated_handshake.py needs no Docker stack — it drives an
+        # in-process TestClient over two real loopback ports — and until
+        # this line it ran nowhere in CI: the only coverage of the
+        # cross-origin handshake path and the loopback fail-closed guard.
+        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py -v
         timeout-minutes: 10

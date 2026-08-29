@@ -487,3 +487,41 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   not a reachability claim, so it was already accurate.
 - **Tests:** 515 passed (512 + 3 unit-tier), ruff clean.
 - **Next:** Phase 7 — negative-case tests for untested rejection branches; federated test into CI.
+
+### Phase 7 — Negative-case tests for untested rejection branches; federated test into CI — 2026-08-28 — PASS
+- **Verifier tier:** Fable/Opus (D-2: a test that cannot fail is the thing being fixed — every
+  item below was demonstrated by deleting the branch it covers).
+- **Files:** `tests/unit/test_delegation_revocation.py` (+4: old-SDK 503, Axis B freshness on
+  mint, multihop deny-set, capability-TCT issuer mismatch), `tests/unit/test_agent_admin_routes.py`
+  (new file, 7 tests: five 412s, one 500, one 404, plus the session-bundle forgery case),
+  `tests/unit/test_federation.py` (+4: non-did:web 400, loopback 409, the opt-out's other
+  direction, origin-mismatch 409), `.github/workflows/ci.yml` (integration job now also runs
+  `test_federated_handshake.py`).
+- **Two audit corrections, both narrower-than-stated, neither needing a new test:** "redeem
+  single-hop rejection when `allow_multihop_delegation` unset" was already covered by the five
+  existing tests in `test_delegation_revocation.py` (their harness never sets the flag).
+  `engine.py:587` manifest authenticity (item 5) was delivered by Phase 4 — not duplicated here.
+- **Mutation results, all run not reasoned:**
+  | # | Branch | Result |
+  |---|---|---|
+  | 1 | Old-SDK `TypeError` → 503 (`aitp_server.py`) | RED — 1 failed |
+  | 2 | Axis B freshness on the redeem/mint path | RED — 1 failed |
+  | 3 | Multihop branch's deny-set argument | RED — 1 failed |
+  | 4 | `verify_capability_tct` issuer-AID mismatch | RED — 1 failed |
+  | 9 | `AITP_FEDERATION_ALLOW_LOOPBACK` opt-out clause | RED — 1 failed (`tests/unit`, 381 passed) |
+  Items 6, 7, 8, 10 are precondition/shape checks with a single obvious failure mode each (the
+  guard IS the branch); their tests pin current behaviour directly rather than needing a
+  separate delete-and-rerun step.
+- **One item's real behaviour was honestly weaker than the rest of the module's taxonomy, and
+  the test says so rather than asserting an improvement that wasn't made:**
+  `/admin/verify-session-bundle` has no `try`/`except` around `aitp.verify_session_bundle` — a
+  tampered bundle raises an uncaught `RuntimeError`, reaching the client as a bare 500 rather
+  than the 403/502 shape every other verify site in this module uses. The new test pins that a
+  forged bundle IS rejected (never a 200), not that it is rejected *cleanly* — fixing the shape
+  is a follow-up, not something to claim was already done.
+- **`test_federated_handshake.py` confirmed live, not just wired:**
+  `AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py -v`
+  — 4 passed in 3.47s locally, well inside the 10-minute job timeout. `ci.yml:86`'s job `name:`
+  is byte-identical before and after, so this does not trip the D-13 required-check trap.
+- **Tests:** 530 passed (515 + 15 new), ruff clean.
+- **Next:** Phase 8 — bring `agents/base` inside the coverage gate.
