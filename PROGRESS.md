@@ -335,3 +335,37 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   (`git diff --stat uv.lock` empty). `uv sync --locked` clean.
 - **Tests:** 497 passed, unchanged from baseline (no test touches version strings).
 - **Next:** Phase 2 — test-suite integrity.
+
+### Phase 2 — Test-suite integrity: real ingest under test, fourth sibling guard — 2026-08-28 — PASS
+- **Verifier tier:** Fable/Opus (D-2: the phase's value is entirely whether the new
+  assertions can fire).
+- **Files:** `tests/unit/test_revocation_verify_or_discard.py` (rewritten — `_apply` is now a
+  thin wrapper over the real `revocation_refresh.refresh_revocations`, transport stubbed via a
+  module-local `httpx` rebind so `agent_admin`'s shared `httpx` import is untouched; 3 new
+  negative-case tests), `tests/unit/test_revocation_signing_convention.py` (drift guard's
+  `pytest.skip` → `CI`-conditional hard assertion), `tests/unit/_jcs_reference.py` (header no
+  longer claims CI doesn't clone the sibling).
+- **Part A — real ingest under test.** `grep -rn "refresh_revocations" tests/` previously
+  matched nothing; the nine existing tests now drive the production function through a
+  `MockTransport`-backed `httpx.AsyncClient`, with `revocation_refresh`'s own module-global
+  `httpx` name rebound via `monkeypatch.setattr(revocation_refresh, "httpx", ...)` — this
+  rebinds only that module's local name, not the shared `httpx` module object other importers
+  see.
+- **Mutation results, all run not reasoned:**
+  | Guard deleted / aliased | Result |
+  |---|---|
+  | `no_expected_issuer` (`revocation_refresh.py:103-108`) | RED — 1 failed |
+  | `sdk_cannot_verify` (`:109-114`) | RED — 1 failed |
+  | Transport-failure emit aliased to `revocation.verify_failed` | RED — 1 failed |
+- **Post-verification parse guard (Phase 2's item 4) deliberately deferred to Phase 5**, per
+  the plan: asserting today's `KeyError`-raising behaviour here would need rewriting the moment
+  Phase 5 lands the fix. Not forgotten — tracked in the plan.
+- **Part B — fourth sibling guard.** `test_the_vendored_canonicalizer_has_not_drifted_from_its_source`
+  skipped silently when the sibling checkout was absent, with a docstring claiming CI doesn't
+  clone it — false, `ci.yml` clones `aitp-verifier-py` specifically as this guard's real gate
+  (`PENDING.md` P3's close-out). Unlike D-11's three wheel-surface guards, made `CI`-conditional
+  rather than unconditional (see `DECISIONS.md` D-11 addendum for why). Demonstrated live with
+  the sibling checkout temporarily renamed: `CI=1` + absent → 1 failed; `CI` unset + absent → 1
+  skipped; sibling restored → 1 passed (real comparison).
+- **Tests:** 500 passed (497 + 3 new negative cases), ruff clean.
+- **Next:** Phase 3 — `revocation.verify_failed` survives the poll.

@@ -137,6 +137,19 @@ still leaves a green job in a state the reason text calls "a coverage hole, not 
 Verified by installing 0.5.0: the suite is red with 8 named failures where it previously
 reported a green count.
 
+**A fourth guard, found later, took a different shape (2026-08-28).**
+`test_revocation_signing_convention.py`'s vendored-canonicalizer drift guard had the same false
+"CI does not check this out" justification for its `pytest.skip` — false since `ci.yml` clones
+`aitp-verifier-py` specifically to make it a real gate (`PENDING.md` P3). It was **not**
+converted to an unconditional assertion like the three above: those three guard a property of
+the *installed wheel*, which every developer has; this one guards the presence of a *second git
+checkout*, which most developers legitimately do not have. Making it unconditional would turn a
+fresh clone of this repo into a red suite for a reason that is not a defect. Gated on
+`os.environ.get("CI")` instead — skip on a developer machine, hard-fail in CI — which keeps
+D-11's property (no silent green where the gate is supposed to run) without that cost.
+Demonstrated all three paths live: `CI=1` + sibling absent → red; `CI` unset + absent → skip;
+sibling present → compares normally. See `plans/audit-2026-08-28-cleanup.md` Phase 2.
+
 ## D-12 — `docker-compose e2e` stays advisory, not required
 **2026-08-26 · user decision · REVERSED 2026-08-28, see below**
 
