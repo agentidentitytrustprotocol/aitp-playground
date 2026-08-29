@@ -138,7 +138,7 @@ Verified by installing 0.5.0: the suite is red with 8 named failures where it pr
 reported a green count.
 
 ## D-12 — `docker-compose e2e` stays advisory, not required
-**2026-08-26 · user decision**
+**2026-08-26 · user decision · REVERSED 2026-08-28, see below**
 
 Phase 4 widened the job to run pre-merge on any PR touching `uv.lock`. It is deliberately
 **not** added to `main`'s required status checks.
@@ -150,3 +150,33 @@ unrelated PRs waiting on a check that never reports.
 
 Reversible in one settings change; `PENDING.md` P7 keeps the close-out steps, including the
 requirement to demonstrate **both** directions (a pin PR blocks, an unrelated PR merges).
+
+**Reversed 2026-08-28.** The skipped-vs-required trap this decision was hedging against does
+not apply to this job: `docker.yml`'s `pull_request` trigger has no path/branch filter that
+would exclude a normal PR, so `e2e` always schedules and reports either `skipped` or a real
+conclusion — never "no status at all." Demonstrated both directions on live PRs, not reasoned
+about: `docker-compose e2e` skipped cleanly on a `.md`-only PR (#53, `mergeStateStatus: CLEAN`
+throughout) and blocked a `uv.lock`-touching PR (#54, `mergeStateStatus: BLOCKED` while the job
+ran ~4-5 min, `CLEAN` only once it passed). Added to `main`'s required status checks via the
+`required_status_checks` sub-resource `PATCH` (not a full `PUT`, which would have reset
+`enforce_admins`/`allow_force_pushes`/etc. to their defaults) — verified byte-identical on
+every other protection field before and after. `PENDING.md` P7 closed. See D-13 for the trap
+this reversal introduces in its place.
+
+## D-13 — Renaming the `docker-compose e2e` job (or its workflow file) will self-block
+**2026-08-28 · recorded, not decided**
+
+D-12's reversal makes `main`'s required status checks match a job by its display **name**
+(`docker.yml`'s `e2e` job has `name: docker-compose e2e`), not by job id or workflow path.
+GitHub has no other handle for a required check.
+
+If a future change renames that job, renames `docker.yml`, or restructures the workflow so a
+job with that exact name no longer reports, the PR making the change blocks **itself**: the
+required context never reports, and `mergeStateStatus` sits `BLOCKED`/`Expected` rather than
+failing loudly. `enforce_admins: false` is the escape hatch (`gh pr merge --admin`), but that
+is a repo admin working around branch protection, not a fix.
+
+Not closing this by pinning the job to a workflow path instead — GitHub's required-checks
+model doesn't support that — so it is recorded as a standing trap rather than solved. Anyone
+touching `docker.yml`'s `e2e` job name should land the protection-settings update in the same
+PR as the rename.
