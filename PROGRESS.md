@@ -557,3 +557,26 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
 - **Tests:** no new tests (this phase adds a gate over tests earlier phases wrote); suite stays
   at 530 passed, ruff clean.
 - **Next:** Phase 9 — required-check traps and floor-comment drift.
+
+### Phase 9 — Required-check traps and floor-comment drift — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet, re-read live branch protection rather than trusting the plan's
+  snapshot — confirmed unchanged (`gh api .../branches/main/protection/required_status_checks`
+  → the same five contexts before and after).
+- **Part A — the matrix-derived required-check trap, widened beyond D-13's original scope.**
+  `DECISIONS.md` D-13 documented the self-block trap for `docker-compose e2e` only. Widened to
+  cover `Tests (Python 3.11)`/`Tests (Python 3.13)` (matrix-derived, `ci.yml`'s `test` job) —
+  a *higher*-probability trap than the one already documented, since it has no `skipped`
+  fallback and a Python-version bump is the single most predictable future edit to that file.
+  Warning comments landed at `ci.yml`'s jobs block, the `test` job's matrix, and `docker.yml`'s
+  `e2e` job name — all five required contexts now have a comment at their source naming the
+  trap. No config change; branch protection stays a repo-admin decision per D-12's history.
+- **Part B — floor-comment drift, mechanically caught.** New
+  `tests/unit/test_sdk_floor_comment_matches_specifier.py` parses `pyproject.toml`'s declared
+  `aitp-sdk>=X.Y.Z` specifier and the floor-rationale comment's highest bullet, failing when
+  they disagree. Chose a test over a PR-template checklist (`DECISIONS.md` D-18) — and moot
+  either way, since `.github/` has no PR template and one was not created for this.
+- **Mutation result, run not reasoned:** bumping the specifier to `0.8.0` without adding a
+  rationale bullet turns the new test red; reverted, and `uv sync --locked` confirms the lock
+  is untouched by the revert.
+- **Tests:** 532 passed (530 + 2), ruff clean.
+- **Next:** Phase 10 — config surface: env table, `.env.example`, one dead setting.

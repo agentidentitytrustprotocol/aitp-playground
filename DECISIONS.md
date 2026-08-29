@@ -194,6 +194,32 @@ model doesn't support that — so it is recorded as a standing trap rather than 
 touching `docker.yml`'s `e2e` job name should land the protection-settings update in the same
 PR as the rename.
 
+**Widened 2026-08-28 — the trap applies to three more required contexts, and one of them is a
+*higher*-probability trigger than the one this entry originally named.** Live branch protection
+(`gh api .../branches/main/protection/required_status_checks`) requires all five of:
+
+```
+Lint (ruff)                         — ci.yml's `lint` job, name: "Lint (ruff)"
+Tests (Python 3.11)                 — ci.yml's `test` job, matrix-derived
+Tests (Python 3.13)                 — ci.yml's `test` job, matrix-derived
+Integration (agent subprocess e2e)  — ci.yml's `integration` job
+docker-compose e2e                  — docker.yml's `e2e` job
+```
+
+`Tests (Python 3.11)` / `Tests (Python 3.13)` are **matrix-derived** — `name: Tests (Python
+${{ matrix.python-version }})` combined with `python-version: ["3.11", "3.13"]`. A routine
+Python-version bump (adding 3.14, or moving the floor off 3.11 once it's out of support) changes
+the reported context names. Unlike `docker-compose e2e`, this job is unconditional — there is no
+`skipped` conclusion to fall back on, so the required context simply never reports again.
+Version bumps are also the single most predictable future edit to this file, which makes this a
+*higher*-probability trigger than the `docker-compose e2e` rename this entry originally covered.
+`Lint (ruff)` and the two per-job base names carry the same trap in principle but are far less
+likely to be touched incidentally.
+
+Warning comments landed at `ci.yml`'s jobs block, the `test` job's matrix, and `docker.yml`'s
+`e2e` job name (Phase 9 close-out). No config change — branch protection stays repo admin's
+call, per this decision's own history. See `plans/audit-2026-08-28-cleanup.md` Phase 9.
+
 ## D-14 — `revocation.verify_failed` is exempt from `quiet`; `refresh_failed` and
 `list_fetched` are not
 **2026-08-28 · recorded**
@@ -345,3 +371,30 @@ and omitting anything needs its own justification recorded, which this repo's co
 (nothing security-relevant hidden from the gate) argues against doing casually.
 
 See `plans/audit-2026-08-28-cleanup.md` Phase 8.
+
+## D-18 — Floor-comment drift is caught by a test, not a checklist
+**2026-08-28 · recorded**
+
+`.github/workflows/bump-aitp.yml` delegates to `aitp-ci`'s shared `bump-consume.yml` with
+`ecosystem: uv`, which runs `uv lock --upgrade-package` — confirmed empirically, `f18447f`
+("bump aitp to 0.8.0") touched only `uv.lock`. `pyproject.toml`'s floor specifier and its
+rationale comment move only by hand, and Phase 1 of this cleanup (the comment stopping at
+0.6.0 while the specifier read `>=0.7.0`) is the second time this exact defect has landed —
+the original effort's own Phase 1 fixed the same class once already, at 0.3.0-vs-0.4.0.
+
+**Chosen: a unit test** (`tests/unit/test_sdk_floor_comment_matches_specifier.py`) that parses
+the declared specifier and the comment's highest rationale bullet and fails when they disagree.
+Runs on both Python versions for free, in the coverage job, and a failing assertion names
+itself better than a grep step buried in a workflow.
+
+**Rejected: a checklist line in a bump PR template.** Relies on a human reading a template on a
+PR that `auto-merge.yml` is designed to merge unattended — the exact failure mode this guards
+against is nobody looking. Moot here anyway: `.github/` has no PR template, and one was not
+created for this.
+
+**Rejected, recorded as revisit-when: teach `bump-consume.yml` to edit `pyproject.toml`
+directly.** Out of scope — it lives in the shared `aitp-ci` repo across every consumer, and the
+rationale comment is prose no generic bump workflow can write. Revisit if `aitp-ci` ever grows
+a hook for repo-specific post-bump edits.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 9.

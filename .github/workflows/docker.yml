@@ -147,6 +147,12 @@ jobs:
               - 'uv.lock'
 
   e2e:
+    # WARNING: this exact string is one of main's required status check
+    # contexts (`required_status_checks`, DECISIONS.md D-13). Renaming this
+    # job, or restructuring the workflow so a job with this exact name no
+    # longer reports, makes the required context stop reporting — the PR
+    # making the change blocks itself rather than failing loudly. Land a
+    # `required_status_checks` update in the SAME PR as any such rename.
     name: docker-compose e2e
     needs: changes
     # Two triggers, for two different questions:
