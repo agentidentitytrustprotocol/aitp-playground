@@ -728,7 +728,10 @@ def build_admin_router(
         Body (all optional):
           - cp_base_url / cp_api_key: overrides; default to
             ``bootstrap['cp']``, set by the supervisor at spawn time.
-          - quiet: suppress per-attempt telemetry (used by the poll loop).
+          - quiet: suppress `revocation.list_fetched` / `revocation.refresh_failed`
+            (used by the poll loop). Does NOT suppress `revocation.verify_failed`
+            — a caller passing ``quiet: true`` still gets that event on a
+            discarded snapshot; see `DECISIONS.md` D-14.
 
         The pinned issuer AID is deliberately NOT overridable — see the module
         docstring for why a caller-chosen issuer would make verification a

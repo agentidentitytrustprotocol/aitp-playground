@@ -193,3 +193,41 @@ Not closing this by pinning the job to a workflow path instead — GitHub's requ
 model doesn't support that — so it is recorded as a standing trap rather than solved. Anyone
 touching `docker.yml`'s `e2e` job name should land the protection-settings update in the same
 PR as the rename.
+
+## D-14 — `revocation.verify_failed` is exempt from `quiet`; `refresh_failed` and
+`list_fetched` are not
+**2026-08-28 · recorded**
+
+The background poll calls `refresh_revocations_now(quiet=True)`
+(`aitp_server.py:223`), and `revocation_refresh.py`'s `_discard` gated its own emit on
+`if not quiet:`. So a discarded snapshot in steady state — forged, wrong-issuer, expired,
+or unverifiable for lack of a pinned issuer or SDK surface — emitted **nothing**. The only
+steady-state signal was `revocation.poll`'s `healthy` flag, which is `False` identically for
+a CP that is down and for an attacker-signed snapshot. Two docstrings
+(`aitp_server.py`'s poll loop, `revocation_refresh.py`'s module docstring) already claimed
+`verify_failed` was the one thing `quiet` must not suppress; the code just didn't do it.
+
+Two candidates considered. **Chosen: `_discard` emits unconditionally; `quiet` still governs
+`revocation.list_fetched` and `revocation.refresh_failed`.** One line
+(`revocation_refresh.py`'s `_discard`, dropping the `if not quiet:` guard). The volume
+argument that motivated `quiet` in the first place is weak for discard causes specifically: a
+discard means the CP is reachable and answering with something that does not verify, which is
+not the routine state `quiet` was introduced for (an ordinary CP outage, which still fires
+`refresh_failed` once per poll tick and stays suppressed).
+
+**Rejected: also suppress the two static-configuration causes** (`no_expected_issuer`,
+`sdk_cannot_verify`) **under `quiet`.** These are true on every tick forever once true at all,
+so under the chosen candidate they emit once per `revocation_poll_secs` (default 60)
+indefinitely on a misconfigured deployment. Rejected anyway: that deployment — `CP_BASE_URL`
+set with `CP_AID` empty, or an old SDK — already has every capability call refused under the
+default `fail_closed`, so being loud about it is correct, not noisy. It also keeps
+`revocation_refresh.py` a single decision site with one rule rather than two.
+
+**Rejected outright: have the poll loop emit `verify_failed` itself from the returned
+`discarded` cause**, rather than fixing `_discard`. `refresh_revocations_now` collapses the
+result to a bool, so this would need a wider return type *and* recreate a second decision site
+in a module whose own docstring already forbids exactly that duplication.
+
+Demonstrated by mutation: restoring `if not quiet:` inside `_discard` turns
+`tests/unit/test_revocation_verify_or_discard.py` red. See
+`plans/audit-2026-08-28-cleanup.md` Phase 3.

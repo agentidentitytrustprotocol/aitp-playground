@@ -369,3 +369,22 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   skipped; sibling restored → 1 passed (real comparison).
 - **Tests:** 500 passed (497 + 3 new negative cases), ruff clean.
 - **Next:** Phase 3 — `revocation.verify_failed` survives the poll.
+
+### Phase 3 — `revocation.verify_failed` survives the poll — 2026-08-28 — PASS
+- **Verifier tier:** Opus (a telemetry-volume judgement call).
+- **Decision:** Candidate 1 (`_discard` emits unconditionally; `quiet` still governs
+  `list_fetched`/`refresh_failed`) — see `DECISIONS.md` D-14 for the full reasoning and the
+  two rejected alternatives.
+- **Files:** `agents/base/revocation_refresh.py` (`_discard`'s `if not quiet:` removed; both
+  docstrings corrected to state what `quiet` actually suppresses), `agents/base/aitp_server.py`
+  (poll-loop docstring corrected — it no longer implies `revocation.poll` is the only
+  steady-state signal), `agents/base/agent_admin.py` (the admin route's `quiet` param doc
+  states the exemption), `tests/unit/test_revocation_verify_or_discard.py` (3 new tests).
+- **Mutation result, run not reasoned:** restoring `if not quiet:` inside `_discard` turns
+  `tests/unit/test_revocation_verify_or_discard.py` red (1 failed, `IndexError` on the now-empty
+  captured-events list) — demonstrated, then the file was restored from a pre-mutation copy
+  rather than `git checkout --`, which would have discarded this phase's own uncommitted edits
+  along with the mutation (it did, once, mid-phase; redone from a fresh read of the reverted
+  file).
+- **Tests:** 503 passed (500 + 3), ruff clean.
+- **Next:** Phase 4 — one verify-failure taxonomy across all three manifest ingest sites.

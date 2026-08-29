@@ -346,3 +346,63 @@ async def test_transport_failure_and_verify_failure_never_alias_each_other(monke
     assert [e["type"] for e in forged_events] == ["revocation.verify_failed"]
     assert "cause" in forged_events[0]
     assert "error" not in forged_events[0]
+
+
+# --- Phase 3: `revocation.verify_failed` survives a `quiet=True` poll ---
+
+
+async def test_a_quiet_poll_discard_still_emits_verify_failed(monkeypatch) -> None:
+    """`revocation_refresh.py:92` — `_discard` must not honour `quiet`.
+
+    The background poll always calls with `quiet=True`
+    (`aitp_server.py:223`). If a discard were suppressed there, an
+    attacker-signed or wrong-issuer snapshot in steady state would be
+    completely silent — indistinguishable from a healthy CP that is merely
+    unreachable. See `DECISIONS.md` D-14.
+    """
+    state = RevocationState()
+    pinned_aid, _ = _snapshot([])
+    _, attacker_env = _snapshot([_jti("injected")])
+
+    events: list[dict[str, Any]] = []
+    assert await _apply(
+        monkeypatch, state, attacker_env, pinned_aid, quiet=True, events=events,
+    ) == "issuer_mismatch"
+    assert events == [{
+        "type": "revocation.verify_failed",
+        "cause": "issuer_mismatch",
+        "detail": events[0]["detail"],
+    }]
+
+
+async def test_a_quiet_poll_transport_failure_emits_refresh_failed_not_verify_failed(monkeypatch) -> None:
+    """The `quiet` suppression that DOES remain: transport noise stays quiet."""
+    state = RevocationState()
+    aid, _ = _snapshot([])
+
+    events: list[dict[str, Any]] = []
+    _stub_transport(monkeypatch, raise_exc=httpx.ConnectError("connection refused"))
+
+    async def _emit(event_type: str, bootstrap: dict, **fields: Any) -> None:
+        events.append({"type": event_type, **fields})
+
+    result = await revocation_refresh.refresh_revocations(
+        revocation=state,
+        bootstrap={"cp": {"base_url": "http://cp.invalid", "aid": aid}},
+        emit=_emit,
+        quiet=True,
+    )
+    assert "error" in result
+    assert events == [], "a quiet transport failure must stay quiet — only verify_failed is exempt"
+
+
+async def test_a_quiet_poll_success_stays_quiet(monkeypatch) -> None:
+    """The other `quiet` suppression that must still work: a routine success
+    emits no `revocation.list_fetched` — otherwise this phase quietly deleted
+    the flag instead of narrowing it.
+    """
+    state = RevocationState()
+    aid, env = _snapshot([_jti("jti-1")])
+    events: list[dict[str, Any]] = []
+    assert await _apply(monkeypatch, state, env, aid, quiet=True, events=events) is None
+    assert events == [], "a quiet successful refresh must not emit list_fetched"

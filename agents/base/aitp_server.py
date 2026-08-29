@@ -204,11 +204,19 @@ class AitpServer:
     async def _revocation_poll_loop(self) -> None:
         """Refresh on a cadence, reporting state CHANGES rather than ticks.
 
-        Telemetry discipline matters here: a 60s poll against a control plane
-        that is down is one event per minute per agent, and that volume buries
-        the single `revocation.verify_failed` that actually means something.
-        So this emits when the health flips (ok->failing, failing->ok) plus a
-        low-frequency heartbeat, not on every attempt.
+        `revocation.poll` itself is rate-limited this way: a 60s poll against
+        a control plane that is down would otherwise be one event per minute
+        per agent, so this emits when the health flips (ok->failing,
+        failing->ok) plus a low-frequency heartbeat, not on every attempt.
+
+        This is layered on top of a signal that is NOT rate-limited: every
+        call to `refresh_revocations_now` below goes through the shared ingest
+        path (`revocation_refresh.refresh_revocations`), which emits
+        `revocation.verify_failed` on every discarded snapshot regardless of
+        `quiet` (`DECISIONS.md` D-14). `revocation.poll`'s `healthy` flag
+        cannot distinguish a down CP from a forged snapshot — both are
+        `False` — so it is a heartbeat on top of the real signal, not a
+        replacement for it.
         """
         healthy: Optional[bool] = None
         ticks = 0

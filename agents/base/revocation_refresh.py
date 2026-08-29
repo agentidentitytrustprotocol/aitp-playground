@@ -45,9 +45,12 @@ async def refresh_revocations(
 
     Returns a result dict for the admin route; the caller decides what to do
     with it. `quiet` suppresses per-attempt telemetry for poll-driven calls —
-    at a 60s cadence against a control plane that is down, one event per
-    attempt per agent buries the single `verify_failed` that explains
-    something.
+    specifically `revocation.list_fetched` (a successful, routine refresh) and
+    `revocation.refresh_failed` (a transport error, which at a 60s cadence
+    against a down control plane is one event per tick forever). It does
+    **not** suppress `revocation.verify_failed`: a discard means the CP
+    answered with something that does not verify, which is not routine noise
+    — see `_discard`'s docstring and `DECISIONS.md` D-14.
 
     `cp_base_url` / `cp_api_key` override the bootstrap values. The pinned
     issuer AID deliberately has **no** override: the URL may be chosen per
@@ -88,11 +91,19 @@ async def refresh_revocations(
         verified snapshot stays in force and the deny-set is untouched. This
         is a MUST, so it has no mode knob — `revocation_fail_mode` governs the
         *absence* of a fresh snapshot, never its authenticity.
+
+        `verify_failed` is never suppressed by `quiet`, unlike every other
+        event this module emits. `quiet` exists for routine poll-cadence
+        noise (`refresh_failed` fires on every tick of an ordinary CP outage);
+        a discard means the CP answered with something that does NOT verify
+        — forged, wrong-issuer, expired, or an unverifiable SDK/config state —
+        which is not routine. Applying `quiet` here previously buried exactly
+        the signal the two callers' docstrings already claimed it preserved.
+        See `DECISIONS.md` D-14.
         """
-        if not quiet:
-            await emit(
-                "revocation.verify_failed", bootstrap, cause=cause, detail=detail
-            )
+        await emit(
+            "revocation.verify_failed", bootstrap, cause=cause, detail=detail
+        )
         return {
             "revoked_count": len(revocation),
             "added": 0,
