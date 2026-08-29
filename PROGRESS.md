@@ -17,7 +17,7 @@ Plan's own recommended order, not numeric order. Phase 5 lands in `aitp-rs`, not
 | 2B | Verify peer manifests at both ingest sites | playground | Fable | **DONE** |
 | 3 | e2e stack + published image use the pinned wheel | playground | Sonnet | **DONE** |
 | 5 | Bind `verify_revocation_list` in Python + Node SDKs | **aitp-rs** | Fable | **DONE** — [aitp-rs#90](https://github.com/agentidentitytrustprotocol/aitp-rs/pull/90) |
-| 4 | Run e2e pre-merge on SDK-bump PRs | playground | Sonnet | **DONE** (criterion 4 deferred — PENDING P7) |
+| 4 | Run e2e pre-merge on SDK-bump PRs | playground | Sonnet | **DONE** (criterion 4 closed 2026-08-28) |
 | 6 | Verify the snapshot in the production revocation path | playground | Fable | **DONE** — both axes |
 | 7 | Correct the docs | playground | Opus | **DONE** |
 | 8 | Close the second revocation ingest, in `src/` | playground | Opus | **DONE** |
@@ -164,10 +164,14 @@ job, main-push only · `.github/workflows/auto-merge.yml` (a green bump PR auto-
 - **Verifier:** Sonnet. Verdict GAPS; three of four closed in-phase, one deferred by design.
 - **Files:** `.github/workflows/docker.yml` (new `changes` job, widened `e2e` trigger),
   `internal_docs/testing.md`.
-- **Criterion 4 is NOT met and was not silently patched.** `docker-compose e2e` is absent from
-  `main`'s required contexts (verified via the protection API), so it now *runs* pre-merge but
-  blocks nothing. Closing it means changing repo-wide branch protection — the user's call, not
-  this feature's diff. `PENDING.md` P7 has the reproduction and the skipped-vs-required trap.
+- **Criterion 4 — met 2026-08-28.** Was NOT met at the time and was not silently patched:
+  `docker-compose e2e` was absent from `main`'s required contexts, so it ran pre-merge but
+  blocked nothing. Closed once the user made the call: added to `main`'s required status
+  checks via the `required_status_checks` sub-resource `PATCH`, and demonstrated both
+  directions on live PRs rather than assumed — a `.md`-only PR (#53) skipped the check cleanly
+  and stayed mergeable; a throwaway `uv.lock`-touching PR (#54) blocked while the job ran and
+  went mergeable only once it passed, then was closed unmerged. See `DECISIONS.md` D-12
+  (reversed) and D-13, `PENDING.md` P7 (closed).
 - **Filter tightened to `uv.lock` alone**, using what Phase 1 proved: uv mirrors the declared
   specifier into lock metadata, so any dependency edit moves `uv.lock`, while `[tool.ruff]`
   and the LLM extras — same file, unrelated churn — do not. Sufficient *and* cheaper.
