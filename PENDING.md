@@ -457,3 +457,29 @@ neither was folded into that fix:
    deployment sets — the one that matters most, since an empty value silently discards every
    revocation snapshot. Closed by `plans/audit-2026-08-28-cleanup.md` Phase 10, which added all
    four to both the env table and `.env.example`.
+
+## P14 — `test_cancel_inflight_run_reaches_terminal_state` flaked once after the D-16 reorder
+**From:** post-Phase-6 validation of `plans/audit-2026-08-28-cleanup.md` · **Blocks:** nothing
+· **Cost:** a watch item, not a fix
+
+While running the full close-out validation for the audit-cleanup branch (all 12 phases),
+`AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py`
+failed once at `test_cancel_inflight_run_reaches_terminal_state` (1 failed, 3 passed). Ten
+immediately-following re-runs — five of `test_runner.py` alone, five of the combined pair — all
+passed cleanly. Not reproducible on demand; the failing run's specific assertion output was not
+captured (only a truncated tail), so which of the test's checks failed is unknown.
+
+`DECISIONS.md` D-16 already documents why this class of test is not fully deterministic even
+after the fix: it races a real subprocess kill (`supervisor.kill_run`, OS-level) against a real
+background `asyncio` task on its own event loop, and D-16's own mutation-testing note records
+that the reorder narrowed the timing window without provably eliminating every interleaving —
+it converted a reliably-reproducible race into (apparently) a rare one, not a proven-impossible
+one. This entry exists so a recurrence is recorded against a known cause rather than treated as
+a fresh mystery.
+
+**If it recurs:** capture the full assertion failure (which of `status == "cancelled"`, the
+terminal-event-count check, or something upstream) and the run's event log via
+`GET /runs/{id}`. If it is the store status flipping to `failed`, `_finalize_failure`'s guard
+did not see `cancelled` in time — the race D-16 already names, just rarer post-reorder than
+pre-reorder. If it is something else entirely (a hang, a different assertion), that is new
+information this entry does not yet have.
