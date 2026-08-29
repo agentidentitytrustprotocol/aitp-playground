@@ -424,7 +424,7 @@ monotonic set, which is precisely the structure Phase 6 decomposed (CP-derived a
 held separately, unioned at enforcement).
 
 ## P13 — Two more doc gaps found while closing P12, out of its scope
-**From:** P12 close-out · **Status:** OPEN
+**From:** P12 close-out · **Status:** OPEN (P13.1) — **P13.2 corrected 2026-08-28, see below**
 
 Found while checking `internal_docs/agents.md` and `docs/aitp-integration.md` for the same
 staleness class as P12; neither is the same defect (no claim citing a closed ticket), so
@@ -434,8 +434,20 @@ neither was folded into that fix:
    `/admin/held-tct`, `/admin/renew-tct`, `/admin/export-session-bundle`,
    `/admin/verify-session-bundle`, `/admin/process-renewal`, `/admin/enroll-with-cp`
    (`agents/base/agent_admin.py:287,304,357,428,446,605`) — and the repo-layout tree omits
-   `oidc.py` and `tct_claims.py`.
-2. **Axis B (`revocation_fail_mode` / `revocation_max_staleness_secs`) is undocumented in
+   `oidc.py` and `tct_claims.py`. **Still open** — Phase 11 of
+   `plans/audit-2026-08-28-cleanup.md` closes this.
+2. ~~**Axis B (`revocation_fail_mode` / `revocation_max_staleness_secs`) is undocumented in
    every public doc.** `grep -rln "fail_mode" docs/ internal_docs/ README.md` returns nothing;
    both settings exist only in `src/aitp_playground/config.py` and `hosting/bootstrap.py`. A
-   real section, not a one-line mention.
+   real section, not a one-line mention.~~
+
+   **Corrected and closed 2026-08-28.** That grep is now stale — `docs/aitp-integration.md:255`
+   and a substantial explanatory paragraph at `:277-288` already cover `fail_closed` vs
+   `soft_fail` and the Axis A/B separation correctly. The conceptual gap this item named does
+   not exist. What IS still missing, verified fresh: none of `CP_AID`, `REVOCATION_FAIL_MODE`,
+   `REVOCATION_MAX_STALENESS_SECS`, `REVOCATION_POLL_SECS` appear in
+   `docs/getting-started.md`'s env table or `.env.example` — an environment-variable gap, not a
+   conceptual one. `CP_AID` appears in prose in five docs but is never listed as a variable a
+   deployment sets — the one that matters most, since an empty value silently discards every
+   revocation snapshot. Closed by `plans/audit-2026-08-28-cleanup.md` Phase 10, which added all
+   four to both the env table and `.env.example`.

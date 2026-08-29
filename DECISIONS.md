@@ -398,3 +398,30 @@ rationale comment is prose no generic bump workflow can write. Revisit if `aitp-
 a hook for repo-specific post-bump edits.
 
 See `plans/audit-2026-08-28-cleanup.md` Phase 9.
+
+## D-19 — The did:web-insecure-hosts allowlist stays out of `Settings`
+**2026-08-28 · recorded**
+
+`config.py` declared `didweb_insecure_hosts: str = ""` (binding `DIDWEB_INSECURE_HOSTS`), and
+nothing read it — `rg "didweb_insecure_hosts"` matched only the declaration and its own
+comment. The live allowlist is read directly from the environment at
+`trust/resolver.py:22`, as `AITP_DIDWEB_INSECURE_HOSTS` — a **different** variable name. The
+`config.py` comment claimed the resolver reads that var "too", implying the `Settings` field
+was also consulted; it was not.
+
+**Chosen: delete the unread field.** `resolve_did_web` (`trust/resolver.py`) is a module-level
+coroutine with no `Settings` access, called from both `api/hosted.py` and
+`trust/orchestrator.py`. Threading `Settings` into it for a test-only escape hatch used only
+by the Level 1 federated stack is more machinery than the feature deserves. The env var name
+is already load-bearing in four places outside this repo's Python
+(`federated/docker-compose.federated.yml`, `federated/README.md`, `docs/aitp-integration.md`,
+`tests/unit/test_federation.py`) — deleting the unread field and leaving the resolver's direct
+read is the change that makes the code agree with every one of those.
+
+**Rejected: keep the field with `validation_alias="AITP_DIDWEB_INSECURE_HOSTS"` and thread it
+into the resolver.** Two call sites, a signature change, and a fixture rework across
+`tests/unit/test_trust_resolver.py` and `test_federation.py`, all to move a test-only value
+from one lookup style to another. Recorded as the tidier long-term shape if the resolver ever
+needs other configuration — revisit then, not now.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 10.

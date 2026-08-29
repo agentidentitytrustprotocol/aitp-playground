@@ -580,3 +580,25 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   is untouched by the revert.
 - **Tests:** 532 passed (530 + 2), ruff clean.
 - **Next:** Phase 10 — config surface: env table, `.env.example`, one dead setting.
+
+### Phase 10 — Config surface: env table, `.env.example`, one dead setting — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet (doc edits mechanical; the dead-field decision stated in advance).
+- **Part A — `PENDING.md` P13.2 corrected before closing.** Its original grep (`fail_mode`
+  undocumented everywhere) is stale — `docs/aitp-integration.md:255,277-288` already covers it.
+  Rewrote P13.2 to the real gap (`CP_AID` + three `REVOCATION_*` vars missing from the env
+  table/`.env.example`) and struck it through as closed; P13.1 (route list) stays open for
+  Phase 11.
+- **Part B — files:** `docs/getting-started.md` (7 new env-table rows: `CP_AID`,
+  `REVOCATION_FAIL_MODE`, `REVOCATION_MAX_STALENESS_SECS`, `REVOCATION_POLL_SECS`,
+  `PUBLIC_HOST`/`PUBLIC_SCHEME`, `AITP_DIDWEB_INSECURE_HOSTS`), `.env.example` (same 7,
+  commented, after `CP_TIMEOUT_MS` — noting `AITP_DIDWEB_INSECURE_HOSTS` is read via raw
+  `os.environ`, so a `.env`-only value needs the process to also export it).
+- **Part C — decision:** deleted the dead `didweb_insecure_hosts` `Settings` field rather than
+  wiring it to the resolver — see `DECISIONS.md` D-19. `rg "didweb_insecure_hosts" src/`
+  confirmed only the declaration existed before deletion.
+- **NEW test** `tests/unit/test_config_env_table.py` — asserts every `Settings` field name
+  appears in the env table; not noisy (all 19 current fields map cleanly to `NAME.upper()`).
+- **Mutation result, run not reasoned:** adding an undocumented `Settings` field turns the new
+  test red.
+- **Tests:** 533 passed (532 + 1), ruff clean.
+- **Next:** Phase 11 — `internal_docs/agents.md`: routes, layout, telemetry catalog.
