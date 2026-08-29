@@ -249,19 +249,21 @@ def verify_capability_tct(self, tct_token, required_grant):
     if not tct_token: raise 403 "missing X-AITP-TCT"
     claims = decode_claims(tct_token)        # unverified claims, for precise 403s
     jti = claims.get("jti", "")
-    if jti and jti in self.revoked_jtis:
-        raise 403 f"tct revoked: jti={jti}"
+    if jti and self.revocation.is_revoked(jti):
+        source = "local" if self.revocation.is_locally_revoked(jti) else "cp-snapshot"
+        raise 403 f"tct revoked ({source}): jti={jti}"
+    self._enforce_revocation_freshness()     # 403 unless fail_mode == "soft_fail"
     if claims.get("iss") and claims["iss"] != self.agent.aid:
         raise 403 "tct issuer mismatch"      # e.g. issued pre-key-rotation
     declared_audience = claims.get("aud") or claims.get("sub")
     return self.agent.verify_tct(            # or verify_tct_cached(...) with a TctStore
         tct_token, required_grant,
         expected_audience=declared_audience,
-        revoked_jtis=self.revoked_jtis,
+        revoked_jtis=self.revocation.effective_jtis,
     )
 ```
 
-Three checks before/inside the SDK call:
+Four checks before/inside the SDK call:
 
 1. **Local revocation short-circuit** (playground choice). The spec
    ([RFC-AITP-0008](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md))
@@ -269,13 +271,23 @@ Three checks before/inside the SDK call:
    jti can't probe the deny set. The demo checks first — every jti in our
    deny set was observed via a prior handshake, so the early-out is safe
    and gives a precise 403. It's fail-closed either way: the same
-   `revoked_jtis` set is also passed into the SDK, which re-checks it
-   after signature verification. (See
-   [Revocation](#revocation-rfc-aitp-0008) below.)
-2. **Issuer-AID guard.** TCTs this resource server issued must declare
+   union — `revocation.effective_jtis`, local revocations ∪ the verified
+   CP snapshot — is also passed into the SDK as `revoked_jtis`, which
+   re-checks it after signature verification. The 403 names its source
+   (`local` vs `cp-snapshot`), because "we revoked this" and "the control
+   plane says someone revoked this" send an operator to different places.
+   (See [Revocation](#revocation-rfc-aitp-0008) below.)
+2. **Revocation-freshness guard.** Checked *after* the deny-set, so a
+   genuine revocation keeps its own reason. If revocation verification is
+   configured but there is no fresh verified snapshot, the call is refused
+   under the default `fail_mode="fail_closed"`; `soft_fail` proceeds on the
+   last verified deny-set and logs. This is only about the *absence* of a
+   fresh snapshot — an unverifiable one was already discarded at ingest and
+   no mode here can resurrect it.
+3. **Issuer-AID guard.** TCTs this resource server issued must declare
    *its* AID as `iss`. After a key rotation the AID changes, so TCTs
    minted under the old key fail here before the signature path runs.
-3. **SDK `verify_tct`, presented-TCT mode.** The playground passes the
+4. **SDK `verify_tct`, presented-TCT mode.** The playground passes the
    TCT's own declared `aud` (defaulting to `sub`) as `expected_audience` —
    the resource-server check for a TCT a peer presented in `X-AITP-TCT`.
    The signature check against the issuer key derived from `iss` is the
@@ -347,14 +359,16 @@ sequences the calls):
 
 ## Revocation (RFC-AITP-0008)
 
-Revocation is local to the issuer:
+Revocation starts local to the issuer, and a signed snapshot can add to it:
 
 1. The runner's `revoke_tct` step finds the jti of the TCT `issuer`
    granted to `audience` by walking the event log
    (`ScenarioRunner._find_tct_jti`) and POSTs it to the issuer's
    `/admin/revoke-tct`.
-2. The issuer adds it to `revoked_jtis` (mutates the same set
-   `AitpServer` consults).
+2. The issuer records it as a **local** revocation on the shared
+   `RevocationState` that `AitpServer` enforces against. Local revocations
+   are held apart from the CP-derived snapshot and are never cleared by a
+   refresh — a CP snapshot cannot un-revoke what an operator revoked here.
 3. Subsequent capability calls that present that jti hit the local
    revocation short-circuit and 403.
 

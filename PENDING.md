@@ -391,14 +391,34 @@ matters is whether the failure is agent→CP (CP-side) or engine→agent (our st
 the latter, the start-up refresh is holding the event loop longer than the supervisor's
 readiness signal implies.
 
-## P12 — `internal_docs/agents.md` still describes the pre-Phase-6 deny-set
-**From:** Phase 8 verification (round 2, Opus) · **Status:** OPEN
+## ~~P12 — `internal_docs/agents.md` still describes the pre-Phase-6 deny-set~~ — **CLOSED 2026-08-28**
+**From:** Phase 8 verification (round 2, Opus) · **Closed by:** the worker-scaffolding snippet
+and route list in `internal_docs/agents.md` rewritten to match `agents/researcher/main.py`
+(`RevocationState`, construction order, `manifest_provider`), and `docs/aitp-integration.md`'s
+condensed `verify_capability_tct` snippet + Revocation section brought current — it had drifted
+back out of sync with itself after the Phase-8 sweep only fixed the prose sections, not this
+snippet 100 lines below them.
 
-`internal_docs/agents.md:131-138` shows agent wiring as `_revoked_jtis: set[str] = set()`
+`internal_docs/agents.md:131-138` showed agent wiring as `_revoked_jtis: set[str] = set()`
 / `revoked_jtis=_revoked_jtis`. The real code is `RevocationState()` / `revocation=_revocation`
-(`agents/writer/main.py:24-37`). This is leftover Phase 6 drift — the last place in the repo
-that still describes the deny-set as a bare monotonic set, which is precisely the structure
-Phase 6 decomposed (CP-derived and local sets held separately, unioned at enforcement).
+(`agents/researcher/main.py:24-37`, identical in `writer/` and `analyzer/`). This was leftover
+Phase 6 drift — the last place in the repo that still described the deny-set as a bare
+monotonic set, which is precisely the structure Phase 6 decomposed (CP-derived and local sets
+held separately, unioned at enforcement).
 
-Out of Phase 8's scope (it makes no claim about signature verification and cites no closed
-ticket), so it was logged rather than folded into that diff. Doc-only; no code impact.
+## P13 — Two more doc gaps found while closing P12, out of its scope
+**From:** P12 close-out · **Status:** OPEN
+
+Found while checking `internal_docs/agents.md` and `docs/aitp-integration.md` for the same
+staleness class as P12; neither is the same defect (no claim citing a closed ticket), so
+neither was folded into that fix:
+
+1. `internal_docs/agents.md`'s `build_admin_router` route list is missing six live routes —
+   `/admin/held-tct`, `/admin/renew-tct`, `/admin/export-session-bundle`,
+   `/admin/verify-session-bundle`, `/admin/process-renewal`, `/admin/enroll-with-cp`
+   (`agents/base/agent_admin.py:287,304,357,428,446,605`) — and the repo-layout tree omits
+   `oidc.py` and `tct_claims.py`.
+2. **Axis B (`revocation_fail_mode` / `revocation_max_staleness_secs`) is undocumented in
+   every public doc.** `grep -rln "fail_mode" docs/ internal_docs/ README.md` returns nothing;
+   both settings exist only in `src/aitp_playground/config.py` and `hosting/bootstrap.py`. A
+   real section, not a one-line mention.
