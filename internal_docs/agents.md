@@ -20,6 +20,8 @@ agents/
 │   ├── bootstrap.py            # Reads AITP_BOOTSTRAP_FILE, builds AitpAgent
 │   ├── aitp_server.py          # Mounts /.well-known/* and /aitp/* routes
 │   ├── agent_admin.py          # Builds /admin/* routes called by the runner
+│   ├── revocation_state.py     # Local revocations + the CP snapshot, held apart
+│   ├── revocation_refresh.py   # The one verifying ingest of the CP's signed list
 │   ├── telemetry.py            # POSTs events to playground /internal/telemetry
 │   └── llm.py                  # Shared OpenAI/Anthropic selector
 ├── researcher/                 # CrewAI worker
@@ -110,6 +112,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 from agent_admin import build_admin_router
+from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
 from telemetry import emit_event
@@ -122,34 +125,47 @@ PORT = int(bootstrap["port"])
 agent = create_agent(bootstrap)              # aitp.AitpAgent.from_seed(...)
 manifest_json = get_manifest_json(agent, bootstrap)
 
-# 2) FastAPI app whose lifespan signals AITP_AGENT_READY.
-app = FastAPI(
-    title=f"agent-{bootstrap['agent_id']}",
-    lifespan=ready_lifespan(aid=agent.aid, port=PORT),
+# 2) Shared revocation state: AitpServer (enforcement) and the admin
+#    router's /admin/revoke-tct + /admin/refresh-revocations (mutation)
+#    reference the same object. It keeps locally-revoked jtis and the
+#    CP-derived snapshot APART, unioned only at enforcement — see
+#    agents/base/revocation_state.py for why one flat set could not.
+_revocation = RevocationState()
+
+# 3) Mount the AITP protocol routes. Built BEFORE the app, so the
+#    lifespan below can own the background revocation poll.
+server = AitpServer(
+    agent=agent,
+    manifest_json=manifest_json,
+    port=PORT,
+    bootstrap=bootstrap,
+    did_web_host=bootstrap["aitp"].get("did_web_host"),
+    did_web_scheme=bootstrap["aitp"].get("did_web_scheme", "http"),
+    revocation=_revocation,
 )
 
-# 3) Shared revocation set: both AitpServer (verifier) and
-#    /admin/revoke-tct (mutator) reference the same set.
-_revoked_jtis: set[str] = set()
-_held_tcts: dict[int, str] = {}              # peer_port -> TCT envelope JSON
-
-# 4) Mount AITP protocol + admin routes.
-server = AitpServer(agent=agent, manifest_json=manifest_json, port=PORT,
-                    bootstrap=bootstrap,
-                    did_web_host=bootstrap["aitp"].get("did_web_host"),
-                    revoked_jtis=_revoked_jtis)
+# 4) FastAPI app. The lifespan does a blocking first revocation refresh,
+#    THEN signals AITP_AGENT_READY, then starts the poll.
+app = FastAPI(
+    title=f"agent-{bootstrap['agent_id']}",
+    lifespan=ready_lifespan(aid=agent.aid, port=PORT, server=server),
+)
 app.include_router(server.router)
 
 async def do_research(payload, commissioned_by="self"):
     ...  # business logic; emits llm.started / llm.complete events
 
+# 5) Mount the admin routes.
+_held_tcts: dict[int, str] = {}              # peer_port -> TCT envelope JSON
 app.include_router(build_admin_router(
     agent=agent, bootstrap=bootstrap,
-    held_tcts=_held_tcts, revoked_jtis=_revoked_jtis,
+    held_tcts=_held_tcts, revocation=_revocation,
+    issued_tcts=server._issued_tcts,
     capabilities={"research.query": do_research},
+    manifest_provider=server._fresh_manifest_json,
 ))
 
-# 5) The capability endpoint. Verify the TCT, then run the same handler.
+# 6) The capability endpoint. Verify the TCT, then run the same handler.
 @app.post("/capabilities/research.query")
 async def research_query(request: Request):
     tct_json = request.headers.get("x-aitp-tct", "")
@@ -171,9 +187,15 @@ Two important things to notice:
   paths share the same async function, which keeps behavior consistent
   whether the call comes from this agent itself or from a peer with a
   TCT.
-- `_held_tcts` and `_revoked_jtis` are module-level. They're mutated by
-  the admin router and read by the AITP server; all requests in this
-  process see the same maps.
+- `_held_tcts` and `_revocation` are module-level, so every request in
+  this process sees the same state. `_held_tcts` is mutated by the admin
+  router. `_revocation` is mutated from both sides — `/admin/revoke-tct`
+  adds a local revocation, and `/admin/refresh-revocations` plus the
+  background poll replace the CP snapshot wholesale — and read by
+  `AitpServer` on every capability call. It is deliberately **not** one
+  flat set: local revocations survive a snapshot replacement, and a
+  snapshot is the issuer's complete current deny-set rather than an
+  increment, so the union happens only at enforcement.
 
 ## Routes mounted per worker
 
@@ -199,7 +221,12 @@ From `build_admin_router`:
 - `POST /admin/delegate` — issue a `DelegationToken` from a held TCT.
 - `POST /admin/redeem-delegation` — POST a `DelegationToken` to a peer's
   redeem endpoint, store the returned TCT in `held_tcts`.
-- `POST /admin/revoke-tct` — add a jti to `revoked_jtis`.
+- `POST /admin/revoke-tct` — add a jti to this agent's **local**
+  revocations. Never cleared by a control-plane refresh.
+- `POST /admin/refresh-revocations` — fetch the CP's signed revocation
+  snapshot, verify it against the pinned `CP_AID`, and put it into force
+  (replacing any previous snapshot). Discarded wholesale if it does not
+  verify.
 
 Per worker:
 - `POST /capabilities/<name>` — one per `offered_caps` entry.
