@@ -28,6 +28,29 @@ CapabilityHandler = Callable[[Any], Awaitable[Any]]
 ManifestProvider = Callable[[], str]
 
 
+def classify_manifest_verify_failure(exc: BaseException) -> str:
+    """`.code` is the SDK's contract; the message wording is not.
+
+    aitp-sdk >=0.7.0 carries a `.code` on every *verification* failure — the
+    floor in `pyproject.toml` enforces that. Input that is not JSON at all
+    still raises a plain `ValueError` with no code — there is no envelope to
+    classify — and that is precisely `malformed`. Anything else without a
+    code is genuinely unexpected, so say `unknown` rather than guessing at
+    `signature_invalid` and reporting a parse bug as an attack.
+
+    Mirrored at `runner/engine.py`'s `_classify_manifest_verify_failure` — see
+    that copy's comment, and `DECISIONS.md` D-15, for why this is a second
+    copy rather than a shared import: `agents/base` and `src/aitp_playground`
+    are not reliably importable from each other under the documented local
+    dev command. The two copies are pinned in sync by
+    `tests/unit/test_manifest_verification.py`'s parity test.
+    """
+    cause = getattr(exc, "code", None)
+    if cause is None:
+        cause = "malformed" if isinstance(exc, ValueError) else "unknown"
+    return cause
+
+
 async def _verify_peer_manifest(
     envelope_json: str, source_url: str, bootstrap: dict[str, Any]
 ) -> dict[str, Any]:
@@ -78,21 +101,11 @@ async def _verify_peer_manifest(
         aitp.verify_manifest_json(envelope_json)
     except Exception as exc:  # noqa: BLE001 — the SDK raises RuntimeError/ValueError
         message = str(exc)
-        # `.code` is the SDK's contract; the message wording is not. This
-        # previously read `"expired" in message.lower()`, which pinned the
-        # SDK's prose as an expected value — the same bug class the 0.5.0
-        # signing-input change exposed, and a wording change upstream would
-        # have silently reclassified a forged manifest as a stale one.
-        # aitp-sdk >=0.7.0 carries the code on every *verification* failure;
-        # the floor in pyproject.toml enforces that. Input that is not JSON
-        # at all still raises a plain ValueError with no code — there is no
-        # envelope to classify — and that is precisely `malformed`. Anything
-        # else without a code is genuinely unexpected, so say `unknown`
-        # rather than guessing at `signature_invalid` and reporting a parse
-        # bug as an attack.
-        cause = getattr(exc, "code", None)
-        if cause is None:
-            cause = "malformed" if isinstance(exc, ValueError) else "unknown"
+        # This previously read `"expired" in message.lower()`, which pinned
+        # the SDK's prose as an expected value — the same bug class the
+        # 0.5.0 signing-input change exposed, and a wording change upstream
+        # would have silently reclassified a forged manifest as a stale one.
+        cause = classify_manifest_verify_failure(exc)
         await _reject(
             cause,
             f"peer manifest from {source_url} failed verification ({cause}): "

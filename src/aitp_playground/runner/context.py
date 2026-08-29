@@ -31,6 +31,11 @@ class RunEvent(BaseModel):
     notes: Optional[str] = None
     # Used by trust.established (for revocation lookup) and tct.revoked.
     jti: Optional[str] = None
+    # Used by manifest.verify_failed — mirrors the agent-side event's field
+    # names (agents/base/agent_admin.py) so the two are the same shape on
+    # whichever channel a consumer sees them.
+    cause: Optional[str] = None
+    source_url: Optional[str] = None
 
 
 @dataclass

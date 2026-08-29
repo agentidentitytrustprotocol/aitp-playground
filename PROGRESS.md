@@ -38,8 +38,10 @@ start-up refresh, and the background poll · `agents/base/aitp_server.py` deny-s
 enforcement. **`CpClient` has no revocation-fetch method** — the signature-blind
 `fetch_revocation_list` was deleted in Phase 8.
 
-**Manifest path (Phase 2B)** — `agents/base/agent_admin.py:415-424` (delegatee AID, unverified)
-· `:85-93` (handshake, raw manifest to `build_hello`) · `src/aitp_playground/trust/resolver.py:33-51`.
+**Manifest path** — `agents/base/agent_admin.py:172` (handshake) and `:516` (delegatee), both
+verified via `_verify_peer_manifest` · `src/aitp_playground/runner/engine.py:587` (the
+CP-trust-anchor site — verified as of the 2026-08-28 audit cleanup, Phase 4; previously the one
+unverified ingest site) · `src/aitp_playground/trust/resolver.py:33-51`.
 
 **Config plumbing** — `src/aitp_playground/config.py:32` (`cp_base_url`), `:46` (`cp_aid`, the pin) →
 `src/aitp_playground/hosting/bootstrap.py:39-43` (`cp_block`) → agent subprocess `bootstrap["cp"]`.
@@ -388,3 +390,30 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   file).
 - **Tests:** 503 passed (500 + 3), ruff clean.
 - **Next:** Phase 4 — one verify-failure taxonomy across all three manifest ingest sites.
+
+### Phase 4 — One verify-failure taxonomy across all three manifest ingest sites — 2026-08-28 — PASS
+- **Verifier tier:** Opus (a module-placement decision a mechanical executor gets wrong in a
+  way only local `uvicorn` catches, not the test suite).
+- **Decision:** Candidate C — mirror the classifier, pin with a parity test — over a shared
+  import (breaks local dev; see `DECISIONS.md` D-15 for the two path facts that rule it out).
+- **Files:** `agents/base/agent_admin.py` (classifier extracted to module-level
+  `classify_manifest_verify_failure`, no behaviour change), `src/aitp_playground/runner/engine.py`
+  (new `_classify_manifest_verify_failure` mirror; `cp_provision_trust_anchor`'s
+  `aitp.verify_manifest_json(mr.text)` call now wrapped, emitting `manifest.verify_failed` and
+  raising `PlaygroundError` with a named cause instead of letting the raw SDK error propagate),
+  `src/aitp_playground/runner/context.py` (`RunEvent` gained `cause`/`source_url` fields —
+  pydantic's default `extra="ignore"` was silently dropping them, confirmed empirically before
+  adding), `tests/unit/test_engine_run.py` (new: tampered-manifest-with-matching-AID case),
+  `tests/unit/test_manifest_verification.py` (new: 4-case classifier parity test).
+- **Mutation results, all run not reasoned:**
+  | Check | Result |
+  |---|---|
+  | Delete the `try`/classify/emit wrapper at `engine.py:587` | RED — 1 failed |
+  | Swap one classifier's branch order (parity test) | RED — 3 failed |
+- **`uv run uvicorn aitp_playground.main:app` starts clean with no `PYTHONPATH` set** —
+  confirmed live (`GET /capabilities` → 200), ruling out the shared-import approach empirically
+  rather than by argument alone.
+- **`PROGRESS.md`'s own repo map corrected** (audit B12) — the manifest-path line cited stale
+  pre-Phase-2B line numbers and labelled the delegatee site "unverified"; both were wrong.
+- **Tests:** 508 passed (503 + 5 — 1 engine test + 4 parametrized parity cases), ruff clean.
+- **Next:** Phase 5 — failure observability at the enroll and post-verify-parse boundaries.

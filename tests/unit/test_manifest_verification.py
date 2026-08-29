@@ -289,6 +289,43 @@ def test_signature_is_a_body_member_for_manifests_unlike_revocation(
     assert "signature" in envelope["manifest"], "manifest signature is a body member"
 
 
+# ── The third ingest site's classifier, pinned in sync ──────────────────────
+#
+# `runner/engine.py`'s `_classify_manifest_verify_failure` is a deliberate
+# second copy of `agent_admin.classify_manifest_verify_failure`, not a shared
+# import — `agents/base` and `src/aitp_playground` are not reliably
+# importable from each other under the documented local dev command
+# (`DECISIONS.md` D-15). This is what keeps the two copies from silently
+# drifting apart: any single-sided edit to either fails this test.
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("forged"),
+        ValueError("not json at all"),
+        TypeError("something else entirely"),
+    ],
+)
+def test_the_two_manifest_verify_failure_classifiers_agree(exc: BaseException) -> None:
+    from aitp_playground.runner.engine import _classify_manifest_verify_failure
+    from agent_admin import classify_manifest_verify_failure
+
+    assert classify_manifest_verify_failure(exc) == _classify_manifest_verify_failure(exc)
+
+
+def test_the_two_manifest_verify_failure_classifiers_agree_on_a_typed_code() -> None:
+    from aitp_playground.runner.engine import _classify_manifest_verify_failure
+    from agent_admin import classify_manifest_verify_failure
+
+    class _Coded(RuntimeError):
+        code = "expired"
+
+    exc = _Coded("validity window elapsed")
+    assert classify_manifest_verify_failure(exc) == "expired"
+    assert _classify_manifest_verify_failure(exc) == "expired"
+
+
 # ── The serving side ─────────────────────────────────────────────────────
 #
 # Verification cuts both ways: once peers verify, this agent's own served

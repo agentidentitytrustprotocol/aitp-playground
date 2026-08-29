@@ -231,3 +231,32 @@ in a module whose own docstring already forbids exactly that duplication.
 Demonstrated by mutation: restoring `if not quiet:` inside `_discard` turns
 `tests/unit/test_revocation_verify_or_discard.py` red. See
 `plans/audit-2026-08-28-cleanup.md` Phase 3.
+
+## D-15 — The manifest verify-failure classifier is duplicated on purpose, not shared
+**2026-08-28 · recorded**
+
+Two of three manifest ingest sites (`agent_admin.py`'s handshake and delegatee fetches) had a
+`signature_invalid | expired | malformed | unknown` cause taxonomy and `manifest.verify_failed`
+telemetry; the third (`runner/engine.py`'s CP trust-anchor provisioning — the site that pins a
+key into the control plane's trust store) had neither: a bare `aitp.verify_manifest_json(mr.text)`
+call whose raw SDK error propagated with no cause and no event.
+
+The obvious fix — a shared classifier function both sides import — does not work. Verified: an
+agent subprocess's `PYTHONPATH` carries `agents/base`+`agents` but never `src`
+(`hosting/adapters/base.py`'s env builder), and this service gets `agents/base` on `sys.path`
+only in Docker and under pytest, **not** under the documented local dev command (`uv run
+uvicorn aitp_playground.main:app`). A module placed in either package and imported by the other
+passes CI and Docker and breaks local `uvicorn` at start-up, and pytest's own `pythonpath`
+setting (both dirs) means the test suite cannot catch it.
+
+**Chosen: mirror the classifier in both places, pinned in sync by a parity test.**
+`agent_admin.classify_manifest_verify_failure` (extracted, no behaviour change) and
+`runner.engine._classify_manifest_verify_failure` (new) must return identical results for the
+same exception; `tests/unit/test_manifest_verification.py`'s parity test asserts that and is
+demonstrated non-vacuous by mutation — swapping one copy's branch order turns it red.
+
+**Rejected:** a shared module in either package (breaks local dev, above); pushing the fallback
+logic into the SDK so `.code` is always present and no playground-side classification exists at
+all (correct long-term, cross-repo, out of scope here — revisit-when the SDK adds it).
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 4.
