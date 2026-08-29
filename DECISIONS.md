@@ -307,3 +307,41 @@ reliably within that test's timing; the unit-tier test, driving `_finalize_failu
 with no subprocess or timing involved, does turn red on the same mutation, deterministically.
 
 See `plans/audit-2026-08-28-cleanup.md` Phase 6.
+
+## D-17 — `agents/base` gets its own coverage gate, not folded into one aggregate
+**2026-08-28 · measured, not estimated**
+
+`agents/base/` holds every revocation, manifest, TCT, and delegation security decision in the
+repo and was entirely outside `pyproject.toml`'s `source_pkgs = ["aitp_playground"]` — D-11
+noted this in passing (*"these modules exercise `agents/base`, outside `source_pkgs`, so
+skipping them costs zero coverage and clears `--fail-under=88`"*) without closing it.
+
+Measured on the tree after Phase 7's new tests, 530 tests passing: `src/aitp_playground` 89.4%,
+`agents/base` 55.2%. `revocation_refresh.py` alone moved from 18.2% (measured before Phase 2)
+to 97.9% — A1's own numbers, closed.
+
+**Chosen: two separate `coverage report --include` gates over one `coverage run` data file** —
+`src/*` stays at `--fail-under=88`, `agents/base/*` gets its own `--fail-under=54` (the measured
+55.2%, rounded down and given one point of headroom so an unrelated PR adding one uncovered
+defensive line does not block on it). Verified both gates pass on the real `ci.yml` invocation,
+and that dropping the `agents/base` gate is detectable: hiding three of Phase 2/5/7's test files
+drops `agents/base` to 43.1% (gate fails, exit code 2) while `src/*` stays at 89.4% (gate still
+passes) — proving the two gates are actually independent, not one number in two clothes.
+
+**Rejected: fold `agents/base` into the same measured source and re-baseline `--fail-under` to
+the combined ~78% aggregate.** This *lowers* the effective floor on `src/` by ten points — a
+regression that drops `src/` from 89% to 79% would still pass, hidden behind `agents/base`'s
+much lower number. A single aggregate gate that gets weaker the moment a second, worse-covered
+package joins it is not a gate anyone should trust.
+
+**Rejected: add `agents/base` and keep `--fail-under=88` on the aggregate.** The combined number
+is 78% today — a job that goes red on day one for coverage that was never actually claimed gets
+disabled by the next person who touches CI, which defeats the point of adding it at all.
+
+**Not omitted:** `agents/base/llm.py` (0.0%, the LLM provider selector, largely untestable
+without live keys) drags the `agents/base` number down materially. Left in the measured source
+rather than `[tool.coverage.report] omit`-ed — the ratchet threshold already accounts for it,
+and omitting anything needs its own justification recorded, which this repo's convention
+(nothing security-relevant hidden from the gate) argues against doing casually.
+
+See `plans/audit-2026-08-28-cleanup.md` Phase 8.

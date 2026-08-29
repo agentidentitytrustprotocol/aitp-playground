@@ -80,7 +80,11 @@ jobs:
       - name: Run unit + scenario tests with coverage
         run: |
           uv run coverage run -m pytest tests/unit tests/scenarios -q
-          uv run coverage report --fail-under=88
+          # Two gates over one measurement, not one aggregate: a single
+          # combined number would let a regression in src/ hide behind
+          # agents/base's lower floor (or vice versa). See DECISIONS.md D-17.
+          uv run coverage report --include="src/*" --fail-under=88
+          uv run coverage report --include="agents/base/*" --fail-under=54
 
   integration:
     name: Integration (agent subprocess e2e)

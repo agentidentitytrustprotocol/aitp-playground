@@ -525,3 +525,35 @@ fire, Sonnet where mechanical). Branch `chore/audit-2026-08-28-cleanup`.
   is byte-identical before and after, so this does not trip the D-13 required-check trap.
 - **Tests:** 530 passed (515 + 15 new), ruff clean.
 - **Next:** Phase 8 — bring `agents/base` inside the coverage gate.
+
+### Phase 8 — Bring `agents/base` inside the coverage gate — 2026-08-28 — PASS
+- **Verifier tier:** Sonnet (mechanical once the decision is taken; the verifier re-ran the
+  numbers rather than trusting them, per the plan).
+- **Decision:** Candidate 2 — two separate `coverage report --include` gates over one
+  `coverage run` data file, `agents/base`'s floor set from a fresh measurement (55.2%, minus
+  headroom → 54) rather than folding into one aggregate. See `DECISIONS.md` D-17.
+- **Files:** `pyproject.toml` (`[tool.coverage.run]` gains `source = ["agents/base"]` — no
+  `agents/__init__.py` exists, so it cannot be named via `source_pkgs`), `.github/workflows/ci.yml`
+  (one `coverage report --fail-under=88` → two, `--include="src/*"` and
+  `--include="agents/base/*" --fail-under=54`).
+- **Measured, not estimated, on the post-Phase-7 tree (530 tests):**
+  | Scope | Stmts | Miss | Cover |
+  |---|---|---|---|
+  | `src/aitp_playground` | 3052 | 324 | **89.4%** |
+  | `agents/base` | 819 | 367 | **55.2%** |
+
+  Per-module `agents/base`: `agent_admin.py` 46.3%, `aitp_server.py` 55.3%, `bootstrap.py` 52.0%,
+  `llm.py` 0.0% (not omitted — see D-17), `oidc.py` 41.9%, `revocation_refresh.py` **97.9%**
+  (was 18.2% pre-Phase-2 — A1's own number, closed), `revocation_state.py` 100.0%,
+  `tct_claims.py` 91.7%, `telemetry.py` 70.6%.
+- **Both gates verified against the real `ci.yml` invocation** (not the scratch rcfile used to
+  take the measurement): `coverage run -m pytest tests/unit tests/scenarios -q`, then both
+  `coverage report` calls — both exit 0.
+- **Criterion 4, demonstrated:** hid three of the test files Phases 2/5/7 added
+  (`test_agent_admin_routes.py`, `test_delegation_revocation.py`,
+  `test_revocation_verify_or_discard.py`) and re-ran both gates. `agents/base` dropped to 43.1%
+  and the gate failed with **exit code 2**; `src/*` stayed at 89.4% and passed — the two gates
+  are independently meaningful, not one number wearing two labels.
+- **Tests:** no new tests (this phase adds a gate over tests earlier phases wrote); suite stays
+  at 530 passed, ruff clean.
+- **Next:** Phase 9 — required-check traps and floor-comment drift.

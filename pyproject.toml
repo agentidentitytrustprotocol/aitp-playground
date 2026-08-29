@@ -110,6 +110,12 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.coverage.run]
 source_pkgs = ["aitp_playground"]
+# `agents/base` holds every revocation/manifest/TCT/delegation security
+# decision in the repo and has no `agents/__init__.py` (so it is not an
+# importable package `source_pkgs` can name) — measured via `source` instead,
+# alongside `aitp_playground`. Two separate `coverage report --include` gates
+# in ci.yml, not one aggregate: see DECISIONS.md D-17.
+source = ["agents/base"]
 
 [tool.coverage.report]
 precision = 1
