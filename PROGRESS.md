@@ -795,3 +795,22 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Tests:** docs-only, no doc-consistency test references this file.
 - **Shipped now or accumulating:** Accumulating (per precedent).
 - **Next:** Phase 6 — internal_docs/testing.md coverage gate, P7 citation, layout tree.
+
+### Phase 6 — Fix testing.md: coverage gate, P7 citation, layout tree — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `internal_docs/testing.md` only.
+- **Fixes:** (1) "no enforced threshold today" -> both real gates stated (`src/*` >=88%,
+  `agents/base/*` >=54%, `ci.yml:101-102`, D-17). (2) stale P7 "not required" claim ->
+  closed 2026-08-28, e2e job now a required status check (PENDING.md P7, D-12/D-13).
+  (3) test-layout tree fully regenerated from live `ls` (21 -> 46 files across unit/
+  integration/scenarios) rather than hand-patched.
+- **Bonus fix found during regeneration:** scenarios section previously listed three
+  nonexistent placeholder files; corrected to the one real file, `test_scenario_packs.py`.
+  Verified independently by both executor and verifier (`ls` confirms the three don't
+  exist; `test_scenario_packs.py` is the only real file there).
+- **Verified with a full independent file-set diff** (verifier rebuilt the live inventory
+  from scratch and diffed against the doc's tree): 46 files, zero mismatch either
+  direction.
+- **Tests:** docs-only, no test references this doc.
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 7 — internal_docs/runner.md event catalog (manifest.verify_failed).
