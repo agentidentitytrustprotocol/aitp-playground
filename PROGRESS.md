@@ -727,3 +727,24 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
   8 separate small-doc PRs, to keep review noise down for a set of related, same-day
   drift fixes.
 - **Next:** Phase 2 — deterministic unit test for the D-16 dispatch-level guard.
+
+### Phase 2 — Deterministic unit test for the D-16 dispatch-level guard — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet (plan-wide instruction: Sonnet only, no one-way doors here).
+- **Rounds:** 1.
+- **Files:** `tests/unit/test_engine_run.py` only — no source change.
+- **New test:** `test_run_failed_not_emitted_when_dispatch_races_a_cancel` — overrides
+  `agent_http`'s `/admin/self-execute` to upsert the store to `"cancelled"` then raise,
+  mirroring the real cancel/kill race, and asserts `run.failed` is absent from the
+  emitted events and the store stays `"cancelled"`.
+- **Mutation check (required per D-2's convention), run twice independently** (once by
+  the executor, once by the verifier): removing the `!= "cancelled"` condition at
+  `engine.py:228-230` turns the new test red with the exact expected assertion failure;
+  reverting leaves `engine.py` byte-identical (`git diff` empty) and the test green again.
+- **Non-vacuous, confirmed:** the captured event list under mutation was
+  `['run.started', 'agent.spawning', 'agent.ready', 'trust.peers_resolved',
+  'step.started', 'run.failed']` — proves the run genuinely executes through spawn/trust/
+  dispatch before hitting the guard, not an early crash.
+- **Tests:** `uv run pytest tests/unit/test_engine_run.py -q` → 52 passed. `ruff check` clean.
+- **Shipped now or accumulating:** Accumulating (same reasoning as Phase 1 — one closing
+  PR for the whole sweep, precedent from PR #57).
+- **Next:** Phase 3 — `docs/architecture.md` route topology + `/hosted-agents` docs.

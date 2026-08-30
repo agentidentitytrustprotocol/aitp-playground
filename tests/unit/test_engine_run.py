@@ -1279,3 +1279,49 @@ def test_finalize_failure_upserts_failed_normally_when_not_cancelled() -> None:
     env.runner._finalize_failure("run-1", "boom", ctx)
 
     assert env.store.get("run-1")["status"] == "failed"
+
+
+async def test_run_failed_not_emitted_when_dispatch_races_a_cancel(agent_http) -> None:
+    """The dispatch-level `run.failed`-emit guard (`engine.py:228-230`) must
+    not fire for a run the caller already cancelled.
+
+    Mirrors the real race `DECISIONS.md` D-16 describes: `/runs/{id}/cancel`
+    upserts `status="cancelled"` and kills the agent subprocesses; that kill
+    is what turns the in-flight step dispatch's next HTTP call into the
+    exception `run()`'s `except Exception` handler catches. This guard is a
+    distinct, sibling site to `_finalize_failure`'s store guard (already
+    covered by `test_finalize_failure_preserves_an_already_cancelled_record`)
+    and previously had no unit-tier coverage at all — only a flaky,
+    timing-sensitive real-subprocess integration test. `run()` unconditionally
+    upserts `status="running"` before dispatch, so the store can't be
+    pre-seeded as cancelled; instead this flips it to "cancelled" as a side
+    effect of the dispatch call itself, then raises, so the guard sees
+    "cancelled" at the exact moment it checks.
+    """
+    env = make_env(
+        agents={"alice": ["cap.a"]}, eager=False,
+        steps=[{"id": "s1", "agent": "alice", "capability": "cap.a"}],
+    )
+
+    def _cancel_then_blow_up(request: httpx.Request) -> httpx.Response:
+        # The moment the step's self-execute call reaches the (fake) agent,
+        # simulate a concurrent /runs/{id}/cancel: flip the store first, then
+        # raise — standing in for the subprocess kill that turns this call
+        # into an exception in the real race.
+        env.store.upsert("run-1", {"status": "cancelled"})
+        raise RuntimeError("connection reset by peer")
+
+    agent_http.overrides["/admin/self-execute"] = _cancel_then_blow_up
+
+    result = await _run(env)
+
+    assert result.status == "failed", result.error
+    assert "run.failed" not in _event_types(result), (
+        "the dispatch-level guard must not emit run.failed for a run the "
+        "caller already saw as cancelled"
+    )
+    record = env.store.get("run-1")
+    assert record["status"] == "cancelled", (
+        "the STORE record must stay cancelled, not be overwritten to "
+        "'failed' downstream of the guard"
+    )
