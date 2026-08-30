@@ -765,3 +765,18 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Shipped now or accumulating:** Accumulating (per Phase 1/2 precedent).
 - **Next:** Phase 4 — getting-started.md/README.md hosted-agents mention, coverage gate,
   cancel-route ordering.
+
+### Phase 4 — getting-started.md/README.md: hosted-agents, coverage gate, cancel order — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `docs/getting-started.md`, `README.md`.
+- **Fixes:** (1) added a substantive `/hosted-agents` pointer to both files, linking to
+  Phase 3's `docs/architecture.md#hosted-agents-...` section — anchor slug verified to
+  resolve correctly against GitHub's slug rules. (2) coverage-gate description now states
+  both gates (`src/*` >=88%, `agents/base/*` >=54%, confirmed against `ci.yml:101-102`)
+  instead of a single "floor: 88%". (3) cancel-route description corrected to
+  "mark cancelled, then kill" (confirmed against `api/runs.py:303-344`'s actual order),
+  with a one-clause note on why the order matters (D-16).
+- **Tests:** `tests/unit/test_config_env_table.py -q` -> 1 passed (only doc-consistency
+  test touching this file).
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 5 — docs/aitp-integration.md AID-check claim fix.

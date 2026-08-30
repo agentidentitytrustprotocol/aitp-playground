@@ -161,7 +161,7 @@ curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
 | `GET  /runs/{id}/cp-sessions` | Handshake sessions the CP observed for this run |
 | `GET  /runs/{id}/cp-deliveries` | CP webhook deliveries this run has received (requires a prior `cp_subscribe_webhook` step) |
 | `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified) |
-| `POST /runs/{id}/cancel` | Kill agent subprocesses, mark cancelled |
+| `POST /runs/{id}/cancel` | Mark cancelled, then kill agent subprocesses (this order closes the D-16 race: a concurrent dispatch failure that lands after the mark sees `status=cancelled` already, never a stale `running`) |
 | `GET  /agents` | List currently-running agent processes |
 | `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |
 | `GET  /dashboard` | Single-page trust console (HTML) |
@@ -169,6 +169,12 @@ curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
 | `POST /internal/telemetry` | Sink for agents — not for external use |
 
 OpenAPI is at `http://localhost:8000/docs` while the server runs.
+
+The endpoints above all belong to the intra-org `/runs` flow. A separate
+`/hosted-agents` surface spawns a long-lived agent and drives a
+*cross-domain* handshake/invoke against a peer hosted by a different
+playground instance — see [architecture.md](architecture.md#hosted-agents-srcaitp_playgroundapihostedpy)
+for the full route list.
 
 ## Scenario authoring CLI
 
@@ -233,9 +239,11 @@ uv run ruff check .          # what CI runs
 How CI maps onto these (`.github/workflows/`):
 
 - **`ci.yml`** — on every PR/push: a ruff lint job; the unit + scenario
-  suites with coverage (floor: 88%) on a Python 3.11/3.13 matrix, run
-  against `uv sync --locked` (which installs `aitp-sdk` from PyPI, so
-  the SDK-dependent tests run rather than skip); and the `AITP_E2E=1`
+  suites with two separate coverage gates (`src/*` ≥88%, `agents/base/*`
+  ≥54% — kept separate so a regression in one can't hide behind the
+  other's floor) on a Python 3.11/3.13 matrix, run against
+  `uv sync --locked` (which installs `aitp-sdk` from PyPI, so the
+  SDK-dependent tests run rather than skip); and the `AITP_E2E=1`
   runner-integration job.
 - **`docker.yml`** — builds the playground image on PRs; on `main` it
   pushes to `ghcr.io` (with the `all-agents` LLM extras baked in) and
