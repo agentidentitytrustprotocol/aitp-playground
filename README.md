@@ -190,11 +190,13 @@ aitp-playground/
 │   ├── capabilities.py    # SDK feature probe (GET /capabilities)
 │   └── conformance.py     # RFC fixture catalog + readiness
 ├── agents/                # agent subprocess workers
-│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm
+│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm / revocation (revocation_state.py, revocation_refresh.py)
 │   ├── researcher/        # CrewAI worker
 │   ├── writer/            # LangChain worker
 │   └── analyzer/          # LangGraph worker
 ├── scenarios/             # YAML scenario packs (registry on disk)
+├── scripts/               # e2e inspection helpers (demo-e2e-run.sh)
+├── federated/             # cross-domain federated demo stack — see federated/README.md
 └── tests/                 # unit / integration / scenario / e2e
 ```
 

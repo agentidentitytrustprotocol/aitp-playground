@@ -830,3 +830,19 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Tests:** docs-only, no test references this doc.
 - **Shipped now or accumulating:** Accumulating (per precedent).
 - **Next:** Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention.
+
+### Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1 (one cosmetic tighten after verify: CLAUDE.md's
+  revocation bullet wrapped 3 lines vs. README's 1 — matched to README's one-line style).
+- **Files:** `README.md` (tracked), `CLAUDE.md` (untracked/gitignored in this repo, per
+  `.gitignore:54` — a real, read file, edited for accuracy, but won't appear in the git
+  diff/commit; this matches how `plans/` is also intentionally local-only).
+- **Fixes:** added one-line `scripts/` and `federated/` entries to both files' layout
+  trees (previously entirely absent from both); extended the `agents/base/` bullet in
+  both files to name the revocation subsystem (`revocation_state.py`,
+  `revocation_refresh.py` — first-class per P8/P9/P12, D-8-D-14).
+- **Confirmed on disk:** `scripts/demo-e2e-run.sh`, `federated/README.md`,
+  `agents/base/revocation_state.py`, `agents/base/revocation_refresh.py` all exist.
+- **Tests:** docs-only, N/A.
+- **Shipped now or accumulating:** Accumulating — this is the plan's final phase; all 8
+  phases now `DONE`. Proceeding to end-of-plan closeout (full regression) next.
