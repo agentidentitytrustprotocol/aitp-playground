@@ -869,3 +869,5 @@ checks passed, repo-wide.
 
 8 commits, one per phase, all on `main` locally: 59b4433, 39d9091, 88b975a, 7f204fb,
 78be336, e930618, 6a62357, 265ea69. Ready for the closing PR.
+
+**Shipping checkpoint:** pushed `docs-tests-audit-2026-08-29` at `f6946c6`.
