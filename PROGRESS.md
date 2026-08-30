@@ -780,3 +780,18 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
   test touching this file).
 - **Shipped now or accumulating:** Accumulating (per precedent).
 - **Next:** Phase 5 — docs/aitp-integration.md AID-check claim fix.
+
+### Phase 5 — Fix aitp-integration.md's stale AID-check/PENDING-P1 claims — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `docs/aitp-integration.md` only.
+- **Fix:** replaced the "not compared yet, tracked as PENDING.md P1" framing with a
+  positive description of the implemented check (`engine.py:667-674`'s
+  `declared_aid != ra.aid` comparison, raising `PlaygroundError` before pinning), plus
+  D-8's rationale.
+- **Provenance claim independently verified twice** (executor + verifier): `ra.aid` is
+  read from the spawned subprocess's `AITP_AGENT_READY` line over a `subprocess.PIPE`
+  (`hosting/supervisor.py:73-89`), never off the network — confirmed by reading the
+  actual supervisor code, not just engine.py's comment.
+- **Tests:** docs-only, no doc-consistency test references this file.
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 6 — internal_docs/testing.md coverage gate, P7 citation, layout tree.
