@@ -658,3 +658,217 @@ negative-case-test phase (7), and 1 citation-rot cleanup (1). 6 new `DECISIONS.m
 Every negative assertion added was demonstrated by mutation before being trusted (D-2).
 Suite grew from 497 to 533 tests across the run; `agents/base` coverage moved from an
 unmeasured 0% (outside the gate entirely) to a measured, gated 55.2%.
+
+## Plan 3 — post-PR#57 docs/test drift sweep (2026-08-29) — repo map
+
+(See `plans/docs-tests-audit-2026-08-29.md` for the full plan. This is the discovery
+record from the three parallel survey agents, so `/implement` doesn't re-scan.)
+
+- `scenarios/intra-org/tct-renewal/1.0.0/scenario.yaml`, `agents/base/agent_admin.py:354`,
+  `src/aitp_playground/registry/models.py:58`, `src/aitp_playground/runner/engine.py:748`
+  — cite `RFC-AITP-0005 §10` for TCT renewal; should be `RFC-AITP-0013` (confirmed against
+  `docs/capabilities.md:29`, `docs/aitp-integration.md:403`, which already say 0013).
+  **Do not blanket-grep for `rfc-aitp-0005`** — `tct-cache-perf/scenario.yaml:9,61`,
+  `aitp_server.py:162,671,701`, `engine.py:780`, `models.py:62` correctly cite 0005 for the
+  unrelated TCT verify-cache feature.
+- `runner/engine.py:87-90` — `run()`'s first action upserts `{"status": "running"}`,
+  unconditionally, before dispatch. `runner/engine.py:228-230` — the dispatch-level
+  `run.failed`-emit guard (D-16 sibling site to the already-unit-tested
+  `_finalize_failure` store guard at `:296-297`); has no deterministic unit coverage.
+  `runner/engine.py:641-642` — `manifest.verify_failed` emit site (D-15), missing from
+  `internal_docs/runner.md`'s event catalog. `runner/engine.py:667-674` — D-8 AID
+  comparison (`declared_aid != ra.aid`), implemented but `docs/aitp-integration.md:125-128`
+  still describes it as missing, citing closed `PENDING.md` P1.
+- `tests/unit/test_engine_run.py:1245-1281` — existing `_finalize_failure` guard tests
+  (store-level, already covers the sibling site, not the dispatch-emit guard).
+- `aitp_server.py:440,669` — `/admin/rotate-keys` and `/admin/tct-cache-stats` are mounted
+  directly by `AitpServer`, not `build_admin_router`. `agent_admin.py:335,786` —
+  `/admin/held-tct` and `/admin/refresh-revocations` are in `build_admin_router` but
+  missing from `docs/architecture.md:66-74`'s topology diagram, which also misgroups
+  rotate-keys under the router list. `internal_docs/agents.md:215-219` already has the
+  correct router-vs-direct-mount split — Phase 3 mirrors that precedent.
+- `api/hosted.py` (6 routes) + `hosting/hosted.py` (business logic, no routes of its own)
+  — the `/hosted-agents` cross-domain surface, undocumented beyond a passing env-var
+  mention in `docs/architecture.md`, `docs/getting-started.md`, `README.md`.
+- `docs/getting-started.md:~236` — states a single "floor: 88%", omitting the
+  `agents/base/*` ≥54% gate (`ci.yml:101-102`, D-17). `docs/getting-started.md:~164` —
+  describes `POST /runs/{id}/cancel` as "kill subprocesses, mark cancelled" (pre-D-16
+  order); actual order in `api/runs.py:336,343` is cancelled-then-kill.
+- `internal_docs/testing.md:80-81` — "no enforced threshold today" (false, contradicts
+  `ci.yml:101-102`). `:184-185` — stale `PENDING.md` P7 citation (closed 2026-08-28,
+  commit 92ebb33, e2e job now required). `:9-42` — test layout tree lists ~21 files;
+  actual `tests/unit/` has 41.
+- `internal_docs/runner.md` — event-type table missing `manifest.verify_failed` (the only
+  gap found by re-running the `rg -o '"[a-z]+\.[a-z_.]+"'` extraction over `runner/`).
+- `README.md:170-193`, `CLAUDE.md` Layout section — repo-map trees omit `scripts/`
+  (`scripts/demo-e2e-run.sh`) and `federated/` (full cross-domain demo stack, own
+  README); `agents/base/` bullet in both omits the revocation subsystem
+  (`revocation_state.py`, `revocation_refresh.py` — first-class per P8/P9/P12, D-8–D-14).
+
+### Phase 1 — Fix RFC-AITP-0005→0013 citation drift for TCT renewal — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet (explicit user instruction for this plan run: Sonnet only,
+  no Opus/Fable — no phase in this plan is a one-way door).
+- **Rounds:** 1.
+- **Files:** `scenarios/intra-org/tct-renewal/1.0.0/scenario.yaml`,
+  `agents/base/agent_admin.py:354`, `src/aitp_playground/registry/models.py:58`,
+  `src/aitp_playground/runner/engine.py:748`.
+- **Checked spec repo first:** RFC-AITP-0013 has no numbered subsections (just Abstract/
+  Status/Sketch/References), so used the bare `RFC-AITP-0013` form, matching
+  `docs/aitp-integration.md:403`'s existing correct citation.
+- **Confirmed unrelated RFC-AITP-0005 citations left untouched:** `tct-cache-perf/
+  scenario.yaml:9,61`, `aitp_server.py:162,671,701`, `models.py:62`, `engine.py:780`
+  (the TCT verify-cache feature, a different subject).
+- **Tests:** `uv run pytest tests/unit/test_capabilities.py
+  tests/unit/test_sdk_blocked_features.py -q` → 16 passed. `cli validate
+  scenarios/intra-org/tct-renewal` → `ok`.
+- **Shipped now or accumulating:** Accumulating — verifier confirmed independently
+  shippable, but per precedent (`plans/audit-2026-08-28-cleanup.md`'s 12 phases all
+  bundled into one PR, #57) this plan's phases accumulate to one closing PR rather than
+  8 separate small-doc PRs, to keep review noise down for a set of related, same-day
+  drift fixes.
+- **Next:** Phase 2 — deterministic unit test for the D-16 dispatch-level guard.
+
+### Phase 2 — Deterministic unit test for the D-16 dispatch-level guard — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet (plan-wide instruction: Sonnet only, no one-way doors here).
+- **Rounds:** 1.
+- **Files:** `tests/unit/test_engine_run.py` only — no source change.
+- **New test:** `test_run_failed_not_emitted_when_dispatch_races_a_cancel` — overrides
+  `agent_http`'s `/admin/self-execute` to upsert the store to `"cancelled"` then raise,
+  mirroring the real cancel/kill race, and asserts `run.failed` is absent from the
+  emitted events and the store stays `"cancelled"`.
+- **Mutation check (required per D-2's convention), run twice independently** (once by
+  the executor, once by the verifier): removing the `!= "cancelled"` condition at
+  `engine.py:228-230` turns the new test red with the exact expected assertion failure;
+  reverting leaves `engine.py` byte-identical (`git diff` empty) and the test green again.
+- **Non-vacuous, confirmed:** the captured event list under mutation was
+  `['run.started', 'agent.spawning', 'agent.ready', 'trust.peers_resolved',
+  'step.started', 'run.failed']` — proves the run genuinely executes through spawn/trust/
+  dispatch before hitting the guard, not an early crash.
+- **Tests:** `uv run pytest tests/unit/test_engine_run.py -q` → 52 passed. `ruff check` clean.
+- **Shipped now or accumulating:** Accumulating (same reasoning as Phase 1 — one closing
+  PR for the whole sweep, precedent from PR #57).
+- **Next:** Phase 3 — `docs/architecture.md` route topology + `/hosted-agents` docs.
+
+### Phase 3 — Fix architecture.md route topology, document /hosted-agents — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `docs/architecture.md` only.
+- **Fix:** split admin routes into "build_admin_router" (13 routes, now including
+  `/admin/held-tct` and `/admin/refresh-revocations` which were missing from the diagram)
+  vs. "mounted directly by `AitpServer`" (`/admin/rotate-keys`, `/admin/tct-cache-stats`),
+  mirroring the precedent at `internal_docs/agents.md:202`. Added a new "Hosted agents"
+  section documenting all 6 `/hosted-agents` routes (spawn/list/get/stop/
+  resolve-and-handshake/invoke), previously undocumented beyond a passing env-var mention.
+- **Verified against source independently** (both executor and verifier ran the same
+  `grep -n '@router\.'` extraction over `agent_admin.py`, `aitp_server.py`, `api/hosted.py`
+  and confirmed the doc now matches exactly).
+- **Tests:** docs-only, N/A.
+- **Shipped now or accumulating:** Accumulating (per Phase 1/2 precedent).
+- **Next:** Phase 4 — getting-started.md/README.md hosted-agents mention, coverage gate,
+  cancel-route ordering.
+
+### Phase 4 — getting-started.md/README.md: hosted-agents, coverage gate, cancel order — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `docs/getting-started.md`, `README.md`.
+- **Fixes:** (1) added a substantive `/hosted-agents` pointer to both files, linking to
+  Phase 3's `docs/architecture.md#hosted-agents-...` section — anchor slug verified to
+  resolve correctly against GitHub's slug rules. (2) coverage-gate description now states
+  both gates (`src/*` >=88%, `agents/base/*` >=54%, confirmed against `ci.yml:101-102`)
+  instead of a single "floor: 88%". (3) cancel-route description corrected to
+  "mark cancelled, then kill" (confirmed against `api/runs.py:303-344`'s actual order),
+  with a one-clause note on why the order matters (D-16).
+- **Tests:** `tests/unit/test_config_env_table.py -q` -> 1 passed (only doc-consistency
+  test touching this file).
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 5 — docs/aitp-integration.md AID-check claim fix.
+
+### Phase 5 — Fix aitp-integration.md's stale AID-check/PENDING-P1 claims — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `docs/aitp-integration.md` only.
+- **Fix:** replaced the "not compared yet, tracked as PENDING.md P1" framing with a
+  positive description of the implemented check (`engine.py:667-674`'s
+  `declared_aid != ra.aid` comparison, raising `PlaygroundError` before pinning), plus
+  D-8's rationale.
+- **Provenance claim independently verified twice** (executor + verifier): `ra.aid` is
+  read from the spawned subprocess's `AITP_AGENT_READY` line over a `subprocess.PIPE`
+  (`hosting/supervisor.py:73-89`), never off the network — confirmed by reading the
+  actual supervisor code, not just engine.py's comment.
+- **Tests:** docs-only, no doc-consistency test references this file.
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 6 — internal_docs/testing.md coverage gate, P7 citation, layout tree.
+
+### Phase 6 — Fix testing.md: coverage gate, P7 citation, layout tree — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `internal_docs/testing.md` only.
+- **Fixes:** (1) "no enforced threshold today" -> both real gates stated (`src/*` >=88%,
+  `agents/base/*` >=54%, `ci.yml:101-102`, D-17). (2) stale P7 "not required" claim ->
+  closed 2026-08-28, e2e job now a required status check (PENDING.md P7, D-12/D-13).
+  (3) test-layout tree fully regenerated from live `ls` (21 -> 46 files across unit/
+  integration/scenarios) rather than hand-patched.
+- **Bonus fix found during regeneration:** scenarios section previously listed three
+  nonexistent placeholder files; corrected to the one real file, `test_scenario_packs.py`.
+  Verified independently by both executor and verifier (`ls` confirms the three don't
+  exist; `test_scenario_packs.py` is the only real file there).
+- **Verified with a full independent file-set diff** (verifier rebuilt the live inventory
+  from scratch and diffed against the doc's tree): 46 files, zero mismatch either
+  direction.
+- **Tests:** docs-only, no test references this doc.
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 7 — internal_docs/runner.md event catalog (manifest.verify_failed).
+
+### Phase 7 — Add manifest.verify_failed to internal_docs/runner.md's event catalog — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `internal_docs/runner.md` only.
+- **Fix:** added `manifest.verify_failed` (fields `step_id`, `agent_id`, `cause`,
+  `source_url`, confirmed exact against `engine.py:641-645`'s emit call) to the
+  Trust/delegation/revocation/identity table.
+- **Full re-check, not just the one known gap:** both executor and verifier independently
+  ran `rg -o '"[a-z]+\.[a-z_.]+"' src/aitp_playground/runner/` (32 unique events) and
+  cross-checked every one against the doc's tables — zero other gaps found.
+  `run.cancelled`/`cp.webhook.delivered` correctly excluded (emitted from `api/runs.py`/
+  `api/webhooks.py`, not `runner/engine.py`) and confirmed already documented elsewhere
+  in the same file.
+- **Tests:** docs-only, no test references this doc.
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention.
+
+### Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1 (one cosmetic tighten after verify: shortened
+  CLAUDE.md's revocation bullet's wording to match README's, though it still wraps across
+  2 lines there — CLAUDE.md's narrower column width, not a content difference).
+- **Files:** `README.md` (tracked), `CLAUDE.md` (untracked/gitignored in this repo, per
+  `.gitignore:54` — a real, read file, edited for accuracy, but won't appear in the git
+  diff/commit; this matches how `plans/` is also intentionally local-only).
+- **Fixes:** added one-line `scripts/` and `federated/` entries to both files' layout
+  trees (previously entirely absent from both); extended the `agents/base/` bullet in
+  both files to name the revocation subsystem (`revocation_state.py`,
+  `revocation_refresh.py` — first-class per P8/P9/P12, D-8-D-14).
+- **Confirmed on disk:** `scripts/demo-e2e-run.sh`, `federated/README.md`,
+  `agents/base/revocation_state.py`, `agents/base/revocation_refresh.py` all exist.
+- **Tests:** docs-only, N/A.
+- **Shipped now or accumulating:** Accumulating — this is the plan's final phase; all 8
+  phases now `DONE`. Proceeding to end-of-plan closeout (full regression) next.
+
+## Plan 3 close-out — all 8 phases PASS, 2026-08-29
+
+`plans/docs-tests-audit-2026-08-29.md` complete. Summary: 1 citation-rot fix (Phase 1,
+RFC-AITP-0005→0013), 1 test-integrity fix (Phase 2, deterministic unit test for the D-16
+dispatch guard, mutation-proven per D-2), and 6 doc-correction phases (3, 4, 5, 6, 7, 8)
+covering route topology, coverage-gate claims, a stale PENDING citation, a stale AID-check
+claim, a stale test-layout tree, a missing event-catalog entry, and two missing repo-map
+directories. No source-logic changes anywhere in this plan — only comments, one new test,
+and prose. Every finding traced to an exact file:line before being fixed, and every fix
+re-verified independently against live source/config by a fresh agent (not the executor)
+before being trusted.
+
+**Final regression:** `uv run pytest tests/unit/ -q` → 386 passed. Full suite minus
+e2e-marker: `uv run pytest tests/ -q -m "not e2e"` → 534 passed, 21 skipped (AITP_E2E/
+AITP_PROTOCOL_E2E-gated). `AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v`
+→ 3 passed in 2.3s, including the historically-flaky `test_cancel_inflight_run_reaches_
+terminal_state` (PENDING.md P14 watch item) — passed clean. `uv run ruff check .` → all
+checks passed, repo-wide.
+
+8 commits, one per phase, all on `main` locally: 59b4433, 39d9091, 88b975a, 7f204fb,
+78be336, e930618, 6a62357, 265ea69. Ready for the closing PR.
+
+**Shipping checkpoint:** pushed `docs-tests-audit-2026-08-29` at `f6946c6`.
+PR #59 opened: https://github.com/agentidentitytrustprotocol/aitp-playground/pull/59

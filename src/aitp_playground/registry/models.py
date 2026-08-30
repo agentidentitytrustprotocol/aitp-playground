@@ -55,7 +55,7 @@ WorkflowStepType = Literal[
     "rotate_keys",                       # agent replaces its keypair + republishes manifest
     "enroll_with_cp",                    # agent self-enrolls via CP /api/registry/enroll
     "cp_subscribe_webhook",              # register a CP webhook pointing at the run's receiver
-    "renew_tct",                         # RFC-AITP-0005 §10 in-band TCT renewal
+    "renew_tct",                         # RFC-AITP-0013 in-band TCT renewal
     "export_session_bundle",             # RFC-AITP-0010 build a SessionBundleEnvelope
     "verify_session_bundle",             # RFC-AITP-0010 verify a SessionBundleEnvelope
     "spki_pin_check",                    # compute_spki_hash + SpkiPinVerifier exercise

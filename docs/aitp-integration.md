@@ -123,9 +123,17 @@ prove that AID is the peer you meant. Two consequences worth keeping straight:
   stack resolves that first hop over plain HTTP under
   `AITP_DIDWEB_INSECURE_HOSTS`.
 - At the runner's CP trust-anchor site the expected AID **is** known — the
-  runner launched the agent — and simply is not compared yet. That is a missing
-  one-line check, not an inherent limit of `verify_manifest_json`. Tracked as
-  `PENDING.md` P1.
+  runner launched the agent — and the site uses it: after
+  `verify_manifest_json` passes, `runner/engine.py` compares the manifest's
+  declared `aid` against `ra.aid`, the AID the supervisor read from the
+  spawned process's own `AITP_AGENT_READY` line over a parent-child pipe, not
+  off the network. A mismatch raises `PlaygroundError` and the fetch is
+  refused before any key is pinned. This closes the gap authenticity alone
+  leaves open here: launch and manifest-fetch are separate channels, so
+  without the comparison, whatever answers at a launched agent's port —
+  including a substitute that took the port after the real agent died between
+  reporting ready and being provisioned — could serve its own genuinely-signed
+  manifest and have its key trusted as that agent's (D-8).
 
 ## Identity
 

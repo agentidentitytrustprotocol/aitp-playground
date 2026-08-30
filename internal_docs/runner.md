@@ -271,6 +271,7 @@ log — see [agents.md](agents.md). The narrator
 | --- | --- | --- |
 | `trust.establishing` | `initiator`, `target` | Before `/admin/initiate-handshake`. |
 | `trust.established` | `initiator`, `target`, `grants`, `jti` | After successful handshake. |
+| `manifest.verify_failed` | `step_id`, `agent_id`, `cause`, `source_url` | `cp_provision_trust_anchor` step: the agent's own manifest failed `aitp.verify_manifest_json` before its key could be pinned into the CP trust store. |
 | `delegation.issuing` | `initiator`, `target`, `grants` | `delegate` step. |
 | `delegation.redeeming` | `initiator`, `target` | `redeem_delegation` step. |
 | `revocation.published` | `jti`, `to_cp` | `revoke_tct` with `via_cp`. |

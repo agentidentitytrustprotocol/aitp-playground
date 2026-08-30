@@ -10,36 +10,54 @@ layers are what give the project teeth.
 tests/
 ├── conftest.py                    # sets PYTHONPATH and SCENARIOS_DIR
 ├── unit/                          # fast, in-process, no subprocesses
+│   ├── _jcs_reference.py          # vendored RFC 8785 canonicalizer (test fixture, not a test)
 │   ├── test_adapters.py           # adapter validation + launch prep
+│   ├── test_agent_admin_enroll.py # /admin/enroll-with-cp observable on CP-unreachable
+│   ├── test_agent_admin_routes.py # agent_admin.py's own-precondition rejection branches
 │   ├── test_api.py                # route contracts
 │   ├── test_bootstrap.py          # seed derivation + bootstrap shape
 │   ├── test_capabilities.py       # SDK feature probe / GET /capabilities
 │   ├── test_cli.py                # validate / dry-run / lint / conformance
+│   ├── test_config_env_table.py   # Settings fields vs getting-started.md env table drift
 │   ├── test_conformance.py        # RFC fixture catalog + readiness
 │   ├── test_cp_client.py          # CpClient methods + graceful fallback
+│   ├── test_cp_delegation_tree_timing.py # cp_delegation_tree step flush-before-query ordering
 │   ├── test_cp_routes.py          # /cp/* observability proxies
 │   ├── test_cp_scenarios.py       # CP-backed step types
 │   ├── test_cp_webhook_receiver.py# /webhooks/cp/{run_id} HMAC verify
 │   ├── test_dashboard.py          # /dashboard HTML
+│   ├── test_delegation_revocation.py # redeem route consults revocation sources (RFC-AITP-0006/0011)
+│   ├── test_engine_helpers.py     # ScenarioRunner's pure/branching helpers
+│   ├── test_engine_run.py         # ScenarioRunner.run() and step dispatch
+│   ├── test_federation.py         # did:web http/https gate, public-origin plumbing, loopback guard
+│   ├── test_include_resolver.py   # !include YAML tag for scenario packs
+│   ├── test_manifest_verification.py # peer ManifestEnvelope verified before fields are read
 │   ├── test_metrics.py            # /metrics exposition
 │   ├── test_narrator.py           # event → narration rendering
 │   ├── test_port_allocator.py     # allocation / recycling
 │   ├── test_registry.py           # Pydantic validation + loader
+│   ├── test_revocation_freshness.py # Axis B: no fresh verified snapshot
+│   ├── test_revocation_signing_convention.py # installed aitp-sdk's revocation signing input
+│   ├── test_revocation_state.py   # RevocationState's two sets + snapshot semantics
+│   ├── test_revocation_verify_or_discard.py # unverifiable snapshot is discarded, not merged
 │   ├── test_run_store_sqlite.py   # RUN_HISTORY_DB persistence
 │   ├── test_runs_api.py           # run lifecycle routes
 │   ├── test_sdk_blocked_features.py # feature-gated surfaces absent → skip
 │   ├── test_sdk_delegation.py     # SDK delegation behaviors
+│   ├── test_sdk_floor_comment_matches_specifier.py # aitp-sdk floor comment vs pyproject specifier
 │   ├── test_tct_cache_scenario.py # TCT verification cache
+│   ├── test_tct_claims.py         # shared compact-JWS claims reader (agents/base/tct_claims)
+│   ├── test_telemetry_api.py      # POST /internal/telemetry sink
 │   ├── test_templates.py          # scenario template merge
+│   ├── test_trust_orchestrator.py # TrustOrchestrator.resolve_peers branching
 │   └── test_trust_resolver.py     # static / did:web / cp_registry
 ├── integration/
-│   ├── test_runner.py             # spawns real agent subprocesses (AITP_E2E=1)
+│   ├── test_federated_handshake.py # spawn-and-handshake did:web path (AITP_E2E=1)
+│   ├── test_llm_e2e.py            # real LLM calls under AITP trust (AITP_LLM_E2E=1)
 │   ├── test_protocol_e2e.py       # protocol scenarios + CP, no LLM (AITP_PROTOCOL_E2E=1)
-│   └── test_llm_e2e.py            # real LLM calls under AITP trust (AITP_LLM_E2E=1)
-└── scenarios/                     # placeholder; currently skipped
-    ├── test_intra_org.py
-    ├── test_cross_cloud.py
-    └── test_cross_org.py
+│   └── test_runner.py             # spawns real agent subprocesses (AITP_E2E=1)
+└── scenarios/
+    └── test_scenario_packs.py     # offline registry consistency checks (no spawn, no LLM)
 ```
 
 Unit tests that touch the SDK use `pytest.importorskip("aitp")` so they
@@ -77,8 +95,16 @@ uv run pytest tests/unit/
 uv run pytest tests/unit/test_runs_api.py -v
 ```
 
-Coverage is configured via `coverage[toml]` in the dev extras. Add `--cov`
-if you want a report; there's no enforced threshold today.
+Coverage is configured via `coverage[toml]` in the dev extras and enforced in
+CI (`ci.yml`'s `Tests` job runs `tests/unit` + `tests/scenarios` under
+`coverage run`, then two separate `coverage report` gates over that one
+measurement — not one aggregate, so a regression in `src/` can't hide behind
+`agents/base`'s lower floor or vice versa; see `DECISIONS.md` D-17):
+
+- `src/*` — fail under 88%
+- `agents/base/*` — fail under 54%
+
+Add `--cov` locally if you want a report before pushing.
 
 ## Layer 2 — integration (`tests/integration/`)
 
@@ -181,8 +207,10 @@ signer/verifier disagreement; pre-merge e2e *prevents* one. A `paths-filter` is 
 than a branch-name match on the bump bot's convention, because it also catches a hand-edited
 pin.
 
-**Caveat, tracked as `PENDING.md` P7:** this job is not yet in `main`'s required status
-checks, so it currently *runs* pre-merge without *blocking* merge.
+**`PENDING.md` P7, closed 2026-08-28:** `docker-compose e2e` is now one of `main`'s
+required status checks (added via the `required_status_checks` sub-resource `PATCH`;
+see `DECISIONS.md` D-12's reversal and D-13), so a PR that touches `uv.lock` is blocked
+from merging until this job goes green.
 
 If this job goes red because the control-plane half of a coordinated flip has not shipped,
 that is the design working — sequence the rollout rather than disabling the job.

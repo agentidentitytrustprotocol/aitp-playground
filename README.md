@@ -48,6 +48,12 @@ One service, ~20 scenarios, each isolating one AITP behavior:
 | **Control Plane** | optional enrollment, webhooks, trust-anchor provisioning, delegation-tree observability |
 | **Resilience** | operator-injected faults (`manifest_404`, `peer_offline`) that the run survives with structured outcomes |
 
+Beyond the intra-org `/runs` flow above, `POST /hosted-agents` and friends
+spawn a long-lived agent and drive a *cross-domain* handshake/invoke against
+a peer hosted by a different instance of this service — see
+[architecture.md](docs/architecture.md#hosted-agents-srcaitp_playgroundapihostedpy)
+for the full route list.
+
 Everything is optional and degrades cleanly: no LLM key → deterministic
 stubs (handshakes still run); no Control Plane → static fallback. Since
 `aitp-sdk` 0.4.0 the full SDK surface (renewal, session bundles, SPKI
@@ -184,11 +190,13 @@ aitp-playground/
 │   ├── capabilities.py    # SDK feature probe (GET /capabilities)
 │   └── conformance.py     # RFC fixture catalog + readiness
 ├── agents/                # agent subprocess workers
-│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm
+│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm / revocation (revocation_state.py, revocation_refresh.py)
 │   ├── researcher/        # CrewAI worker
 │   ├── writer/            # LangChain worker
 │   └── analyzer/          # LangGraph worker
 ├── scenarios/             # YAML scenario packs (registry on disk)
+├── scripts/               # e2e inspection helpers (demo-e2e-run.sh)
+├── federated/             # cross-domain federated demo stack — see federated/README.md
 └── tests/                 # unit / integration / scenario / e2e
 ```
 
