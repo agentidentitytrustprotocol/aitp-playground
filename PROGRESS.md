@@ -748,3 +748,20 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Shipped now or accumulating:** Accumulating (same reasoning as Phase 1 — one closing
   PR for the whole sweep, precedent from PR #57).
 - **Next:** Phase 3 — `docs/architecture.md` route topology + `/hosted-agents` docs.
+
+### Phase 3 — Fix architecture.md route topology, document /hosted-agents — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `docs/architecture.md` only.
+- **Fix:** split admin routes into "build_admin_router" (13 routes, now including
+  `/admin/held-tct` and `/admin/refresh-revocations` which were missing from the diagram)
+  vs. "mounted directly by `AitpServer`" (`/admin/rotate-keys`, `/admin/tct-cache-stats`),
+  mirroring the precedent at `internal_docs/agents.md:202`. Added a new "Hosted agents"
+  section documenting all 6 `/hosted-agents` routes (spawn/list/get/stop/
+  resolve-and-handshake/invoke), previously undocumented beyond a passing env-var mention.
+- **Verified against source independently** (both executor and verifier ran the same
+  `grep -n '@router\.'` extraction over `agent_admin.py`, `aitp_server.py`, `api/hosted.py`
+  and confirmed the doc now matches exactly).
+- **Tests:** docs-only, N/A.
+- **Shipped now or accumulating:** Accumulating (per Phase 1/2 precedent).
+- **Next:** Phase 4 — getting-started.md/README.md hosted-agents mention, coverage gate,
+  cancel-route ordering.

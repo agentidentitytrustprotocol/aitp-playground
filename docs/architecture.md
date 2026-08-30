@@ -40,6 +40,7 @@ HTTP client ───▶ │ aitp-playground (port 8000)          │
                  │  │ /metrics /dashboard  /cp/*     │  │
                  │  │ /webhooks/cp/{run}   (← CP)    │  │
                  │  │ /internal/telemetry  (← agents)│  │
+                 │  │ /hosted-agents/*  (cross-domain)│  │
                  │  └────────────────────────────────┘  │
                  │  ┌──── Runner ────────────────────┐  │
                  │  │ ScenarioRunner.run()           │  │
@@ -64,12 +65,15 @@ HTTP client ───▶ │ aitp-playground (port 8000)          │
    │     │   /.well-known/did.json   (when did_web_host set)   │
    │     │   /aitp/handshake/hello, /aitp/handshake/commit     │
    │     │   /aitp/delegation/redeem                           │
+   │     │   /admin/rotate-keys      (mounted here, not below) │
+   │     │   /admin/tct-cache-stats  (mounted here, not below) │
    │     ├─ agent_admin.build_admin_router                     │
    │     │   /admin/initiate-handshake  /admin/invoke          │
    │     │   /admin/self-execute        /admin/delegate        │
    │     │   /admin/redeem-delegation   /admin/revoke-tct      │
-   │     │   /admin/rotate-keys         /admin/renew-tct       │
+   │     │   /admin/held-tct            /admin/renew-tct       │
    │     │   /admin/process-renewal     /admin/enroll-with-cp  │
+   │     │   /admin/refresh-revocations                        │
    │     │   /admin/export-session-bundle  …/verify-…          │
    │     └─ /capabilities/<name>   (per-agent worker)          │
    │                                                           │
@@ -85,6 +89,15 @@ Every blob inside an agent worker is the SDK's responsibility or thin
 HTTP plumbing. The "knows about AITP" line lives at the
 `aitp_server.AitpServer` / `agent_admin` boundary; everything outside it
 just speaks HTTP.
+
+Two `/admin/*` routes are mounted directly by `AitpServer`, not by
+`agent_admin.build_admin_router`: `POST /admin/rotate-keys` (replaces the
+agent's keypair and republishes its manifest — key material lives here,
+not in the admin router) and `GET /admin/tct-cache-stats` (RFC-AITP-0005
+verification-cache counters). Every other `/admin/*` route — including
+`GET /admin/held-tct` and `POST /admin/refresh-revocations` — comes from
+`build_admin_router`. See [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md#routes-mounted-per-worker)
+for the full per-route breakdown.
 
 ## Components
 
@@ -181,6 +194,29 @@ Per worker the layout is identical:
    uvicorn. The lifespan emits `AITP_AGENT_READY` once the port is bound.
 
 See [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md) for how to add a new worker.
+
+### Hosted agents (`src/aitp_playground/api/hosted.py`)
+A separate router from `/runs`, for a different scenario: a *cross-domain*
+handshake between agents hosted by two different instances of this service
+(e.g. org-A's playground and org-B's playground), rather than an intra-org
+scenario where the runner spawns and drives both sides of a handshake itself.
+`api/hosted.py` mounts the routes; `hosting/hosted.py`'s `HostedAgentManager`
+holds the actual lifecycle logic (spawn, track, stop) and registers no
+routes of its own. All six routes live under the `/hosted-agents` prefix:
+- `POST /hosted-agents` — spawn a long-lived agent from a scenario ref at
+  this service's public origin.
+- `GET  /hosted-agents` — list currently hosted agents.
+- `GET  /hosted-agents/{hosted_id}` — fetch one hosted agent's record.
+- `DELETE /hosted-agents/{hosted_id}` — stop a hosted agent.
+- `POST /hosted-agents/{hosted_id}/resolve-and-handshake` — resolve a peer's
+  `did:web` (fail-closed: a resolution that lands on a loopback origin is
+  refused, so a green test can't be a same-process handshake in disguise)
+  and drive this hosted agent's SDK handshake against the resolved peer.
+- `POST /hosted-agents/{hosted_id}/invoke` — invoke a capability on a peer
+  using the TCT this hosted agent obtained during the handshake.
+
+This is what the Level 1 / Level 2 federated e2e stack (`federated/`) drives
+against two real origins; the intra-org `/runs` flow never touches it.
 
 ## Data flow for one capability call
 
