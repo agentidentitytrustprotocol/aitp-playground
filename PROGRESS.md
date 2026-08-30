@@ -814,3 +814,19 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Tests:** docs-only, no test references this doc.
 - **Shipped now or accumulating:** Accumulating (per precedent).
 - **Next:** Phase 7 — internal_docs/runner.md event catalog (manifest.verify_failed).
+
+### Phase 7 — Add manifest.verify_failed to internal_docs/runner.md's event catalog — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet. **Rounds:** 1.
+- **Files:** `internal_docs/runner.md` only.
+- **Fix:** added `manifest.verify_failed` (fields `step_id`, `agent_id`, `cause`,
+  `source_url`, confirmed exact against `engine.py:641-645`'s emit call) to the
+  Trust/delegation/revocation/identity table.
+- **Full re-check, not just the one known gap:** both executor and verifier independently
+  ran `rg -o '"[a-z]+\.[a-z_.]+"' src/aitp_playground/runner/` (32 unique events) and
+  cross-checked every one against the doc's tables — zero other gaps found.
+  `run.cancelled`/`cp.webhook.delivered` correctly excluded (emitted from `api/runs.py`/
+  `api/webhooks.py`, not `runner/engine.py`) and confirmed already documented elsewhere
+  in the same file.
+- **Tests:** docs-only, no test references this doc.
+- **Shipped now or accumulating:** Accumulating (per precedent).
+- **Next:** Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention.
