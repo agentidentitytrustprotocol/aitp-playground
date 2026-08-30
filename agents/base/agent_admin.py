@@ -351,7 +351,7 @@ def build_admin_router(
 
     @router.post("/renew-tct")
     async def renew_tct(request: Request) -> dict[str, Any]:
-        """Holder side of RFC-AITP-0005 §10 TCT renewal.
+        """Holder side of RFC-AITP-0013 TCT renewal.
 
         Body:
           - ``peer_port``: the issuer's port; we look up our held TCT in

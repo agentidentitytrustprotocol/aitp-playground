@@ -6,7 +6,7 @@ metadata:
   version: 1.0.0
   name: TCT Renewal — In-Band Refresh
   summary: >
-    Demonstrates RFC-AITP-0005 §10 in-band TCT renewal. The researcher
+    Demonstrates RFC-AITP-0013 in-band TCT renewal. The researcher
     handshakes with the writer, performs a research call, then renews
     the TCT issued by the writer without replaying the full handshake.
     The renewal request is signed under the holder's subject key (proof
@@ -14,7 +14,7 @@ metadata:
     jti + expires_at. A second research call with the renewed TCT
     proves the swap took effect. Gated by the experimental-renewal
     Cargo feature on the aitp-py wheel.
-  tags: [tct-renewal, rfc-aitp-0005, experimental, intra-org]
+  tags: [tct-renewal, rfc-aitp-0013, experimental, intra-org]
 
 spec:
   inputs:

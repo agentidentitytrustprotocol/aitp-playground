@@ -745,7 +745,7 @@ class ScenarioRunner:
             return
 
         if step_type == "renew_tct":
-            # RFC-AITP-0005 §10: holder presents the held TCT to the
+            # RFC-AITP-0013: holder presents the held TCT to the
             # issuer, who mints a fresh envelope with a new jti +
             # expiry. The held TCT is swapped in-place on the holder's
             # /admin side.

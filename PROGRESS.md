@@ -658,3 +658,72 @@ negative-case-test phase (7), and 1 citation-rot cleanup (1). 6 new `DECISIONS.m
 Every negative assertion added was demonstrated by mutation before being trusted (D-2).
 Suite grew from 497 to 533 tests across the run; `agents/base` coverage moved from an
 unmeasured 0% (outside the gate entirely) to a measured, gated 55.2%.
+
+## Plan 3 — post-PR#57 docs/test drift sweep (2026-08-29) — repo map
+
+(See `plans/docs-tests-audit-2026-08-29.md` for the full plan. This is the discovery
+record from the three parallel survey agents, so `/implement` doesn't re-scan.)
+
+- `scenarios/intra-org/tct-renewal/1.0.0/scenario.yaml`, `agents/base/agent_admin.py:354`,
+  `src/aitp_playground/registry/models.py:58`, `src/aitp_playground/runner/engine.py:748`
+  — cite `RFC-AITP-0005 §10` for TCT renewal; should be `RFC-AITP-0013` (confirmed against
+  `docs/capabilities.md:29`, `docs/aitp-integration.md:403`, which already say 0013).
+  **Do not blanket-grep for `rfc-aitp-0005`** — `tct-cache-perf/scenario.yaml:9,61`,
+  `aitp_server.py:162,671,701`, `engine.py:780`, `models.py:62` correctly cite 0005 for the
+  unrelated TCT verify-cache feature.
+- `runner/engine.py:87-90` — `run()`'s first action upserts `{"status": "running"}`,
+  unconditionally, before dispatch. `runner/engine.py:228-230` — the dispatch-level
+  `run.failed`-emit guard (D-16 sibling site to the already-unit-tested
+  `_finalize_failure` store guard at `:296-297`); has no deterministic unit coverage.
+  `runner/engine.py:641-642` — `manifest.verify_failed` emit site (D-15), missing from
+  `internal_docs/runner.md`'s event catalog. `runner/engine.py:667-674` — D-8 AID
+  comparison (`declared_aid != ra.aid`), implemented but `docs/aitp-integration.md:125-128`
+  still describes it as missing, citing closed `PENDING.md` P1.
+- `tests/unit/test_engine_run.py:1245-1281` — existing `_finalize_failure` guard tests
+  (store-level, already covers the sibling site, not the dispatch-emit guard).
+- `aitp_server.py:440,669` — `/admin/rotate-keys` and `/admin/tct-cache-stats` are mounted
+  directly by `AitpServer`, not `build_admin_router`. `agent_admin.py:335,786` —
+  `/admin/held-tct` and `/admin/refresh-revocations` are in `build_admin_router` but
+  missing from `docs/architecture.md:66-74`'s topology diagram, which also misgroups
+  rotate-keys under the router list. `internal_docs/agents.md:215-219` already has the
+  correct router-vs-direct-mount split — Phase 3 mirrors that precedent.
+- `api/hosted.py` (6 routes) + `hosting/hosted.py` (business logic, no routes of its own)
+  — the `/hosted-agents` cross-domain surface, undocumented beyond a passing env-var
+  mention in `docs/architecture.md`, `docs/getting-started.md`, `README.md`.
+- `docs/getting-started.md:~236` — states a single "floor: 88%", omitting the
+  `agents/base/*` ≥54% gate (`ci.yml:101-102`, D-17). `docs/getting-started.md:~164` —
+  describes `POST /runs/{id}/cancel` as "kill subprocesses, mark cancelled" (pre-D-16
+  order); actual order in `api/runs.py:336,343` is cancelled-then-kill.
+- `internal_docs/testing.md:80-81` — "no enforced threshold today" (false, contradicts
+  `ci.yml:101-102`). `:184-185` — stale `PENDING.md` P7 citation (closed 2026-08-28,
+  commit 92ebb33, e2e job now required). `:9-42` — test layout tree lists ~21 files;
+  actual `tests/unit/` has 41.
+- `internal_docs/runner.md` — event-type table missing `manifest.verify_failed` (the only
+  gap found by re-running the `rg -o '"[a-z]+\.[a-z_.]+"'` extraction over `runner/`).
+- `README.md:170-193`, `CLAUDE.md` Layout section — repo-map trees omit `scripts/`
+  (`scripts/demo-e2e-run.sh`) and `federated/` (full cross-domain demo stack, own
+  README); `agents/base/` bullet in both omits the revocation subsystem
+  (`revocation_state.py`, `revocation_refresh.py` — first-class per P8/P9/P12, D-8–D-14).
+
+### Phase 1 — Fix RFC-AITP-0005→0013 citation drift for TCT renewal — 2026-08-29 — PASS
+- **Verifier tier:** Sonnet (explicit user instruction for this plan run: Sonnet only,
+  no Opus/Fable — no phase in this plan is a one-way door).
+- **Rounds:** 1.
+- **Files:** `scenarios/intra-org/tct-renewal/1.0.0/scenario.yaml`,
+  `agents/base/agent_admin.py:354`, `src/aitp_playground/registry/models.py:58`,
+  `src/aitp_playground/runner/engine.py:748`.
+- **Checked spec repo first:** RFC-AITP-0013 has no numbered subsections (just Abstract/
+  Status/Sketch/References), so used the bare `RFC-AITP-0013` form, matching
+  `docs/aitp-integration.md:403`'s existing correct citation.
+- **Confirmed unrelated RFC-AITP-0005 citations left untouched:** `tct-cache-perf/
+  scenario.yaml:9,61`, `aitp_server.py:162,671,701`, `models.py:62`, `engine.py:780`
+  (the TCT verify-cache feature, a different subject).
+- **Tests:** `uv run pytest tests/unit/test_capabilities.py
+  tests/unit/test_sdk_blocked_features.py -q` → 16 passed. `cli validate
+  scenarios/intra-org/tct-renewal` → `ok`.
+- **Shipped now or accumulating:** Accumulating — verifier confirmed independently
+  shippable, but per precedent (`plans/audit-2026-08-28-cleanup.md`'s 12 phases all
+  bundled into one PR, #57) this plan's phases accumulate to one closing PR rather than
+  8 separate small-doc PRs, to keep review noise down for a set of related, same-day
+  drift fixes.
+- **Next:** Phase 2 — deterministic unit test for the D-16 dispatch-level guard.
