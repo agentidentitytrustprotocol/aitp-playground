@@ -846,3 +846,25 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Tests:** docs-only, N/A.
 - **Shipped now or accumulating:** Accumulating — this is the plan's final phase; all 8
   phases now `DONE`. Proceeding to end-of-plan closeout (full regression) next.
+
+## Plan 3 close-out — all 8 phases PASS, 2026-08-29
+
+`plans/docs-tests-audit-2026-08-29.md` complete. Summary: 1 citation-rot fix (Phase 1,
+RFC-AITP-0005→0013), 1 test-integrity fix (Phase 2, deterministic unit test for the D-16
+dispatch guard, mutation-proven per D-2), and 6 doc-correction phases (3, 4, 5, 6, 7, 8)
+covering route topology, coverage-gate claims, a stale PENDING citation, a stale AID-check
+claim, a stale test-layout tree, a missing event-catalog entry, and two missing repo-map
+directories. No source-logic changes anywhere in this plan — only comments, one new test,
+and prose. Every finding traced to an exact file:line before being fixed, and every fix
+re-verified independently against live source/config by a fresh agent (not the executor)
+before being trusted.
+
+**Final regression:** `uv run pytest tests/unit/ -q` → 386 passed. Full suite minus
+e2e-marker: `uv run pytest tests/ -q -m "not e2e"` → 534 passed, 21 skipped (AITP_E2E/
+AITP_PROTOCOL_E2E-gated). `AITP_E2E=1 uv run pytest tests/integration/test_runner.py -v`
+→ 3 passed in 2.3s, including the historically-flaky `test_cancel_inflight_run_reaches_
+terminal_state` (PENDING.md P14 watch item) — passed clean. `uv run ruff check .` → all
+checks passed, repo-wide.
+
+8 commits, one per phase, all on `main` locally: 59b4433, 39d9091, 88b975a, 7f204fb,
+78be336, e930618, 6a62357, 265ea69. Ready for the closing PR.
