@@ -832,8 +832,9 @@ record from the three parallel survey agents, so `/implement` doesn't re-scan.)
 - **Next:** Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention.
 
 ### Phase 8 — README.md/CLAUDE.md repo maps + revocation subsystem mention — 2026-08-29 — PASS
-- **Verifier tier:** Sonnet. **Rounds:** 1 (one cosmetic tighten after verify: CLAUDE.md's
-  revocation bullet wrapped 3 lines vs. README's 1 — matched to README's one-line style).
+- **Verifier tier:** Sonnet. **Rounds:** 1 (one cosmetic tighten after verify: shortened
+  CLAUDE.md's revocation bullet's wording to match README's, though it still wraps across
+  2 lines there — CLAUDE.md's narrower column width, not a content difference).
 - **Files:** `README.md` (tracked), `CLAUDE.md` (untracked/gitignored in this repo, per
   `.gitignore:54` — a real, read file, edited for accuracy, but won't appear in the git
   diff/commit; this matches how `plans/` is also intentionally local-only).
