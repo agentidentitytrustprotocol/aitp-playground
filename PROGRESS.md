@@ -871,3 +871,4 @@ checks passed, repo-wide.
 78be336, e930618, 6a62357, 265ea69. Ready for the closing PR.
 
 **Shipping checkpoint:** pushed `docs-tests-audit-2026-08-29` at `f6946c6`.
+PR #59 opened: https://github.com/agentidentitytrustprotocol/aitp-playground/pull/59
