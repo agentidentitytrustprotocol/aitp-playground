@@ -34,6 +34,7 @@ tests/
 │   ├── test_manifest_verification.py # peer ManifestEnvelope verified before fields are read
 │   ├── test_metrics.py            # /metrics exposition
 │   ├── test_narrator.py           # event → narration rendering
+│   ├── test_pinned_key_proof_convention.py # installed aitp-sdk's pinned-key HELLO proof encoding
 │   ├── test_port_allocator.py     # allocation / recycling
 │   ├── test_registry.py           # Pydantic validation + loader
 │   ├── test_revocation_freshness.py # Axis B: no fresh verified snapshot

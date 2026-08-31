@@ -1002,5 +1002,60 @@ not a second source of truth):
   after `e5ac4b7`, fixing a `/ship`-gate-found doc-drift gap (two places hardcoded the old
   `>=0.7.0` floor number in prose instead of pointing at `pyproject.toml`).
 - **PR #63 opened:** https://github.com/agentidentitytrustprotocol/aitp-playground/pull/63
-- **Next:** Phase 2 — interlock the pinned-key proof encoding against an independent
-  oracle.
+- **Merged:** #63 into `main` at `3c988ff` (2026-08-31). Real GitHub Actions
+  `docker-compose e2e` (a required check) passed against the actual 0.11.0 diff —
+  https://github.com/agentidentitytrustprotocol/aitp-playground/actions/runs/33447939177/job/99672310899.
+  Post-merge: no Railway/Vercel deploy config in this repo; merge only triggers the
+  Docker image build/push to GHCR (already green as part of the merged checks) — nothing
+  further to watch.
+
+### Phase 2 — Interlock the pinned-key proof encoding against an oracle that is not the SDK — 2026-08-31 — PASS
+- **Verifier tier:** Opus (escalated per the plan's Model policy). **Rounds:** 1.
+- **Files:** `tests/unit/test_pinned_key_proof_convention.py` (new, 431 lines),
+  `internal_docs/testing.md` (one-line test-layout tree entry, alphabetically placed).
+- **What it does:** D-1 oracle-independence pattern applied to the pinned-key HELLO
+  proof (second instance after `test_revocation_signing_convention.py`). Mints a real
+  in-process HELLO via the installed `aitp-sdk 0.11.0` wheel, reconstructs `proof_input`
+  in pure Python per RFC-AITP-0002 §3.1, and verifies the embedded Ed25519 signature with
+  `cryptography` — never asking the SDK to grade its own homework. Six tests: hard-assert
+  SDK-surface check (D-11, not skipif), KAT-leg positive + KAT-leg negative (MUST-NOT),
+  live-leg positive + live-leg negative, and a non-aliasing guard.
+- **KAT literals independently verified twice** — once by the executor (caught its own
+  manual-transcription error via automated diff, regenerated programmatically instead of
+  retyping), once by the verifier (all 12 constants, including the two the plan's first
+  draft omitted — `sha256_b64url`, `signer_aid` — compared byte-for-byte against
+  `../aitp-rs/tests/schemas/known-answer/jcs-sha256.json`'s `kat-pinned-key-proof-001`
+  vector via a script, not eyeballed).
+- **Envelope field locations independently re-derived by the verifier** (not trusted from
+  the test's own docstring): minted a real HELLO and confirmed `message_id`/`timestamp`
+  are top-level, `pop_nonce`/`identity.{type,proof,public_key}` are under `payload`, and
+  the responder's AID never appears in the envelope at all (must come from the peer agent
+  object directly) — `_proof_material()` matches on every field.
+- **D-2 mutation-proof, run independently by both the executor and the verifier** (3
+  distinct mutations by the verifier, all confirmed red, then reverted with a diff/hash
+  check confirming byte-identical restoration):
+  - live-leg positive test flipped to the big-endian reconstruction → **failed** (not
+    vacuous)
+  - live-leg negative test flipped to the ASCII-decimal reconstruction → **failed** (the
+    negative genuinely discriminates, not just "asserts False by construction")
+  - one-nibble corruption of the KAT hex literal → **failed** (the literal is load-bearing,
+    not decorative)
+- **Suite:** before this phase (Phase 1 baseline) 534 passed/21 skipped; after, **540
+  passed/21 skipped** (6 new tests, zero collateral movement). `ruff check .` clean, both
+  by executor and verifier independently.
+- **Post-verify addition:** `assert identity["type"] == "pinned_key"` added to
+  `_proof_material()` per the verifier's optional-polish note, so a future
+  `build_manifest` default change fails by name instead of via a confusing downstream
+  signature mismatch. Re-ran standalone after adding — still 6 passed.
+- **Pre-existing drift noted, not fixed here (out of phase scope):**
+  `internal_docs/testing.md:64-65,83-84` still describes SDK-touching unit tests as using
+  `pytest.importorskip("aitp")`; six modules including this new one and its sibling
+  `test_revocation_signing_convention.py` use a bare `import aitp` instead, per the D-11
+  hard-assert precedent. The doc prose predates D-11 and should be corrected in a future
+  docs-drift pass, not folded into this phase.
+- **Shipped now or accumulating:** Shipping now, per the verifier's explicit call — this
+  interlock closes the exact blind spot that let the wire break in Phase 1 sit undetected
+  through two releases, belongs adjacent in history to PR #63 rather than bundled, is pure
+  test/interlock code with zero production dependents (near-zero PR risk), and Phase 3's
+  pre-flight needs this landed first as a trustworthy fixed point.
+- **Next:** Phase 3 — pre-flight the unreleased aitp-rs batch (`9f887dd`).
