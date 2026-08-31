@@ -1141,3 +1141,41 @@ not a second source of truth):
 - **Next:** Phase 5 — BLOCKED, do not start (no `aitp-rs` release beyond 0.11.0 exists).
   Plan complete through Phase 4; proceeding to `/reconcile` check and closing `/ship`
   pass for Phases 3-4's doc-only diff.
+- **Merged:** #65 into `main` at `62d05fb` (2026-08-31). All checks green
+  (`docker-compose e2e` correctly `skipping` — doc-only diff). No deploy to watch.
+
+## Plan 4 close-out — Phases 1-4 DONE, Phase 5 BLOCKED, 2026-08-31
+
+`plans/aitp-rs-breaking-changes-adoption.md` complete through its executable scope.
+Summary: Phase 1 (wire-break floor bump, PR #63), Phase 2 (independent-oracle interlock
+test closing the D-1 blind spot for pinned-key proofs, PR #64), Phase 3 (pre-flight of
+`aitp-rs`'s unreleased `9f887dd` — all three named risks held, one new residual risk
+found), Phase 4 (two `PENDING.md` entries, P15/P16). Phase 5 stays BLOCKED — no
+`aitp-rs` release beyond 0.11.0 exists yet; tracked externally by `aitp-rs`#152 and
+internally by `PENDING.md` P15/P16.
+
+**Every phase passed its verification gate with zero outstanding gaps** by the time it
+shipped: Phase 1 took 2 `/implement` verify rounds (2 material gaps found and closed:
+`DECISIONS.md` mis-history, wrap-width nit) plus a separate `/ship`-gate round (1
+should-fix doc-drift gap, closed before push); Phases 2-4 each passed on round 1, with
+Phase 2's round including 3 independent mutation tests and Phase 3's round finding one
+genuine new residual risk (P16) despite the phase being scoped as "mechanical."
+
+**Final regression:** `uv run pytest -q` → 540 passed, 21 skipped (unchanged since Phase
+2 added its 6 tests; Phases 3-4 were doc-only). `uv run ruff check .` → clean, confirmed
+at every phase boundary, not just once at the end.
+
+**3 PRs, all merged:** #63 (`3c988ff`), #64 (`74dc14f`), #65 (`62d05fb`) — plus one small
+process-correction note: a Phase-2 checkpoint commit (`c786565`) was mistakenly pushed
+directly to `main`, bypassing required branch-protection status checks. Caught
+immediately, not reverted (harmless doc-only content, reverting would add more noise
+than it removes), and corrected for every commit afterward — no direct-to-main push
+recurred through Phases 3-4.
+
+**Outstanding for `/reconcile`:** one `ASSUMPTIONS.md` entry, `UNCONFIRMED` — "Phase 4 —
+PENDING.md gets two entries (P15, P16), not one." Low blast radius either way (Phase 5 is
+independently blocked regardless of the outcome).
+
+**No deploy to watch for any of the 3 PRs** — this repo has no Railway/Vercel config;
+merges only trigger the Docker image build/push to GHCR, already green as part of each
+PR's required checks.
