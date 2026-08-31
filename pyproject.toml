@@ -15,7 +15,7 @@ dependencies = [
   # (`maturin ... --features experimental`); the service detects what's
   # available at runtime via GET /capabilities.
   # The floor records wire compatibility, not "the newest we happened to test".
-  # Two breaking changes are behind it:
+  # Five breaking changes are behind it:
   #   0.3.0 — the compact-JWS SDK (protocol `aitp/0.2`). The pre-0.3 wheels
   #     (JCS, protocol `aitp/0.1`) are wire-incompatible.
   #   0.5.0 — the JCS signing input moved from the transport wrapper to the
@@ -36,11 +36,22 @@ dependencies = [
   #     as `unknown`), and `verify_delegation`/`verify_delegation_multihop`
   #     take a deny-set parameter (aitp_server.py:576-593; an older wheel
   #     raises TypeError, turned into a 503 rather than a silent downgrade).
+  #   0.11.0 — the pinned-key identity proof's timestamp encoding changed from
+  #     an 8-byte big-endian integer to base-10 ASCII decimal (RFC-AITP-0002
+  #     §3.1 erratum, spec issue #17). A HELLO/HELLO_ACK pinned-key proof
+  #     minted by <=0.10.x does not verify under >=0.11.0 and vice versa;
+  #     aitp-rs implements no dual-accept. This repo's DEFAULT identity_type is
+  #     "pinned_key" (bootstrap.py:34, registry/models.py:242), so this is the
+  #     handshake path, not an edge case — and <=0.10.x never interoperated
+  #     with aitp-verifier-py on it at all, which has always used the
+  #     ASCII-decimal form. A mixed-version pair fails as handshake.failed with
+  #     a signature error, which reads like a bad key. The floor is what turns
+  #     that into a resolver error.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.7.0",
+  "aitp-sdk>=0.11.0",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",

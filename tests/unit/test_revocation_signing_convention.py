@@ -42,7 +42,8 @@ def test_the_sdk_exposes_the_signing_surface_this_module_interlocks() -> None:
     """A hard assertion, not a skipif — deliberately.
 
     `sign_revocation_list` is unconditional in the binding (no
-    `#[cfg(feature)]`), and this repo floors `aitp-sdk>=0.6.0`, so a wheel
+    `#[cfg(feature)]`), and this repo floors `aitp-sdk>=0.11.0` (it has
+    carried the symbol unconditionally since 0.6.0), so a wheel
     without it is not one CI can resolve. The one path that still reaches
     here is `maturin develop` from an old sibling `aitp-rs` checkout, which
     bypasses the resolver entirely — and that is precisely where a silent

@@ -872,3 +872,135 @@ checks passed, repo-wide.
 
 **Shipping checkpoint:** pushed `docs-tests-audit-2026-08-29` at `f6946c6`.
 PR #59 opened: https://github.com/agentidentitytrustprotocol/aitp-playground/pull/59
+
+## Plan 4 — aitp-rs breaking-change batch adoption (2026-08-31) — repo map
+
+(See `plans/aitp-rs-breaking-changes-adoption.md` for the full plan and its own inline
+Repo map / Open questions sections — those are authoritative and more complete. This is
+the condensed discovery record from four parallel Opus verification agents run during
+`/plan`'s reverify pass, so `/implement` doesn't re-derive what was already confirmed.)
+
+**Headline findings that change execution, not just citations:**
+- **PR #62** (`chore(deps): bump aitp to 0.11.0`, branch `deps/aitp-0.11.0`) is already
+  open, touches only `uv.lock`, and every required check is green including
+  `docker-compose` e2e. Phase 1 should land this PR rather than re-running
+  `uv lock --upgrade-package aitp-sdk`. PR #58 (0.10.0 bump) is open but superseded by #60
+  and should be closed once #62 lands.
+- **Phase 4's issue is already filed**:
+  [`agentidentitytrustprotocol/aitp-rs#152`](https://github.com/agentidentitytrustprotocol/aitp-rs/issues/152),
+  open, matches the plan's spec almost exactly (both bindings, security half called out).
+  Phase 4 now only needs a `PENDING.md` entry (`P15`, format matches `P8`/`P11`,
+  shorthand `aitp-rs#152` not a full URL). Optional: the issue body repeats a "bindings
+  not touched" inaccuracy the plan's Context corrected — a follow-up comment is a
+  judgment call for `/implement`, not required.
+- **`../aitp-rs` main is currently exactly at `9f887dd`**
+  (`9f887ddadc42afd92e561f4f8dc9590fead4e0f8`) — confirmed not an ancestor of tags
+  `aitp-v0.10.0`/`aitp-v0.11.0` (there is no `aitp-py-v0.11.0` tag, contrary to the plan's
+  first draft). Phase 3 can run against the existing sibling checkout as-is.
+- **`aitp-control-plane` is already on the Node 0.11.0 binding** (sibling repo exists at
+  `../aitp-control-plane`, `package.json:26` pins `^0.11.0`) — this repo is the lagging
+  side of the cross-repo mismatch, resolving the plan's fourth open question.
+- **No persisted/replayed pinned-key proof exists anywhere in this repo** — exhaustive
+  grep across `agents/`, `src/`, `tests/`, `scenarios/` found zero fixture/cassette/
+  transcript files and zero code reading/writing an `identity.proof` field. Resolves the
+  plan's second open question; Phase 1 has no stale-artifact case to chase.
+- **Empirically re-run during planning, not just asserted:** the installed
+  `aitp-sdk 0.10.0` wheel's minted pinned-key proof verifies under big-endian and fails
+  under ASCII-decimal — direct measured confirmation of the plan's core premise, and proof
+  that Phase 2's test is red before Phase 1 and green after (the D-2 mutation proof is
+  available for free from that transition).
+
+**Line-number drift found and corrected in the plan itself** (all folded into
+`plans/aitp-rs-breaking-changes-adoption.md` directly — this list is for quick reference,
+not a second source of truth):
+- `test_sdk_floor_comment_matches_specifier.py`: regex at `:24` (not `:25`); vacuity guard
+  `:60-72` (not `:63-73`).
+- `Dockerfile`: version-read block `:54-65` (not `:56-63`); maturin `path` build `:70-100`
+  (not `:86-99`); also `:129-133` copies `uv.lock` for a second independent gate,
+  `test_sdk_version_matches_lock`.
+- `agents/base/aitp_server.py`: responder `process_hello` wrap `:517-527` (not
+  `:519-529`); delegation redemption `:575-613` (not `:560-591`); the
+  `(RuntimeError, ValueError)` → 403 catch is `:606-613` specifically (not `:584-590`,
+  which is the `verify_delegation*` call itself).
+- `src/aitp_playground/capabilities.py`: feature-probe dict `:74-85` (not `:74-82`).
+- `agents/base/agent_admin.py:136` takes `envelope_json`, not `mr.text` (that's
+  `engine.py:638`'s argument).
+- `tests/unit/test_revocation_signing_convention.py`: docstring is `:1-22` (not `:1-40`,
+  which is roughly where imports end).
+- `bindings/aitp-py` `serde_json::from_str` bypass sites: fuller list than the plan's
+  first draft — includes `revocation.rs:206` and `session.rs:163` in addition to the
+  originally-named `manifest.rs:81`, `revocation.rs:175`, `bundle.rs:128`,
+  `session.rs:200,233,304,356`.
+- `crates/aitp-manifest/src/types.rs`: currently reads `skip_serializing_if =
+  "Option::is_none"` (post-`9f887dd`); the plan's "already carried `is_empty`" claim is
+  true of the *pre-commit* state only — corrected in Context.
+- `9f887dd` **does** touch `bindings/` (one line each in `aitp-py/src/revocation.rs` and
+  `aitp-node/src/agent.rs`, both a mechanical `extensions: None,` addition) — the plan's
+  "bindings untouched" framing is corrected in Context; substantive conclusion (nothing
+  reaches Python callers) is unaffected.
+- `ASSUMPTIONS.md`'s "Interlock skip keeps CI green" entry is status `CHANGED
+  (2026-08-26)`, per `DECISIONS.md` D-11 — Phase 2's hard-assertion choice is repo
+  precedent, not a departure from one; the plan's framing was backwards and is corrected.
+- KAT `kat-pinned-key-proof-001` (`../aitp-rs/tests/schemas/known-answer/jcs-sha256.json`,
+  byte-identical to the spec repo's copy) also carries `sha256_b64url` and `signer_aid`
+  fields the plan's first draft didn't list — both needed for Phase 2's test, now folded
+  into the plan verbatim.
+- HELLO envelope field locations for Phase 2 step 1: `message_id`/`timestamp` are
+  top-level; `pop_nonce`/`identity.{proof,public_key}` are under `payload`; `sender_aid`
+  is `envelope["sender"]["agent_id"]`; `receiver_aid` comes from the peer manifest, not
+  the envelope itself. Both agents (including the initiator) must call `build_manifest()`
+  before `new_session()`.
+- A third SDK-error-string assertion exists beyond the plan's originally-named two:
+  `tests/unit/test_delegation_revocation.py:146` (`"revoked" in resp.text.lower()`), same
+  `SourceTctRevoked` path as `:204`, D7-untouched — add to Phase 3's re-check list.
+
+### Phase 1 — Adopt aitp-sdk 0.11.0 and record the pinned-key wire break — 2026-08-31 — PASS
+- **Verifier tier:** Opus (escalated per the plan's Model policy — this phase touches the
+  wire contract of the default identity path). **Rounds:** 2.
+- **Files:** `pyproject.toml` (specifier `>=0.7.0`→`>=0.11.0`, new 0.11.0 rationale
+  bullet, "Two"→"Five breaking changes" header fix), `uv.lock` (`aitp-sdk` 0.10.0→0.11.0,
+  both the `[[package]]` resolution and the `[package.metadata].requires-dist` mirror),
+  `DECISIONS.md` (new `## D-20`).
+- **Also landed as part of this phase's mechanics (not local file diffs):** PR #62
+  (`chore(deps): bump aitp to 0.11.0`) merged via squash
+  (https://github.com/agentidentitytrustprotocol/aitp-playground/pull/62); PR #58
+  (stale `bump aitp to 0.10.0`) closed as superseded
+  (https://github.com/agentidentitytrustprotocol/aitp-playground/pull/58).
+- **Round 1 gaps (2 material, 4 minor):** (1) `docker compose e2e green` unmet — PR #62's
+  green e2e had run against `aitp-sdk` still pinned to 0.10.0 (its merged diff was
+  marker-reordering only; verified via `git show 8906b95 -- uv.lock`), so nothing had yet
+  exercised 0.11.0 in the compose stack. (2) `DECISIONS.md` D-20 misstated history,
+  crediting #62 with the version-resolution bump it didn't actually carry. (3-6, minor,
+  informational) D-19 vs. D-20 numbering not flagged as a deviation; a rationale bullet
+  wrapped at 86-92 cols vs. the block's 79-col norm; the plan's own Status field not yet
+  flipped (expected, orchestrator's job post-PASS); `.drive.lock`/`.ruff_cache/`
+  untracked-and-ungitignored (informational, no risk given named-file commits).
+- **Root cause found during round 1, folded into D-20:** the `bump-aitp.yml` dispatch that
+  produced PR #62 fired ~22s after 0.11.0 hit PyPI and raced index propagation, so its own
+  `uv lock --upgrade-package` re-resolved to 0.10.0 — PR #62 merged as a functional no-op
+  for the version bump. The real `uv.lock` 0.10.0→0.11.0 resolution came from this phase's
+  own local `uv lock` run after the specifier was raised.
+- **Round 2:** both material gaps closed — `DECISIONS.md` D-20 corrected (verified against
+  `git show 8906b95` independently: exactly 3+/3- of marker reordering, no `aitp-sdk`
+  version line) and the rationale bullet reflowed to the block's column norm. Docker
+  e2e's resolution: ship as its own PR so real CI (required since #56) runs the check
+  against the actual 0.11.0 diff — agreed as correct process, not a local gap. Full local
+  suite reconfirmed independently both rounds: 534 passed, 21 skipped.
+- **Empirically re-confirmed by the verifier itself** (not just trusting the executor): a
+  live `build_hello` pinned-key proof minted by the installed 0.11.0 wheel verifies under
+  the ASCII-decimal reconstruction and fails under big-endian — the wire-encoding premise
+  holds against the real artifact, not just the KAT.
+- **Tests:** `tests/unit/test_sdk_floor_comment_matches_specifier.py` (2 passed, both
+  rounds); full suite unaffected (534 passed / 21 skipped, both rounds); Dockerfile's
+  `pypi`-path version-read guard re-confirmed directly against a built image
+  (`import aitp` succeeds, `pip show aitp-sdk` reports 0.11.0, exactly one lock entry).
+- **Shipped now or accumulating:** Shipping now, per the verifier's explicit call both
+  rounds (matches `docker.yml`'s pre-merge-e2e design intent — bundling this with later
+  phases would fuse the wire-contract cut to unrelated changes and destroy the clean
+  bisect point; Phase 2 already depends on Phase 1 landing first).
+- **Pushed:** `deps/aitp-sdk-0.11.0-floor` at `5307d37` (2026-08-31) — a follow-up commit
+  after `e5ac4b7`, fixing a `/ship`-gate-found doc-drift gap (two places hardcoded the old
+  `>=0.7.0` floor number in prose instead of pointing at `pyproject.toml`).
+- **PR #63 opened:** https://github.com/agentidentitytrustprotocol/aitp-playground/pull/63
+- **Next:** Phase 2 — interlock the pinned-key proof encoding against an independent
+  oracle.
