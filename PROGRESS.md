@@ -998,5 +998,9 @@ not a second source of truth):
   rounds (matches `docker.yml`'s pre-merge-e2e design intent — bundling this with later
   phases would fuse the wire-contract cut to unrelated changes and destroy the clean
   bisect point; Phase 2 already depends on Phase 1 landing first).
+- **Pushed:** `deps/aitp-sdk-0.11.0-floor` at `5307d37` (2026-08-31) — a follow-up commit
+  after `e5ac4b7`, fixing a `/ship`-gate-found doc-drift gap (two places hardcoded the old
+  `>=0.7.0` floor number in prose instead of pointing at `pyproject.toml`).
+- **PR #63 opened:** https://github.com/agentidentitytrustprotocol/aitp-playground/pull/63
 - **Next:** Phase 2 — interlock the pinned-key proof encoding against an independent
   oracle.
