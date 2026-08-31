@@ -1058,4 +1058,9 @@ not a second source of truth):
   through two releases, belongs adjacent in history to PR #63 rather than bundled, is pure
   test/interlock code with zero production dependents (near-zero PR risk), and Phase 3's
   pre-flight needs this landed first as a trustworthy fixed point.
+- **Pushed/PR/merged:** `test/pinned-key-proof-interlock` pushed at `24285f1`; PR #64
+  opened (https://github.com/agentidentitytrustprotocol/aitp-playground/pull/64); all
+  checks green (`docker-compose e2e` correctly `skipping` — this PR doesn't touch
+  `uv.lock`); merged into `main` at `74dc14f` (2026-08-31). No deploy to watch (same as
+  Phase 1 — no Railway/Vercel config in this repo).
 - **Next:** Phase 3 — pre-flight the unreleased aitp-rs batch (`9f887dd`).
