@@ -483,3 +483,56 @@ terminal-event-count check, or something upstream) and the run's event log via
 did not see `cancelled` in time — the race D-16 already names, just rarer post-reorder than
 pre-reorder. If it is something else entirely (a hang, a different assertion), that is new
 information this entry does not yet have.
+
+## P15 — Python and Node bindings bypass the hardened wire parsers
+**From:** Phase 4 of `plans/aitp-rs-breaking-changes-adoption.md` · **Blocks:** nothing in
+this repo (Python's JSON-envelope paths never construct duplicate-key or unknown-field
+input from a trusted source today) · **Cost:** the RFC-AITP-0001 §5.4.5 duplicate-key
+rejection and `UNKNOWN_FIELD` diagnosis on JSON-envelope paths do not reach any
+Python-SDK caller until `aitp-rs`#152 lands upstream.
+
+`aitp-rs` commit `9f887dd` (unreleased as of 2026-08-31, on `main`, not merged into any
+tag) added hardened wire parsers (`parse_manifest_wire`/`parse_envelope_wire`/
+`parse_session_bundle_wire`, `aitp_core::reject_duplicate_keys`) and wired the HTTP
+transport, the facade, and the conformance adapter through them — but neither
+`bindings/aitp-py` nor `bindings/aitp-node` route through them; both still call
+`serde_json::from_str` directly on the JSON-envelope paths (`manifest.rs:81`,
+`revocation.rs:175,206`, `bundle.rs:128`, `session.rs:163,200,233,304,356` in `aitp-py`;
+analogous sites in `aitp-node`). Filed upstream as
+[`agentidentitytrustprotocol/aitp-rs#152`](https://github.com/agentidentitytrustprotocol/aitp-rs/issues/152),
+open, naming both bindings and the exact call sites. Not worked around locally — a
+local re-implementation of the member-set/unknown-field checks would be the same
+"downstream repo hand-rolls the verifier" pattern `aitp-rs` already called out as a
+defect for revocation-list verification elsewhere.
+
+## P16 — `UNKNOWN_FIELD` is reachable on compact-JWS paths and is a cross-implementation interop hazard, not a non-issue
+**From:** Phase 3 of `plans/aitp-rs-breaking-changes-adoption.md` (pre-flight against
+`aitp-rs` `9f887dd`) · **Blocks:** Phase 5 of the same plan (adopting the successor
+release once `9f887dd` ships) · **Cost:** a required check before that adoption, not a
+current bug — nothing this repo mints today carries an out-of-set claim.
+
+Distinct from P15: P15 is about the JSON-envelope paths (manifest/revocation/session
+bundle), which bypass the new hardened parsers entirely. This entry is about a
+*different* set of paths — TCT, voucher, and delegation verification, all compact-JWS —
+which already route through `check_members` and therefore already enforce
+`UNKNOWN_FIELD` against a **closed** member set:
+`verify_tct` (`crates/aitp-tct/src/verifier.rs:321`), `verify_voucher` (`:411`), and the
+delegation verifier (right after its D7 `typ` gate) all check against
+`TCT_CLAIMS_MEMBERS` (`crates/aitp-tct/src/types.rs:75-77`: `ver, jti, iss, sub, aud,
+iat, exp, grants, cnf, ext`). A TCT/voucher/delegation minted by a *different*
+implementation — `aitp-control-plane` (already on the Node 0.11.0 binding),
+`aitp-verifier-py`, a partner, or a future spec revision adding a claim — carrying any
+claim outside that set
+now fails `UNKNOWN_FIELD` where it previously verified.
+
+This repo's own test suite (540 tests as of Phase 3) cannot see this regressing: every
+token in `tests/` is minted by the same wheel that verifies it — the identical D-1
+"the SDK both signs and verifies, so any convention passes" blind spot this plan's
+Phase 2 exists to close for the pinned-key proof. No independent oracle covers TCT/
+voucher/delegation claim shapes today.
+
+**Before Phase 5 adopts the successor release:** pull a real TCT/voucher/delegation
+artifact actually minted by `aitp-control-plane` and confirm it verifies clean under the
+successor release's wheel, before merging, not after. If it doesn't, that is a genuine
+cross-repo interop break, not a local bug — file it upstream rather than widening
+`TCT_CLAIMS_MEMBERS` locally or downstream.

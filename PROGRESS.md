@@ -1064,3 +1064,80 @@ not a second source of truth):
   `uv.lock`); merged into `main` at `74dc14f` (2026-08-31). No deploy to watch (same as
   Phase 1 — no Railway/Vercel config in this repo).
 - **Next:** Phase 3 — pre-flight the unreleased aitp-rs batch (`9f887dd`).
+
+### Phase 3 — Pre-flight the unreleased aitp-rs batch behind the local path override — 2026-08-31 — PASS
+- **Verifier tier:** Opus. **Rounds:** 1. **No committed diff** — this phase's
+  deliverable is this findings note, per the plan's own scope (`pyproject.toml`'s
+  `[tool.uv.sources]` override was a local, uncommitted, fully-reverted edit only).
+- **SHA tested:** `../aitp-rs` main `9f887ddadc42afd92e561f4f8dc9590fead4e0f8` —
+  independently re-confirmed unmoved by both executor and verifier (re-fetched twice,
+  separated by the executor's full run time).
+- **Build:** `uv sync` with the path override resolved and built `aitp-sdk 0.11.0` from
+  `../aitp-rs/bindings/aitp-py` via `uv`'s build isolation (pulled `maturin` itself, no
+  standalone CLI needed; a local Rust toolchain was present). Full suite against that
+  wheel: **540 passed, 21 skipped** — identical to the PyPI-wheel baseline.
+- **Three named checks, all held as predicted:**
+  - **D7 delegation `typ` gate:** green. All three load-bearing assertions reconfirmed —
+    `tests/unit/test_delegation_revocation.py:204`, `:146`,
+    `tests/unit/test_sdk_delegation.py:93`. Hand-constructed a TCT-as-delegation call and
+    got the predicted `RuntimeError: delegation verification failed: JWS typ header
+    mismatch: expected aitp-delegation+jwt, got aitp-tct+jwt`.
+  - **Duplicate-key rejection:** green, matches the plan's own Context (it reaches Python
+    on the compact-JWS claim paths — `aitp-tct`/`aitp-delegation` verifiers — same as
+    always; no fixture in `tests/` constructs one). An earlier draft of this note
+    conflated this with an unrelated Python-only test helper
+    (`tests/unit/_jcs_reference.py`'s own vendored duplicate-key check, used only by
+    `test_revocation_signing_convention.py`) — corrected before recording; the *result*
+    (green, untouched) was never in question, only the mechanism.
+  - **`extensions` → `Option`:** byte-identical mint shape confirmed both empirically (a
+    manually-built manifest omits the key entirely, not null/empty) and at source
+    (`crates/aitp-manifest/src/builder.rs:232` maps empty extensions to `None` on both
+    sides of the pre/post-`9f887dd` type change).
+- **New residual risk found, not anticipated by the plan's Context section — folded into
+  the plan directly (Context + Phase 5 edge cases) rather than left only here:**
+  `UNKNOWN_FIELD` *is* reachable on the same compact-JWS paths duplicate-key rejection
+  uses — `verify_tct`/`verify_voucher`/the delegation verifier all call `check_members`
+  against `TCT_CLAIMS_MEMBERS`, a **closed** set. A TCT/voucher/delegation minted by a
+  different implementation (e.g. `aitp-control-plane`, already on the Node 0.11.0
+  binding) carrying any claim outside that set now fails `UNKNOWN_FIELD` where 0.11.0
+  accepted it — a real cross-implementation interop hazard, not a non-issue like
+  duplicate-key rejection. This repo's own suite structurally cannot catch it (every
+  token minted and verified by the same wheel — the identical D-1 blind spot). Not a
+  blocker for this plan (nothing here mints an out-of-set claim today); tracked as a
+  Phase-5-time check in `PENDING.md` P16.
+- **`docker compose e2e` (`path` build mode): not locally verifiable, explicitly unmet
+  acceptance criterion, no PR fallback possible for this specific leg** (the override is
+  by design never committed, so no CI run can ever exercise it — verified no workflow
+  anywhere sets `AITP_SDK_SOURCE=path`). Same Colima `$HOME`-mount limitation as Phase 1,
+  confirmed at the mechanism level: the VM's only mount is `/Users/ajitk`, and inside it
+  `/Users/ajitkoti/code/agentIdenitytrustprotocol/` is a root-owned empty stub.
+- **Cleanup verified clean by both executor and verifier, independently, after the run:**
+  `git status`/`git diff` empty (only untracked `.drive.lock`), `pyproject.toml`
+  byte-identical to `git show HEAD:pyproject.toml`, `uv.lock` undiffed, installed
+  `aitp-sdk` confirmed back on the genuine PyPI wheel (discriminating check: no
+  `direct_url.json` in dist-info, and the installed `.so`'s hash matches the `uv` cache
+  archive — a bare "reports 0.11.0" would have been equally true of the reverted
+  path-override build, since `aitp-py` at `9f887dd` also declares version 0.11.0).
+- **Shipping:** this phase produces no code diff. The findings above (plus Phase 4's
+  `PENDING.md` entries) ship together as one doc-only PR — see Phase 4 below.
+- **Next:** Phase 4 — `PENDING.md` entries for the already-filed upstream issue and the
+  new P16 residual-risk watch item.
+
+### Phase 4 — Report the SDK gap upstream (issue already filed; PENDING.md link) — 2026-08-31 — DONE
+- No verifier round — this phase is a doc-only entry, already covered by the same Opus
+  round that verified Phase 3's findings (which produced the P16 content).
+- **`PENDING.md` P15:** links `agentidentitytrustprotocol/aitp-rs#152` (already open,
+  filed pre-planning, matching this phase's spec: both bindings named, exact call sites,
+  security half separated) — no re-file needed.
+- **`PENDING.md` P16 (new, not originally in the plan):** tracks Phase 3's residual
+  finding — `UNKNOWN_FIELD` reachable via `TCT_CLAIMS_MEMBERS` on TCT/voucher/delegation
+  compact-JWS paths, a cross-implementation interop hazard for Phase 5 specifically.
+  Distinct from P15 (which is about the JSON-envelope paths bypassing the new hardened
+  parsers entirely) — kept as two entries rather than folded into one, since P16 blocks
+  a specific future phase and P15 is a general upstream-SDK-gap report.
+- **Shipping:** together with Phase 3's `PROGRESS.md` findings note, as one doc-only PR
+  (`PENDING.md` + `PROGRESS.md` + the two plan-file corrections from Phase 3's verify
+  round) — see below.
+- **Next:** Phase 5 — BLOCKED, do not start (no `aitp-rs` release beyond 0.11.0 exists).
+  Plan complete through Phase 4; proceeding to `/reconcile` check and closing `/ship`
+  pass for Phases 3-4's doc-only diff.
