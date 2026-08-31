@@ -37,10 +37,11 @@ details (features, wheels) are the SDK's own docs:
 [aitp-py README](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/README.md)
 and [sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build).
 
-See the comments in `pyproject.toml` for the authoritative story (and
-note the floor pin: `aitp-sdk>=0.7.0` — pre-0.3 wheels speak the
-wire-incompatible `aitp/0.1` protocol; 0.5.0 and 0.7.0 are later breaking
-bumps for the same reason, recorded there).
+See the comments in `pyproject.toml` for the authoritative story — the floor pin there
+records every wire-breaking `aitp-sdk` bump with a dated rationale bullet (currently five,
+from the pre-0.3 `aitp/0.1` incompatibility through the 0.11.0 pinned-key proof encoding
+fix). Read `pyproject.toml` directly rather than trusting a version number restated here;
+it drifts.
 
 ## Install the service
 
