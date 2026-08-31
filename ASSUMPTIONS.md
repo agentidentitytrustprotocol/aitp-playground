@@ -112,3 +112,25 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   deny-set enforcement (`aitp_server.py`'s `/aitp/delegation/redeem`) is never reached by this
   scenario — the caveat's text is accurate as written and needs no change. See
   `plans/audit-2026-08-28-cleanup.md` Phase 12.
+
+## Phase 4 — PENDING.md gets two entries (P15, P16), not one
+- **Plan:** `plans/aitp-rs-breaking-changes-adoption.md` (Phase 4)
+- **Assumed:** The plan specified one `PENDING.md` entry linking the already-filed
+  `aitp-rs`#152. Phase 3's pre-flight (same run) surfaced a second, distinct finding —
+  `UNKNOWN_FIELD` reachable via `TCT_CLAIMS_MEMBERS` on TCT/voucher/delegation
+  compact-JWS paths, a cross-implementation interop hazard that blocks Phase 5
+  specifically, not a general upstream-SDK-gap report like #152.
+- **Chose:** Two entries — P15 for exactly what the plan specified, P16 for the new
+  Phase 3 finding — rather than folding P16's content into P15 or a Phase 3 entry.
+  Reasoning: P15's `**Blocks:**` field is honestly "nothing in this repo today"; P16's is
+  honestly "Phase 5 of this plan." Merging them would make one of those two blocks fields
+  wrong, and PENDING.md's own convention (one problem, one entry) argues for the split.
+- **Alternatives:** Fold P16 into Phase 3's PROGRESS.md note only, not PENDING.md.
+  Rejected — PROGRESS.md is a phase-log, not a tracked-item registry; a residual risk
+  that specifically blocks a *future* phase belongs in PENDING.md's forward-looking
+  P-number sequence, matching how P8 tracked "Phase 6 is blocked on an aitp-sdk release."
+- **Blast radius if wrong:** Cosmetic — worst case, two PENDING.md entries where one
+  would have done, or the P16 content is over-scoped as a blocker rather than a
+  watch-item. Phase 5 is already BLOCKED for an unrelated reason (no successor release
+  exists), so this doesn't change any near-term behavior.
+- **Status:** UNCONFIRMED
