@@ -425,3 +425,37 @@ from one lookup style to another. Recorded as the tidier long-term shape if the 
 needs other configuration — revisit then, not now.
 
 See `plans/audit-2026-08-28-cleanup.md` Phase 10.
+
+## D-20 — The floor moved for a wire reason, not for currency
+**2026-08-31 · recorded**
+
+`aitp-sdk` 0.11.0 changed the wire encoding of the pinned-key identity proof: the envelope
+`timestamp` inside `proof_input` moved from an 8-byte big-endian signed integer to its base-10
+ASCII-decimal string (RFC-AITP-0002 §3.1 erratum, spec issue #17). A proof minted by <=0.10.x
+does not verify under >=0.11.0 and vice versa, and `aitp-rs` implements no dual-accept. This
+repo's default `identity_type` is `"pinned_key"` (`bootstrap.py:34`,
+`registry/models.py:242`), so the handshake path is affected by default, not as an edge case —
+and `aitp-verifier-py` has always used the ASCII-decimal form, so pre-0.11.0 wheels never
+actually interoperated with it. A mixed-version pair fails as `handshake.failed` with a
+signature error, which reads like a bad key rather than a version mismatch.
+
+**Chosen: bump the floor to `aitp-sdk>=0.11.0` and add a rationale bullet, at the same rigor as
+the existing 0.3.0/0.5.0 wire-break bullets** (`pyproject.toml:17-52`). The already-open,
+already-green dependency-bot PR (#62, `chore(deps): bump aitp to 0.11.0`) merged, but turned
+out to be a no-op for the actual version resolution: its `uv lock --upgrade-package` run fired
+22 seconds after 0.11.0 was uploaded to PyPI (2026-08-30T14:53:06Z upload vs. 14:53:28Z bot
+run) and raced index propagation, so it re-resolved to 0.10.0 — its merged diff touches only
+resolution-marker reordering (3 insertions/3 deletions in unrelated marker/numpy lines) and
+contains no `aitp-sdk` version change at all. The real `uv.lock` bump to 0.11.0 comes from
+this phase's own `uv lock` run, after raising the `pyproject.toml` specifier below; this
+decision is the hand-written half D-18 says the bot cannot do regardless — the specifier and
+the prose explaining why it moved. PR #58 (an earlier, stale `chore(deps): bump aitp to
+0.10.0`) was closed as superseded, since the 0.10.0 lock value it wanted actually landed via
+#60 — well before #62 merged as the no-op described above.
+
+**Rejected: bump the floor silently, without a new bullet.** This is the exact defect D-18's
+test guards against and the exact class of defect the 0.3.0/0.5.0 bullets already exist to
+prevent — a silent, self-consistent wire divergence that reads as a network fault instead of a
+resolver error. `tests/unit/test_sdk_floor_comment_matches_specifier.py` would also fail.
+
+See `plans/aitp-rs-breaking-changes-adoption.md` Phase 1.
