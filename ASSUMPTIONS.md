@@ -133,4 +133,20 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   would have done, or the P16 content is over-scoped as a blocker rather than a
   watch-item. Phase 5 is already BLOCKED for an unrelated reason (no successor release
   exists), so this doesn't change any near-term behavior.
-- **Status:** UNCONFIRMED
+- **Status:** **CONFIRMED (2026-08-31)** — the split stands, on independently-verified
+  grounds different from the ones this entry originally gave. `/reconcile`'s Opus review
+  found the real justification: P15 and P16 are opposite-signed findings on the same
+  upstream commit (P15 is a *missing* check on JSON-envelope paths; P16 is an
+  *over-strict* check on compact-JWS paths), with different close conditions (P15 closes
+  when `aitp-rs`#152 lands upstream; P16 closes when someone here verifies a real
+  `aitp-control-plane`-minted token) and different owners. That's a materially stronger
+  argument than "PENDING.md's own convention (one problem, one entry)" — which the
+  same review found does **not** actually exist as a repo convention (`P10` bundles three
+  distinct refinements under one number; `P13` explicitly covers two independently-closed
+  sub-items). The real convention is closer to "one origin/trigger, one entry, sub-numbered
+  if needed" — recorded correctly this time so a future reconciliation doesn't cite a
+  convention that isn't real. One correction was made as part of confirming this: P16's
+  `**Blocks:** Phase 5` field was inaccurate (Phase 5 is independently blocked on no
+  successor release existing; P16 is a pre-merge check *inside* that phase, not why it
+  hasn't shipped) and is now `**Blocks:** nothing today` / `**Gates:** Phase 5's eventual
+  adoption`. See `DECISIONS.md` D-21.
