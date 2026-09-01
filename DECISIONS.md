@@ -459,3 +459,50 @@ prevent — a silent, self-consistent wire divergence that reads as a network fa
 resolver error. `tests/unit/test_sdk_floor_comment_matches_specifier.py` would also fail.
 
 See `plans/aitp-rs-breaking-changes-adoption.md` Phase 1.
+
+## D-21 — Two upstream-SDK-gap PENDING.md entries, not one, and why
+**2026-08-31 · recorded, via `/reconcile`**
+
+Phase 4 of `plans/aitp-rs-breaking-changes-adoption.md` specified one `PENDING.md` entry
+linking the already-filed `agentidentitytrustprotocol/aitp-rs`#152. Phase 3's pre-flight
+against `aitp-rs`'s unreleased `9f887dd`, run in the same session, surfaced a second,
+distinct finding: `UNKNOWN_FIELD` is reachable via `TCT_CLAIMS_MEMBERS` (a closed member
+set) on the TCT/voucher/delegation compact-JWS verify paths — a cross-implementation
+interop hazard, not the JSON-envelope-path gap #152 describes. `/implement` logged the
+resulting P15/P16 split to `ASSUMPTIONS.md` as `UNCONFIRMED`, citing "PENDING.md's own
+convention (one problem, one entry)."
+
+**`/reconcile`'s independent review found that cited convention does not actually exist**
+in this file: `P10` bundles three distinct manifest re-mint refinements under one
+P-number, and `P13` is explicitly titled around two independently-closed sub-items. The
+real convention, read honestly, is closer to "one origin/trigger, one entry, sub-numbered
+if needed" — which would have permitted a merged entry.
+
+**Chosen: confirm the two-entry split anyway, on different grounds than originally
+recorded.** P15 and P16 are opposite-signed findings on the same upstream commit — P15 is
+a *missing* check (JSON-envelope paths never reach the new hardened parsers at all), P16
+is an *over-strict* one already in force (compact-JWS paths already enforce a closed
+member set that could reject a legitimately-evolving cross-implementation claim). They
+have different close conditions (P15 closes when `aitp-rs`#152 lands upstream and this
+repo adopts the release that carries it; P16 closes when someone here verifies a real
+`aitp-control-plane`-minted TCT/voucher/delegation artifact against the successor
+release) and different owners (P15's fix is entirely upstream; P16's check is entirely
+this repo's to run). One entry with two unrelated close conditions serves a future reader
+worse than two entries with one each.
+
+**Corrected as part of confirming this:** P16's `**Blocks:** Phase 5` field was
+inaccurate and is now `**Blocks:** nothing today` / `**Gates:** Phase 5's eventual
+adoption`. Phase 5 is independently `BLOCKED` because no successor `aitp-rs` release
+exists on PyPI yet — P16 is a pre-merge check *inside* that phase once it eventually
+runs, not the reason it hasn't shipped. Every other `Blocks:` field in `PENDING.md` reads
+`nothing`; P16 was the only outlier, which made it maximally likely to be misread by
+someone scanning the file for "why is Phase 5 stuck?"
+
+**Rejected: merge P15 and P16 into one entry.** Considered specifically because both
+trace back to the same upstream commit, but rejected — burying P16's
+`TCT_CLAIMS_MEMBERS` content under P15's JSON-envelope-parser framing would make it
+*harder* to find at Phase-5 time, not easier, and the two findings' close conditions
+don't share an owner or a resolution path.
+
+See `plans/aitp-rs-breaking-changes-adoption.md` Phase 4, `ASSUMPTIONS.md`'s Phase 4
+entry (status `CONFIRMED`), `PENDING.md` P15/P16.

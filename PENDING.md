@@ -507,9 +507,11 @@ defect for revocation-list verification elsewhere.
 
 ## P16 — `UNKNOWN_FIELD` is reachable on compact-JWS paths and is a cross-implementation interop hazard, not a non-issue
 **From:** Phase 3 of `plans/aitp-rs-breaking-changes-adoption.md` (pre-flight against
-`aitp-rs` `9f887dd`) · **Blocks:** Phase 5 of the same plan (adopting the successor
-release once `9f887dd` ships) · **Cost:** a required check before that adoption, not a
-current bug — nothing this repo mints today carries an out-of-set claim.
+`aitp-rs` `9f887dd`) · **Blocks:** nothing today — Phase 5 is independently BLOCKED on no
+successor `aitp-rs` release existing on PyPI yet · **Gates:** Phase 5's eventual adoption
+(a required pre-merge check *inside* that phase, not the reason it hasn't shipped) ·
+**Cost:** a required check before that adoption, not a current bug — nothing this repo
+mints today carries an out-of-set claim.
 
 Distinct from P15: P15 is about the JSON-envelope paths (manifest/revocation/session
 bundle), which bypass the new hardened parsers entirely. This entry is about a
