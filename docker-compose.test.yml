@@ -92,7 +92,7 @@ services:
     # /api/readyz from your laptop while tests run.)
     healthcheck:
       # /api/readyz returns 200 only once the DB is reachable AND drizzle has
-      # been applied. node:20-slim has no curl/wget, but node 20 has fetch().
+      # been applied. node:24-slim has no curl/wget, but node 24 has fetch().
       test:
         - CMD
         - node
