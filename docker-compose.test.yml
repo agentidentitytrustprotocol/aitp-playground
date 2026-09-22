@@ -8,7 +8,7 @@
 # Exit code of the `tests` container is the suite result.
 #
 # Topology:
-#   cp-postgres  → Postgres 16 (ephemeral data, no volume; aitp-cp/drizzle/
+#   cp-postgres  → Postgres 18 (ephemeral data, no volume; aitp-cp/drizzle/
 #                  mounted at /docker-entrypoint-initdb.d so the schema is
 #                  applied automatically on first boot)
 #   aitp-cp      → Next.js control plane (built from sibling ../aitp-cp)
@@ -21,7 +21,7 @@
 
 services:
   cp-postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -29,7 +29,7 @@ services:
     expose:
       - "5432"
     volumes:
-      # postgres:16-alpine's entrypoint runs every *.sql / *.sh in
+      # postgres:18-alpine's entrypoint runs every *.sql / *.sh in
       # /docker-entrypoint-initdb.d/ in lexicographic order on the first
       # boot (when PGDATA is empty). Mount the drizzle migrations there so
       # the schema is in place by the time the healthcheck flips green.
@@ -92,7 +92,7 @@ services:
     # /api/readyz from your laptop while tests run.)
     healthcheck:
       # /api/readyz returns 200 only once the DB is reachable AND drizzle has
-      # been applied. node:20-slim has no curl/wget, but node 20 has fetch().
+      # been applied. node:24-slim has no curl/wget, but node 24 has fetch().
       test:
         - CMD
         - node

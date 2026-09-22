@@ -42,7 +42,7 @@ ARG AITP_SDK_SOURCE=pypi
 # ============================================================================
 # Stage 1a — fetch the pinned wheel from PyPI (the default).
 # ============================================================================
-FROM python:3.12-slim AS sdk-builder-pypi
+FROM python:3.13-slim AS sdk-builder-pypi
 
 # Only the lockfile — the pinned version is the entire input to this stage.
 COPY aitp-playground/uv.lock /tmp/uv.lock
@@ -67,7 +67,7 @@ print(pkgs[0]['version'])")"; \
 # ============================================================================
 # Stage 1b — build the aitp wheel from sibling source (opt-in).
 # ============================================================================
-FROM python:3.12-slim AS sdk-builder-path
+FROM python:3.13-slim AS sdk-builder-path
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -96,7 +96,7 @@ WORKDIR /build/aitp-rs/bindings/aitp-py
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/aitp-rs/bindings/aitp-py/target \
-    maturin build --release --out /wheels --interpreter python3.12 && \
+    maturin build --release --out /wheels --interpreter python3.13 && \
     ls -la /wheels
 
 # ============================================================================
@@ -107,7 +107,7 @@ FROM sdk-builder-${AITP_SDK_SOURCE} AS sdk-builder
 # ============================================================================
 # Stage 2 — runtime image.
 # ============================================================================
-FROM python:3.12-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
