@@ -15,7 +15,7 @@ dependencies = [
   # (`maturin ... --features experimental`); the service detects what's
   # available at runtime via GET /capabilities.
   # The floor records wire compatibility, not "the newest we happened to test".
-  # Five breaking changes are behind it:
+  # Five breaking changes and one routine adoption are behind it:
   #   0.3.0 — the compact-JWS SDK (protocol `aitp/0.2`). The pre-0.3 wheels
   #     (JCS, protocol `aitp/0.1`) are wire-incompatible.
   #   0.5.0 — the JCS signing input moved from the transport wrapper to the
@@ -47,11 +47,22 @@ dependencies = [
   #     ASCII-decimal form. A mixed-version pair fails as handshake.failed with
   #     a signature error, which reads like a bad key. The floor is what turns
   #     that into a resolver error.
+  #   0.12.0 — NOT wire-breaking, adopted here as routine floor tracking, not
+  #     because an older wheel misbehaves. Adds three ErrorCode variants
+  #     (MANIFEST_INVALID, REVOCATION_SNAPSHOT_INVALID,
+  #     REVOCATION_SNAPSHOT_SIGNATURE_INVALID) consumed only by
+  #     aitp-transport-http/aitp-rs-adapter, and IdentityDescriptor.extensions
+  #     on the wire — neither reaches this repo: `.code` handling here
+  #     (agent_admin.py, engine.py, revocation_refresh.py) reads the
+  #     Python binding's own separate, generic `getattr(exc, "code", None)`
+  #     taxonomy, not aitp-core's ErrorCode; and IdentityDescriptor is read as
+  #     a plain untyped dict (engine.py), never a typed pyclass, so an
+  #     unrecognized wire field just passes through invisibly.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.11.0",
+  "aitp-sdk>=0.12.0",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",
