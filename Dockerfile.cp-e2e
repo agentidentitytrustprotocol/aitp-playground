@@ -25,7 +25,7 @@
 # ============================================================================
 # Stage 1 — build the aitp napi binding from Rust source.
 # ============================================================================
-FROM node:20-slim AS napi-builder
+FROM node:24-slim AS napi-builder
 
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -66,7 +66,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # but with the freshly-built .node file dropped in alongside index.js so the
 # autoloader resolves it instead of trying to require('aitp-linux-arm64-gnu').
 # ============================================================================
-FROM node:20-slim AS deps
+FROM node:24-slim AS deps
 WORKDIR /workspace/aitp-cp
 COPY aitp-cp/package.json aitp-cp/package-lock.json* ./
 # Bring the aitp-rs binding source over, but skip the 800MB Rust target/
@@ -82,7 +82,7 @@ RUN npm ci --omit=dev=false
 # ============================================================================
 # Stage 3 — next build.
 # ============================================================================
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 WORKDIR /workspace/aitp-cp
 COPY --from=deps /workspace/aitp-rs/bindings/aitp-node /workspace/aitp-rs/bindings/aitp-node
 COPY --from=deps /workspace/aitp-cp/node_modules ./node_modules
@@ -105,7 +105,7 @@ RUN npm run build
 # image than the standalone form, but only matters for image size, not
 # functionality.
 # ============================================================================
-FROM node:20-slim AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=4000
