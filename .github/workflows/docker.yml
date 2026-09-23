@@ -120,6 +120,7 @@ jobs:
       pull-requests: read
     outputs:
       sdk_pin: ${{ steps.filter.outputs.sdk_pin }}
+      docker_stack: ${{ steps.filter.outputs.docker_stack }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
@@ -145,6 +146,18 @@ jobs:
               # dependency and tooling bumps — the cost regression criterion 2
               # exists to prevent.
               - 'uv.lock'
+            docker_stack:
+              # The images/compose topology the e2e job actually builds and
+              # runs. A base-image or stage bump here changes what the stack
+              # is made of just as much as an SDK pin bump changes what it
+              # runs — but without this filter it merges unvalidated: these
+              # paths don't touch uv.lock, so `sdk_pin` stays false and the
+              # stack is only ever built post-merge (on push to main), the
+              # exact "detects rather than prevents" gap the sdk_pin filter
+              # was added to close for the SDK pin itself.
+              - 'Dockerfile'
+              - 'Dockerfile.cp-e2e'
+              - 'docker-compose.test.yml'
 
   e2e:
     # WARNING: this exact string is one of main's required status check
@@ -158,7 +171,8 @@ jobs:
     # Two triggers, for two different questions:
     #
     #   * every push to main — the standing regression check.
-    #   * any PR that moves the SDK pin — the cross-implementation check,
+    #   * any PR that moves the SDK pin, or changes the Dockerfiles/compose
+    #     file the stack is built from — the cross-implementation check,
     #     BEFORE it merges.
     #
     # The second one is the point. `auto-merge.yml` runs on `pull_request` and
@@ -167,12 +181,15 @@ jobs:
     # pre-merge e2e *prevents* it — and with auto-merge armed, detection lands
     # after the change is already on main. The only reason the issuer half of
     # the 0.5.0 flip did not roll unnoticed is that the control plane happened
-    # to have a red integration test.
+    # to have a red integration test. The same logic applies to a base-image
+    # or stage bump in Dockerfile/Dockerfile.cp-e2e/docker-compose.test.yml:
+    # nothing else pre-merge builds that combination, so `docker_stack` gates
+    # this job on those paths too.
     #
     # Deliberately NOT widened to all PRs: the stack is ~6 minutes and pulls
-    # two sibling repos. Scope it to the pin, and note that a paths-filter
-    # also catches a hand-edited pin, which a branch-name match on the bump
-    # bot's convention would not.
+    # two sibling repos. Scope it to the pin (and the stack definition), and
+    # note that a paths-filter also catches a hand-edited pin, which a
+    # branch-name match on the bump bot's convention would not.
     #
     # If this job goes red because the control-plane half of a coordinated
     # flip has not shipped yet, that is the design working — sequence the
@@ -186,7 +203,10 @@ jobs:
     if: >-
       always() && (
         (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-        (github.event_name == 'pull_request' && needs.changes.outputs.sdk_pin == 'true')
+        (github.event_name == 'pull_request' && (
+          needs.changes.outputs.sdk_pin == 'true' ||
+          needs.changes.outputs.docker_stack == 'true'
+        ))
       )
     runs-on: ubuntu-latest
     permissions:

@@ -123,3 +123,56 @@ def test_db_parent_directory_is_created(tmp_path: Path) -> None:
     store = SqliteRunStore(str(db))
     assert db.exists()
     store.close()
+
+
+def test_hydrate_skips_a_row_with_unreadable_json_and_keeps_the_rest(tmp_path: Path) -> None:
+    """A corrupted `record` blob (partial write, disk issue) must not take
+    down hydration for every other run — it's logged and skipped."""
+    db = tmp_path / "runs.sqlite"
+    store = SqliteRunStore(str(db))
+    store.upsert("good", {"run_id": "good", "status": "running", "events": []})
+    store.close()
+
+    raw = sqlite3.connect(str(db))
+    raw.execute(
+        "INSERT INTO runs(run_id, status, scenario_ref, created_at, record) "
+        "VALUES (?,?,?,?,?)",
+        ("bad", "running", None, 0.0, "{not valid json"),
+    )
+    raw.commit()
+    raw.close()
+
+    reopened = SqliteRunStore(str(db))
+    assert reopened.list_ids() == ["good"]
+    assert reopened.get("bad") is None
+    reopened.close()
+
+
+def test_persist_record_is_a_noop_for_a_run_id_never_upserted(tmp_path: Path) -> None:
+    """Defensive branch: `_persist_record` is only ever called (by `upsert`/
+    `append_event`) after the in-memory record already exists, but it must
+    still no-op safely rather than write a garbage row if that ever changes."""
+    db = tmp_path / "runs.sqlite"
+    store = SqliteRunStore(str(db))
+    store._persist_record("never-upserted")
+
+    raw = sqlite3.connect(str(db))
+    rows = raw.execute("SELECT * FROM runs").fetchall()
+    raw.close()
+    assert rows == []
+    store.close()
+
+
+def test_a_set_value_in_a_record_round_trips_via_json_default(tmp_path: Path) -> None:
+    """Exercises `_json_default`'s set/frozenset branch through the real
+    persistence path, not just as a pure function."""
+    db = tmp_path / "runs.sqlite"
+    store = SqliteRunStore(str(db))
+    store.upsert("r1", {
+        "run_id": "r1", "status": "running", "events": [], "tags": {"b", "a"},
+    })
+    store.close()
+
+    reopened = SqliteRunStore(str(db))
+    assert reopened.get("r1")["tags"] == ["a", "b"]
+    reopened.close()

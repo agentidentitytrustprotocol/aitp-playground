@@ -99,7 +99,7 @@ docker build -f aitp-playground/Dockerfile -t aitp-playground .
 ### Stage 1 — `sdk-builder` (shown: the `path` variant)
 
 ```dockerfile
-FROM python:3.12-slim AS sdk-builder
+FROM python:3.13-slim AS sdk-builder
 RUN apt-get install curl build-essential pkg-config
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 RUN pip install maturin
@@ -108,7 +108,7 @@ WORKDIR /build/aitp-rs/bindings/aitp-py
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/aitp-rs/bindings/aitp-py/target \
-    maturin build --release --out /wheels --interpreter python3.12
+    maturin build --release --out /wheels --interpreter python3.13
 ```
 
 Notes:
@@ -123,7 +123,7 @@ Notes:
 ### Stage 2 — `runtime`
 
 ```dockerfile
-FROM python:3.12-slim AS runtime
+FROM python:3.13-slim AS runtime
 WORKDIR /app
 RUN apt-get install curl ca-certificates build-essential
 ARG INSTALL_EXTRAS=""
