@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import aitp
+import uvicorn
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from bootstrap import get_manifest_json
@@ -33,12 +34,39 @@ logger = logging.getLogger(__name__)
 _MANIFEST_REMINT_COOLDOWN_SECS = 30
 
 
+def run_agent(app: Any, *, host: str, port: int, log_level: str = "warning") -> None:
+    """Run ``app`` under uvicorn with the socket already listening at startup.
+
+    uvicorn's ``Server.startup()`` awaits the ASGI lifespan — where
+    ``ready_lifespan`` below prints ``AITP_AGENT_READY`` — *before* it binds
+    and listens on the socket (``loop.create_server(...)`` runs after
+    ``lifespan.startup()``, not before). A supervisor that treats that stdout
+    line as "the port is open" can connect in that window and get
+    ECONNREFUSED, since nothing has bound the port yet. Surfaced by
+    ``intra-org/external-enrollment``, whose one step is the very first call
+    to the agent after "ready" — nothing else happens first to absorb the
+    race.
+
+    Binding and listening ourselves before handing the socket to uvicorn
+    closes the window: once ``listen()`` returns, the kernel queues an
+    incoming connection whether or not uvicorn's asyncio accept loop has
+    started consuming it yet. uvicorn calls ``sock.listen()`` again inside
+    ``create_server()``; re-listening an already-listening socket is a no-op.
+    """
+    config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
+    server = uvicorn.Server(config)
+    sock = config.bind_socket()
+    sock.listen(config.backlog)
+    server.run(sockets=[sock])
+
+
 def ready_lifespan(*, aid: str, port: int, server: "Optional[AitpServer]" = None):
     """FastAPI lifespan: signal readiness, and run the revocation poll.
 
-    Emits ``AITP_AGENT_READY`` once uvicorn has bound the listening socket —
-    the supervisor uses that line as the spawn-ready signal, and emitting it
-    pre-bind would race against the first HTTP request.
+    Emits ``AITP_AGENT_READY`` once the app's lifespan startup completes.
+    The supervisor uses that line as the spawn-ready signal — which is only
+    accurate if the process was started via ``run_agent`` above, so the
+    socket is already listening by the time this prints.
 
     When a `server` is passed and it has a control plane configured, this also
     owns the background revocation refresh. RFC-AITP-0008 §1.4 says a consuming
