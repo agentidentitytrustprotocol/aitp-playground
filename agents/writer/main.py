@@ -4,12 +4,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import uvicorn
 from fastapi import FastAPI, Request
 
 from agent_admin import build_admin_router
 from revocation_state import RevocationState
-from aitp_server import AitpServer, ready_lifespan
+from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
 from telemetry import emit_event
 
@@ -101,4 +100,4 @@ async def write_content(request: Request) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+    run_agent(app, host="0.0.0.0", port=PORT, log_level="warning")
