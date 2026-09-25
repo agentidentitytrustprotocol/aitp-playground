@@ -10,7 +10,7 @@ Local dev loop, common commands, and a first scenario run.
 That's it — the AITP SDK installs from PyPI (see below), so no Rust
 toolchain is needed for normal development.
 
-> Prefer Docker? Skip to [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md) — `docker compose -f
+> Prefer Docker? Skip to [docker.md](docker.md) — `docker compose -f
 > docker-compose.test.yml up --build --abort-on-container-exit` runs the
 > service plus the e2e suite end-to-end with no host toolchain.
 
@@ -102,7 +102,14 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `RUN_HISTORY_DB` | _(empty)_ | When set, persist runs + events to this SQLite file so they survive a restart. Empty = in-memory only. |
 | `LOG_LEVEL` | `INFO` | Standard logging level |
 
-See [llm-providers.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/llm-providers.md) for provider details.
+Provider selection is process-wide, not per-scenario: `LLM_PROVIDER` picks
+`openai` or `anthropic`, and if the matching API key is missing the agent
+falls back to its deterministic stub rather than erroring. There is
+deliberately **no cross-provider failover** — silently swapping providers
+behind your back would make debugging harder, and the point of the demo is
+to show the real path running. Look for `llm.started` / `llm.complete` in
+the run's event log to confirm a real provider call happened rather than a
+stub.
 
 ## Run the service
 
@@ -253,7 +260,28 @@ How CI maps onto these (`.github/workflows/`):
 - **`notify-website.yml`** — pings the docs site to re-sync when
   `docs/**` or `README.md` change on `main`.
 
-See [testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md) for the full test layout.
+The suite is laid out in three directories:
+
+```
+tests/
+├── conftest.py       # sets PYTHONPATH and SCENARIOS_DIR
+├── unit/              # fast, in-process, no subprocesses (default target)
+├── integration/       # test_runner.py, test_protocol_e2e.py, test_llm_e2e.py,
+│                       #   test_federated_handshake.py — each gated by its own env var
+└── scenarios/         # offline registry consistency checks (no spawn, no LLM)
+```
+
+| Suite | Trigger | Needs OpenAI key? | Needs spawn? | Wall time |
+| --- | --- | --- | --- | --- |
+| `tests/unit/` | default | no | no | seconds |
+| `tests/scenarios/` | default | no | no | seconds |
+| `tests/integration/test_runner.py` | `AITP_E2E=1` | no (stubs) | yes | ~30-45s |
+| `tests/integration/test_protocol_e2e.py` | `AITP_PROTOCOL_E2E=1` | no (stubs) | yes (Docker recommended) | minutes |
+| `tests/integration/test_llm_e2e.py` | `AITP_LLM_E2E=1` | yes | yes (Docker recommended) | minutes |
+
+Protocol e2e and LLM e2e are designed to run inside the
+`docker-compose.test.yml` stack, where the gates and service URLs are
+pre-wired — see [docker.md](docker.md) for the one-command recipe.
 
 ## Troubleshooting
 

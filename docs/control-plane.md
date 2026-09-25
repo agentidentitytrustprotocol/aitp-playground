@@ -37,7 +37,7 @@ CP_TIMEOUT_MS=5000                    # per-request timeout (default 5000)
 `CpClient.enabled` is simply `bool(settings.cp_base_url)`. The Dockerized
 e2e suite (`docker-compose.test.yml`) brings up a Postgres + CP + playground
 stack and points `CP_BASE_URL` at the in-network CP container — see
-[docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md).
+[docker.md](docker.md).
 
 ## Two clients, one CP
 

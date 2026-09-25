@@ -336,6 +336,11 @@ abstract base in `hosting/adapters/base.py`.
 
 ## Telemetry
 
+> The reader-facing meanings of these events are published at
+> [`../docs/observability.md` § Event types](../docs/observability.md#event-types).
+> Keep both in sync; the suppression/rate-limit policy and decision
+> references below stay internal-only.
+
 `agents/base/telemetry.emit_event(type, bootstrap, **fields)` POSTs to
 `bootstrap["playground"]["telemetry_url"]`. The playground appends it
 to the run's event log. Failures are swallowed — telemetry is
