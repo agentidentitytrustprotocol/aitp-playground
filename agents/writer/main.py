@@ -10,6 +10,7 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
+from llm import call_llm_or_502
 from telemetry import emit_event
 
 from .chain import run_writer  # type: ignore[import-not-found]
@@ -65,7 +66,10 @@ async def do_write(payload: Any, commissioned_by: str = "self") -> dict[str, Any
     await emit_event(
         "llm.started", bootstrap, task="write", commissioned_by=commissioned_by,
     )
-    article = await run_writer(findings, style=style)
+    article = await call_llm_or_502(
+        run_writer(findings, style=style), emit_event=emit_event,
+        bootstrap=bootstrap, task="write",
+    )
     await emit_event("llm.complete", bootstrap, task="write")
     return {"article": article, "style": style, "agent": bootstrap["agent_id"]}
 

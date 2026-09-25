@@ -10,6 +10,7 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
+from llm import call_llm_or_502
 from telemetry import emit_event
 
 from .crew import build_crew  # type: ignore[import-not-found]
@@ -70,7 +71,13 @@ async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, 
     crew = build_crew({"topic": topic})
     # CrewAI ≥1.0 refuses sync kickoff() inside a running event loop. Use the
     # async variant when available; the offline stub only has the sync one.
-    result = await crew.kickoff_async() if hasattr(crew, "kickoff_async") else crew.kickoff()
+    if hasattr(crew, "kickoff_async"):
+        result = await call_llm_or_502(
+            crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
+            task="research", topic=topic,
+        )
+    else:
+        result = crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
     await emit_event("llm.complete", bootstrap, task="research", topic=topic)
     return {"findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}
@@ -83,7 +90,13 @@ async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[
         topic=topic, commissioned_by=commissioned_by,
     )
     crew = build_crew({"topic": topic, "depth": "deep"})
-    result = await crew.kickoff_async() if hasattr(crew, "kickoff_async") else crew.kickoff()
+    if hasattr(crew, "kickoff_async"):
+        result = await call_llm_or_502(
+            crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
+            task="research.deep", topic=topic,
+        )
+    else:
+        result = crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
     await emit_event("llm.complete", bootstrap, task="research.deep", topic=topic)
     return {"deep_findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}

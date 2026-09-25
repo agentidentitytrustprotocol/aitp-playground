@@ -10,6 +10,7 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
+from llm import call_llm_or_502
 from telemetry import emit_event
 
 from .graph import run_analyzer  # type: ignore[import-not-found]
@@ -69,7 +70,10 @@ async def do_analyze(payload: Any, commissioned_by: str = "self") -> dict[str, A
     await emit_event(
         "llm.started", bootstrap, task="analyze", commissioned_by=commissioned_by,
     )
-    result = await run_analyzer(input_text)
+    result = await call_llm_or_502(
+        run_analyzer(input_text), emit_event=emit_event,
+        bootstrap=bootstrap, task="analyze",
+    )
     await emit_event("llm.complete", bootstrap, task="analyze")
     return {**result, "agent": bootstrap["agent_id"]}
 

@@ -196,6 +196,8 @@ def narrate_event(event: Mapping[str, Any]) -> str:
         return f"[llm]   started   task={event.get('task','?')}"
     if etype == "llm.complete":
         return f"[llm]   complete  task={event.get('task','?')}"
+    if etype == "llm.failed":
+        return f"[llm]   failed    task={event.get('task','?')}  detail={_short(event.get('detail'), 80)}"
 
     # Unrecognized events are dropped from the narrative (the raw event
     # log is still available via GET /runs/{id}).
