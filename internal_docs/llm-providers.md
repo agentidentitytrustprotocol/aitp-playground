@@ -9,6 +9,12 @@ Source: `agents/base/llm.py`.
 
 ## How provider selection works
 
+> The user-facing summary of this section (env vars, stub fallback, no
+> cross-provider failover) is published at
+> [`../docs/getting-started.md` § Configure](../docs/getting-started.md#configure).
+> Keep both in sync; the builder-function internals below stay
+> internal-only.
+
 `select_provider()` reads two things:
 
 1. `LLM_PROVIDER` (default `openai`). Lowercased and trimmed.

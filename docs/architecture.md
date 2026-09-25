@@ -96,8 +96,7 @@ agent's keypair and republishes its manifest — key material lives here,
 not in the admin router) and `GET /admin/tct-cache-stats` (RFC-AITP-0005
 verification-cache counters). Every other `/admin/*` route — including
 `GET /admin/held-tct` and `POST /admin/refresh-revocations` — comes from
-`build_admin_router`. See [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md#routes-mounted-per-worker)
-for the full per-route breakdown.
+`build_admin_router`; the full route list is in the topology diagram above.
 
 ## Components
 
@@ -132,7 +131,7 @@ large scenarios. The registry is read-only at runtime; set
 - `engine.py` — `ScenarioRunner.run()` is the single entry point. It
   loads the scenario, validates inputs against the inline JSON Schema,
   spawns agents, resolves peers, optionally runs eager pairwise
-  handshakes, then walks `workflow.steps`. See [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md).
+  handshakes, then walks `workflow.steps`.
 - `context.py` — `RunContext` accumulates `RunEvent`s; every emit also
   fans out to `RunStore` so SSE subscribers see it live.
 - `store.py` — in-memory pub/sub with per-run event queues. The SSE
@@ -193,7 +192,9 @@ Per worker the layout is identical:
 5. The worker registers its `/capabilities/<name>` handlers and starts
    uvicorn. The lifespan emits `AITP_AGENT_READY` once the port is bound.
 
-See [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md) for how to add a new worker.
+Adding a new worker (or a new capability to an existing one) is a
+contributor task — the step-by-step recipe lives in the repo's contributor
+docs, alongside the code it walks through.
 
 ### Hosted agents (`src/aitp_playground/api/hosted.py`)
 A separate router from `/runs`, for a different scenario: a *cross-domain*
@@ -258,7 +259,6 @@ run's event log.
 
 - Want to run it? → [getting-started.md](getting-started.md)
 - Want to add a scenario? → [scenarios.md](scenarios.md)
-- Want to know how a step actually executes? → [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md)
 - Want to understand TCTs and handshake? → [aitp-integration.md](aitp-integration.md)
 - Want events / metrics / the dashboard? → [observability.md](observability.md)
 - Wiring the Control Plane? → [control-plane.md](control-plane.md)

@@ -425,8 +425,8 @@ review what it wrote.
 
 4. `dry-run` it, then `POST /runs` and check the event log.
 
-If you need a *new* capability, you'll also touch an agent worker —
-see [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md).
+If you need a *new* capability, you'll also touch an agent worker — that's
+a contributor task, with its own recipe in the repo's contributor docs.
 
 ## Scenarios in the box
 

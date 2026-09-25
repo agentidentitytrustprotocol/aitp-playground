@@ -27,13 +27,91 @@ to the same run log. So `handshake.started`, `llm.started`, etc. (emitted
 *inside* an agent subprocess) interleave with runner-emitted events in one
 ordered stream.
 
-For the full catalog of event types, see the runner's
-[event-types table](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md#event-types) and the agent-emitted events in
-[agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md). The taxonomy groups roughly as:
+## Event types
 
-`run.*`, `agent.*`, `oidc.*`, `trust.*` / `handshake.*`, `delegation.*`,
-`revocation.*` / `tct.*`, `identity.*`, `session.bundle.*`, `spki.*`,
-`step.*`, `cp.*`, `llm.*`.
+### Runner-emitted
+
+**Lifecycle & setup**
+
+| Type | Carries | When |
+| --- | --- | --- |
+| `run.started` | `scenario_ref` | After scenario load + input validation. |
+| `agent.spawning` | `agent_id`, `port` | Just before the agent subprocess is launched. |
+| `agent.ready` | `agent_id`, `aid`, `port` | After the agent signals ready. |
+| `oidc.issuer_minted` | issuer url, kid | When a scenario has any `identity_type: oidc` agent. |
+| `trust.peers_resolved` | `peers: {agent_id: manifest_url}` | After peer discovery resolves. |
+| `run.complete` | — | Workflow finished cleanly. |
+| `run.failed` | `error` | Exception inside spawn / step. |
+
+**Trust, delegation, revocation, identity**
+
+| Type | Carries | When |
+| --- | --- | --- |
+| `trust.establishing` | `initiator`, `target` | Before the handshake is initiated. |
+| `trust.established` | `initiator`, `target`, `grants`, `jti` | After successful handshake. |
+| `manifest.verify_failed` | `step_id`, `agent_id`, `cause`, `source_url` | A trust-anchor step: the agent's own manifest failed verification before its key could be pinned. |
+| `delegation.issuing` | `initiator`, `target`, `grants` | `delegate` step. |
+| `delegation.redeeming` | `initiator`, `target` | `redeem_delegation` step. |
+| `revocation.published` | `jti`, `to_cp` | `revoke_tct` with `via_cp`. |
+| `tct.renewed` | new `jti`, `expires_at` | `renew_tct` step. |
+| `tct.cache.stats` | `hits`, `misses`, `size` | `tct_cache_stats` step. |
+| `identity.key.rotated` | `old_aid`, `new_aid` | `rotate_keys` step. |
+| `session.bundle.exported` | `session_id`, `participant_aids` | `export_session_bundle`. |
+| `session.bundle.verified` | `kind`, `active_aids`, `dropped_aids` | `verify_session_bundle`. |
+| `spki.pin.checked` | `computed_hash_b64`, `is_pinned` | `spki_pin_check`. |
+
+**Steps & faults**
+
+| Type | Carries | When |
+| --- | --- | --- |
+| `step.started` | `step_id`, `agent`, `capability` | Workflow step about to run. |
+| `step.complete` | `step_id`, `result` | Step succeeded. |
+| `step.skipped` | `step_id`, `notes` | `meta` step, or a CP step with no CP configured. |
+| `step.probing_no_trust` | `initiator`, `target`, `capability` | `capability_call_no_trust` step. |
+| `step.probing_with_held_tct` | … | `capability_probe` step. |
+| `step.access_denied` | `target`, `capability`, `result.status_code` | Probe matched expected non-2xx. |
+| `step.unexpected_status` | … | Probe got a status that didn't match `expect_status`. |
+| `step.fault_injected` | `target`, `notes` | Fault overlay activated. |
+| `step.fault_complete` | fault details, captured error | Fault step finished without raising. |
+
+**Control plane**
+
+| Type | When |
+| --- | --- |
+| `cp.enroll_started` / `cp.enroll_complete` | `enroll_with_cp` step. |
+| `cp.webhook.subscribed` / `cp.webhook.subscribe_failed` | `cp_subscribe_webhook` step. |
+| `cp.webhook.delivered` | A verified CP webhook delivery arrived (`POST /webhooks/cp/{run_id}`). |
+| `cp.trust_anchor.provisioned` | `cp_provision_trust_anchor` step. |
+| `cp.delegation.tree` | `cp_delegation_tree` step. |
+
+### Agent-emitted
+
+Agents `POST /internal/telemetry` directly (best-effort — failures are
+swallowed rather than failing the run):
+
+| Type | Carries | When |
+| --- | --- | --- |
+| `handshake.started` | — | A responder accepts a hello. |
+| `handshake.complete` | — | Initiator or responder closes the 4-message exchange. |
+| `handshake.failed` | `error` | Bad hello or commit. |
+| `delegation.issued` / `delegation.rejected` / `delegation.redeemed` | — | RFC-AITP-0006 flow milestones. |
+| `tct.revoked` | — | `/admin/revoke-tct` adds a jti. |
+| `identity.key.rotated` | `old_aid`, `new_aid` | `/admin/rotate-keys` replaces this agent's keypair. |
+| `capability.self_execute` | — | `/admin/self-execute` runs. |
+| `llm.started` / `llm.complete` | — | Wraps the LLM call — the clearest signal in the log that real work happened, not a stub. |
+| `manifest.verify_failed` | `cause` (`signature_invalid \| expired \| malformed \| unknown`), `source_url` | A fetched peer manifest failed verification. |
+| `tct.renewal.requested` / `tct.renewal.issued` | `jti`, plus TCT identifying fields | Holder requests a fresh TCT before the held one expires / issuer mints it. |
+| `session.bundle.exported` | `session_id`, `participant_count` | RFC-AITP-0010 coordinator built a session bundle. |
+| `session.bundle.verified` | `kind`, `active_count` | RFC-AITP-0010 verifier checked one. |
+| `cp.enroll_succeeded` | `aid`, `registered_at` | `/admin/enroll-with-cp` completed. |
+| `cp.enroll_failed` | `stage` (`enroll`/`register`), plus `status_code`/`body` or `transport` or `decode` | Either step of `/admin/enroll-with-cp` failed. |
+| `revocation.list_fetched` | `jti_count`, `added`, `verified`, `issuer` | A revocation snapshot verified and was applied. |
+| `revocation.refresh_failed` | `error` | The snapshot fetch itself failed (transport, not verification). |
+| `revocation.verify_failed` | `cause`, `detail` | A fetched snapshot did **not** verify (forged, wrong issuer, expired, malformed). |
+| `revocation.poll` | `healthy`, `changed`, `posture` (`unchecked \| current \| degraded`) | The background revocation-poll loop's own heartbeat. |
+| `revocation.degraded_serve` | `reason`, `serves`, `fail_mode` | A capability call was served in `soft_fail` degraded posture (no fresh verified snapshot). |
+
+`run.cancelled` is emitted by the runner, not an agent worker.
 
 ## Live stream (SSE)
 
@@ -141,6 +219,6 @@ a durable sidecar, not a query engine.
 
 ## Where to read next
 
-- What each event means → [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md#event-types)
-- Agent-emitted telemetry → [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md)
+- Want the runtime that produces these events? → [architecture.md](architecture.md)
+- First scenario run and the endpoint cheatsheet → [getting-started.md](getting-started.md)
 - CP-sourced observability (`/cp/*`, webhook deliveries) → [control-plane.md](control-plane.md#observability-projections)

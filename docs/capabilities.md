@@ -75,7 +75,7 @@ same defaults. A slimmed-down wheel only appears if someone builds with
 `--no-default-features` — the probe above is what keeps that (or an old
 0.3.x wheel) from crashing scenarios. The Docker build compiles the wheel
 from the sibling `aitp-rs` source; its `INSTALL_EXTRAS` wiring is in
-[docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md).
+[docker.md](docker.md).
 The Cargo feature gates and what each one turns on are documented by the
 SDK itself —
 [aitp-rs · sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build)
@@ -154,4 +154,4 @@ Each fixture carries metadata (`id`, `rfc`, `status`, `required_for_v0_1`,
 - What each SDK feature actually does → [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md)
 - How each post-v0.1 surface is wired in the playground → [aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces)
 - Which scenario demonstrates each feature → [scenarios.md](scenarios.md#scenarios-in-the-box)
-- Building the wheel in Docker → [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md)
+- Building the wheel in Docker → [docker.md](docker.md)
