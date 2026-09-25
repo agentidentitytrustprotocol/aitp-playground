@@ -228,8 +228,7 @@ run too), and the `AITP_E2E=1` subprocess integration suite.
 `docker.yml` builds/pushes the image to ghcr.io and runs the
 docker-compose e2e stack on `main`. See
 [docs/getting-started.md](docs/getting-started.md#development--testing)
-for the tier-by-tier map, with deeper detail in
-[internal_docs/testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md).
+for the tier-by-tier map.
 
 ## License
 

@@ -1,5 +1,11 @@
 # Docker
 
+> The user-facing subset of this page (build commands, the three compose
+> files, common pitfalls) is published at [`../docs/docker.md`](../docs/docker.md).
+> Keep both in sync when that material changes; everything else here
+> (build internals, the `aitp-cp` symlink hazard, the two Dockerfile
+> stages) stays internal-only.
+
 The Dockerfile is multi-stage. Stage 1 obtains the `aitp` Python SDK wheel;
 stage 2 is a slim runtime image that installs it and runs the playground.
 **No host Rust toolchain or maturin required** on either path.

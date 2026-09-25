@@ -1,5 +1,12 @@
 # Testing
 
+> The user-facing subset of this page (the three-directory layout, the
+> gating cheatsheet, the Docker-stack run recipe) is published at
+> [`../docs/getting-started.md` § Development & testing](../docs/getting-started.md#development--testing).
+> Keep both in sync when that material changes; the annotated per-file
+> tree below, CI gating internals, and coverage-floor rationale stay
+> internal-only.
+
 The test suite has four layers, each with its own scope and trigger.
 None of them are mandatory for a green local dev loop — but the e2e
 layers are what give the project teeth.

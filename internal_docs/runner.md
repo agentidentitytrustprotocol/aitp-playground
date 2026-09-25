@@ -247,6 +247,10 @@ a terminal state and the queue is empty. Subscribers that fall behind
 
 ### Event types
 
+> Published copy: [`../docs/observability.md` § Event types](../docs/observability.md#event-types),
+> combined there with the agent-emitted set from [agents.md](agents.md).
+> Keep both in sync.
+
 Runner-emitted events. Agents emit a further set through
 `/internal/telemetry` (`handshake.*`, `llm.*`, `delegation.*`,
 `tct.revoked`, `revocation.list_fetched`, …) that interleave into the same
