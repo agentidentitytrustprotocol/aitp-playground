@@ -25,6 +25,13 @@ dependency on it instead.
 
 This is a stdlib-only module (json, math, typing) and is reproduced verbatim
 below apart from this header.
+
+Re-synced 2026-09-25 against `aitp-verifier-py` commit `5179952` ("depth-cap
+JCS canonicalization to stop RecursionError escaping", PR #39): adds
+`_MAX_DEPTH` and threads a `depth` counter through `_serialize` so
+attacker-supplied nesting — which can sit anywhere inside an `extensions`
+member RFC-AITP-0001 §7 forbids inspecting — is a structural `JcsError`
+instead of an unguarded `RecursionError` escaping the verifier.
 """
 
 
@@ -156,7 +163,33 @@ def _format_string(value: str) -> str:
     return "".join(out)
 
 
-def _serialize(value: JsonValue, out: list[str]) -> None:
+# Maximum *relative* nesting depth of a single canonicalization walk -- not a
+# bound on total document size, which is an orthogonal concern already bounded
+# by input size (JCS output is linear in input, and this library parses nothing
+# itself: every entry point receives an already-parsed value). Chosen against
+# three measured bounds:
+#   1. real AITP artifacts nest ~3-5 levels (deepest shapes in the conformance
+#      pack: `session_bundle.session_bundle.participants[i]` and
+#      `issuer_revocation_list.snapshot.revocation_list.entries[i]`), so 256 is
+#      ~50x any legitimate document;
+#   2. the interpreter's own ceiling from these call sites is ~993-1200 frames
+#      (measured on CPython 3.13 at the stock limit of 1000);
+#   3. the cap must leave generous headroom for the *embedding caller's* stack,
+#      which is unmeasurable from inside this library -- 256 leaves it ~730 of
+#      the interpreter's frame budget.
+# Deliberately a fixed constant rather than something derived from
+# `sys.getrecursionlimit()` at import time: the rejection must be reproducible
+# across interpreters and across a caller that changes the limit, which is what
+# makes it testable at all.
+_MAX_DEPTH = 256
+
+
+def _serialize(value: JsonValue, out: list[str], depth: int = 0) -> None:
+    # Guard at entry, not at the two recursion sites: at the call sites a
+    # caller passing an already-deep value could exceed the cap before the
+    # first check ran. `depth` defaults to 0 so `dumps` needs no change.
+    if depth > _MAX_DEPTH:
+        raise JcsError(f"JSON nesting exceeds the maximum canonicalizable depth ({_MAX_DEPTH})")
     if value is None:
         out.append("null")
     elif value is True:
@@ -172,7 +205,7 @@ def _serialize(value: JsonValue, out: list[str]) -> None:
         for i, item in enumerate(value):
             if i:
                 out.append(",")
-            _serialize(item, out)
+            _serialize(item, out, depth + 1)
         out.append("]")
     elif isinstance(value, dict):
         out.append("{")
@@ -186,7 +219,7 @@ def _serialize(value: JsonValue, out: list[str]) -> None:
             first = False
             out.append(_format_string(key))
             out.append(":")
-            _serialize(value[key], out)
+            _serialize(value[key], out, depth + 1)
         out.append("}")
     else:
         raise JcsError(f"value is not JSON-serializable: {type(value).__name__}")
