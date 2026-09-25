@@ -99,6 +99,7 @@ swallowed rather than failing the run):
 | `identity.key.rotated` | `old_aid`, `new_aid` | `/admin/rotate-keys` replaces this agent's keypair. |
 | `capability.self_execute` | — | `/admin/self-execute` runs. |
 | `llm.started` / `llm.complete` | — | Wraps the LLM call — the clearest signal in the log that real work happened, not a stub. |
+| `llm.failed` | `task`, `detail` | The real provider call was attempted (a key was configured) but failed — bad/expired key, quota, unreachable. Surfaces as a 502 from the capability route, `detail` is the provider's own error text. |
 | `manifest.verify_failed` | `cause` (`signature_invalid \| expired \| malformed \| unknown`), `source_url` | A fetched peer manifest failed verification. |
 | `tct.renewal.requested` / `tct.renewal.issued` | `jti`, plus TCT identifying fields | Holder requests a fresh TCT before the held one expires / issuer mints it. |
 | `session.bundle.exported` | `session_id`, `participant_count` | RFC-AITP-0010 coordinator built a session bundle. |

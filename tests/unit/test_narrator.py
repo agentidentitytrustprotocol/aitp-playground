@@ -243,6 +243,9 @@ def test_self_execute_and_llm_lines() -> None:
     })
     assert "started" in narrate_event({"type": "llm.started", "task": "research"})
     assert "complete" in narrate_event({"type": "llm.complete", "task": "research"})
+    failed = narrate_event({"type": "llm.failed", "task": "research", "detail": "bad key"})
+    assert "failed" in failed
+    assert "bad key" in failed
 
 
 def test_narrate_endpoint_returns_text() -> None:

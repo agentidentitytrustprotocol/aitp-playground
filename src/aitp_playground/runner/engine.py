@@ -1380,7 +1380,20 @@ class ScenarioRunner:
                 f"http://localhost:{runner_agent.port}/admin/self-execute",
                 json={"capability": capability, "payload": payload},
             )
-            r.raise_for_status()
+            # Mirror _invoke_capability's body-surfacing rather than a blind
+            # raise_for_status(): a bare httpx.HTTPStatusError's message is
+            # just "{status} {reason} for url '...'" with no body, so a
+            # well-formed error the agent returns (e.g. call_llm_or_502's 502)
+            # would otherwise be discarded here even though it's diagnosable.
+            if not r.is_success:
+                try:
+                    detail = r.json()
+                except json.JSONDecodeError:
+                    detail = r.text
+                raise PlaygroundError(
+                    f"{runner_agent.agent_id} self-execute {capability} failed: "
+                    f"status={r.status_code} detail={detail}"
+                )
             try:
                 return r.json()
             except json.JSONDecodeError:

@@ -566,6 +566,24 @@ async def test_peer_rejection_on_workflow_invoke_fails_run(agent_http) -> None:
     assert "403" in result.error
 
 
+async def test_self_execute_failure_surfaces_body_not_bare_status(agent_http) -> None:
+    """A non-2xx from /admin/self-execute (e.g. call_llm_or_502's 502) must
+    thread the response body into run.failed's error, not just the bare
+    status/reason a blind raise_for_status() would give — see issue #77."""
+    env = make_env(
+        agents={"alice": ["research.query"]},
+        steps=[{"id": "r", "agent": "alice", "capability": "research.query"}],
+    )
+    agent_http.overrides["/admin/self-execute"] = lambda req: httpx.Response(
+        502, json={"detail": "LLM provider call failed: Incorrect API key provided"},
+    )
+    result = await _run(env)
+    assert result.status == "failed"
+    assert "self-execute research.query failed" in result.error
+    assert "502" in result.error
+    assert "Incorrect API key provided" in result.error
+
+
 async def test_invoke_and_self_execute_tolerate_non_json_bodies(agent_http) -> None:
     env = make_env(
         agents={"alice": ["research.query"], "bob": ["write.content"]},

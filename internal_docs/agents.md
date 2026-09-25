@@ -359,6 +359,12 @@ Conventions used by current workers:
 - `capability.self_execute` — when `/admin/self-execute` runs.
 - `llm.started` / `llm.complete` — wraps the LLM call so the run log
   shows when real work happened.
+- `llm.failed` — a real provider call was attempted (a key was configured)
+  but failed. Carries `task`, `detail` (the provider's own error text,
+  truncated). Missing-key degrades to the stub before this is ever reached;
+  this only fires when the key IS present but the call still fails. Turned
+  into a 502 by `call_llm_or_502` (`agents/base/llm.py`) rather than an
+  opaque 500 — see issue #77.
 - `manifest.verify_failed` — a fetched peer manifest failed
   `aitp.verify_manifest_json`. Carries `cause`
   (`signature_invalid | expired | malformed | unknown` — from the
