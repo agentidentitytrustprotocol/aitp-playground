@@ -1179,3 +1179,18 @@ independently blocked regardless of the outcome).
 **No deploy to watch for any of the 3 PRs** — this repo has no Railway/Vercel config;
 merges only trigger the Docker image build/push to GHCR, already green as part of each
 PR's required checks.
+
+## Plan 4 — Phase 5 closed, 2026-10-06
+
+`plans/aitp-rs-breaking-changes-adoption.md` is complete. Phase 5's blocker lifted: `9f887dd`
+shipped in aitp-rs 0.12.0+ (tags `aitp-core-v0.12.0`..`v0.13.1`) and main is on
+`aitp-sdk` 0.13.1 (floor `>=0.12.0`; lock bumped by #73 and #79; #79 needed #82 first, which
+re-synced the vendored JCS oracle that was failing the drift guard on every dependency PR).
+The floor was left at the compatibility minimum — nothing in `9f887dd` is a wire or API break
+here.
+
+The one required pre-adoption check, P16, is closed: `aitp-control-plane` mints no TCTs, so it
+was replaced by a four-source claim-set comparison plus an independently-signed (pyca) spec
+`tct-011`/`tct-012` interlock verified by `AitpAgent.verify_tct`
+(`tests/unit/test_tct_claim_shape_convention.py`). `UNKNOWN_FIELD` is spec-mandated, not an
+interop hazard. See `PENDING.md` P16.

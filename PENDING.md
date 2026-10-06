@@ -505,7 +505,21 @@ local re-implementation of the member-set/unknown-field checks would be the same
 "downstream repo hand-rolls the verifier" pattern `aitp-rs` already called out as a
 defect for revocation-list verification elsewhere.
 
-## P16 — `UNKNOWN_FIELD` is reachable on compact-JWS paths and is a cross-implementation interop hazard, not a non-issue
+## ~~P16 — `UNKNOWN_FIELD` is reachable on compact-JWS paths and is a cross-implementation interop hazard, not a non-issue~~ — **CLOSED 2026-10-06**
+**Closed by:** `tests/unit/test_tct_claim_shape_convention.py`, plus a cross-implementation
+claim-set comparison. Result: **not an interop hazard — the closed set is what the spec
+mandates.** `aitp-control-plane` never mints a TCT (it only records observed ones), so the
+"pull a CP-minted artifact" check below was unsatisfiable as written. In its place:
+(1) four independent sources agree on `ver jti iss sub aud iat exp grants cnf ext` —
+spec `aitp-tct.schema.json` (`additionalProperties: false`), conformance `tct-011`
+(unknown sibling claim → `UNKNOWN_FIELD`) / `tct-012` (`ext` accepted), `aitp-verifier-py`
+`TCT_CLAIM_FIELDS`, and aitp-rs `TCT_CLAIMS_MEMBERS`; (2) the new test signs the spec's
+`tct-011`/`tct-012` claims with `cryptography` (pyca, not the AITP wheel), issuer =
+`kat-keypair-002`, and has `aitp-sdk` 0.13.1's `AitpAgent.verify_tct` verify them —
+`tct-012` and the plain shape verify, `tct-011` is rejected on `device_id`. Mutation-checked
+(wrong signing key → fixture assertion fires; dropping the unknown claim → the rejection
+test fails). Original entry follows.
+
 **From:** Phase 3 of `plans/aitp-rs-breaking-changes-adoption.md` (pre-flight against
 `aitp-rs` `9f887dd`) · **Blocks:** nothing today — Phase 5 is independently BLOCKED on no
 successor `aitp-rs` release existing on PyPI yet · **Gates:** Phase 5's eventual adoption
