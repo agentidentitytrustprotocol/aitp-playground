@@ -32,8 +32,12 @@ JCS canonicalization to stop RecursionError escaping", PR #39): adds
 attacker-supplied nesting — which can sit anywhere inside an `extensions`
 member RFC-AITP-0001 §7 forbids inspecting — is a structural `JcsError`
 instead of an unguarded `RecursionError` escaping the verifier.
-"""
 
+Re-synced 2026-10-06 against `aitp-verifier-py` commit `754417a` (HEAD): adds
+`_MAX_NODES_VISITED` and a `visits` counter threaded through `_serialize`
+(issue #54), bounding total work for aliased Python values that `_MAX_DEPTH`
+alone does not.
+"""
 
 from __future__ import annotations
 
@@ -183,11 +187,70 @@ def _format_string(value: str) -> str:
 # makes it testable at all.
 _MAX_DEPTH = 256
 
+# Maximum number of _serialize calls ("nodes") a single dumps/canonicalize
+# call will make, checked at entry -- before the existing depth check, same
+# "guard at entry, not at the two recursion sites" placement _MAX_DEPTH's own
+# check already uses. _MAX_DEPTH bounds nesting *depth* only: it does nothing
+# for a candidate-free-analogue value (a long flat list of scalars, no
+# nesting at all) and, worse, for an *aliased* Python value -- the same
+# dict/list object referenced more than once inside its own containing
+# structure, unreachable via JSON (which never aliases), reachable only from
+# a direct Python caller constructing the value in-process -- the walk is not
+# merely unbounded but exponential, the same primitive issue #49 closed for
+# jwk.py's list-only walk. Unlike jwk.py, this walk recurses into BOTH dicts
+# and lists (jwk.py's dict branch is always a terminal leaf), so the aliasing
+# primitive is reachable through either container type here, and this walk
+# allocates real output per node (`out.append`), not merely CPU time.
+#
+# Bounding total node visits also bounds total output size, but as a BOUNDED
+# multiplier over the attacker's own real allocated memory, not literally as
+# a fixed O(1)-per-visit constant: a revisited dict of width `w` re-sorts its
+# keys on every visit (`sorted(value.keys(), ...)` below), costing
+# `O(w log w)`, not `O(1)`, per revisit -- negligible at this cap
+# (`log(200000) ~= 18`) but worth stating precisely rather than overclaiming
+# "fixed." A single non-aliased, oversized leaf (one huge string/number) is
+# explicitly out of scope: its own formatting cost is proportional to that
+# value's own already-allocated size, the same "document size is bounded by
+# input size" cost this module already treats as expected and orthogonal to
+# aliasing (see the module docstring) -- this cap bounds the DISPROPORTION
+# aliasing introduces, not raw non-aliased document size.
+#
+# 200000 is generous, not tightly calibrated: no schema-level cap exists on
+# array length anywhere this module's callers construct values from
+# (revocation entries, manifest files, session participants -- checked; none
+# found), nor in the sibling spec repo's own schemas, so there is no real
+# observed maximum to calibrate against -- same epistemic status jwk.py's own
+# "generous, not tight" constants have. At the cap, measured worst-case cost
+# (list-aliased: 56ms CPU / 391KB output; dict-aliased: 132ms / ~1.37MB; flat
+# non-aliased width-200000 dict: 192ms / ~3.18MB) is negligible either way for
+# a synchronous per-call verification path, while remaining 3-4 orders of
+# magnitude over any realistic AITP document (which nests only 3-5 levels
+# per _MAX_DEPTH's own reasoning above).
+_MAX_NODES_VISITED = 200000
 
-def _serialize(value: JsonValue, out: list[str], depth: int = 0) -> None:
-    # Guard at entry, not at the two recursion sites: at the call sites a
-    # caller passing an already-deep value could exceed the cap before the
-    # first check ran. `depth` defaults to 0 so `dumps` needs no change.
+
+def _visit(visits: list[int]) -> None:
+    # `visits` is a single-element list used as a mutable counter box (a bare
+    # int can't be mutated across recursive calls by reference), the same
+    # shape `out` already has -- and, like `out`, fresh per top-level
+    # `dumps`/`canonicalize` call, never shared across separate calls.
+    visits[0] += 1
+    if visits[0] > _MAX_NODES_VISITED:
+        raise JcsError(f"JSON value visits more than {_MAX_NODES_VISITED} nodes while canonicalizing")
+
+
+def _serialize(value: JsonValue, out: list[str], depth: int = 0, visits: list[int] | None = None) -> None:
+    # `visits` defaults to `None` only as a safety net for a direct caller of
+    # this private, non-`__all__`-exported function other than `dumps` (none
+    # currently exist) -- `dumps` itself always passes a freshly-initialized
+    # counter explicitly, the same way it always starts `depth` at 0.
+    if visits is None:
+        visits = [0]
+    # Guard at entry, not at the two recursion sites, and ahead of the depth
+    # check below: at the call sites a caller passing an already-deep value
+    # could exceed either cap before the first check ran. `depth` defaults to
+    # 0 so `dumps` needs no change to its own `depth` handling.
+    _visit(visits)
     if depth > _MAX_DEPTH:
         raise JcsError(f"JSON nesting exceeds the maximum canonicalizable depth ({_MAX_DEPTH})")
     if value is None:
@@ -205,7 +268,7 @@ def _serialize(value: JsonValue, out: list[str], depth: int = 0) -> None:
         for i, item in enumerate(value):
             if i:
                 out.append(",")
-            _serialize(item, out, depth + 1)
+            _serialize(item, out, depth + 1, visits)
         out.append("]")
     elif isinstance(value, dict):
         out.append("{")
@@ -219,7 +282,7 @@ def _serialize(value: JsonValue, out: list[str], depth: int = 0) -> None:
             first = False
             out.append(_format_string(key))
             out.append(":")
-            _serialize(value[key], out, depth + 1)
+            _serialize(value[key], out, depth + 1, visits)
         out.append("}")
     else:
         raise JcsError(f"value is not JSON-serializable: {type(value).__name__}")
@@ -228,7 +291,7 @@ def _serialize(value: JsonValue, out: list[str], depth: int = 0) -> None:
 def dumps(value: JsonValue) -> str:
     """Return the JCS canonical form of *value* as a ``str``."""
     out: list[str] = []
-    _serialize(value, out)
+    _serialize(value, out, 0, [0])
     return "".join(out)
 
 
