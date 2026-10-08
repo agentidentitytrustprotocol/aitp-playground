@@ -18,8 +18,15 @@ DOMAINS=(org-a.aitp.test org-b.aitp.test)
 
 echo "→ root CA"
 openssl genrsa -out rootCA.key 4096 >/dev/null 2>&1
+# subjectKeyIdentifier on the root is what lets the leaf certs' AKI resolve;
+# without it strict verifiers (Python 3.13+/OpenSSL 3) reject the chain with
+# "Missing Authority Key Identifier".
 openssl req -x509 -new -nodes -key rootCA.key -sha256 -days 3650 \
-  -subj "/CN=AITP Federated Test CA" -out rootCA.pem >/dev/null 2>&1
+  -subj "/CN=AITP Federated Test CA" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "subjectKeyIdentifier=hash" \
+  -out rootCA.pem >/dev/null 2>&1
 
 for d in "${DOMAINS[@]}"; do
   echo "→ cert for $d"
