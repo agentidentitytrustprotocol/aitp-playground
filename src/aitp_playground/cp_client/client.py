@@ -306,7 +306,7 @@ class CpClient:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 r = await client.get(
-                    url, params={"window": window}, headers=self._headers()
+                    url, params={"range": window}, headers=self._headers()
                 )
                 r.raise_for_status()
                 data = r.json()

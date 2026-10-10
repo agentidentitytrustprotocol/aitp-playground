@@ -57,7 +57,14 @@ class TrustOrchestrator:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("CP discovery failed (%s); using static fallback", exc)
                 if discovered:
-                    handshake = discovered[0].get("handshake_endpoint") or local_handshake
+                    # The CP returns camelCase (`handshakeEndpoint`); accept the
+                    # snake_case spelling too for older/other registries.
+                    record = discovered[0]
+                    handshake = (
+                        record.get("handshakeEndpoint")
+                        or record.get("handshake_endpoint")
+                        or local_handshake
+                    )
                     base = handshake.rsplit("/aitp", 1)[0] if handshake else None
                     peers[agent_spec.id] = {
                         "manifest_url": f"{base}/.well-known/aitp-manifest" if base else local_manifest,
