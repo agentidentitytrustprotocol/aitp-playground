@@ -50,7 +50,7 @@ curl -s http://localhost:8000/capabilities | jq .
 ```json
 {
   "sdk_available": true,
-  "version": "0.13.1",
+  "version": "0.13.2",
   "features": {
     "oidc": true,
     "session_bundle": true,
@@ -121,7 +121,7 @@ Run it from the CLI:
 ```bash
 uv run python -m aitp_playground.cli conformance
 # Conformance corpus: /…/agentidentitytrustprotocol/schemas/conformance
-#   installed SDK: aitp 0.13.1
+#   installed SDK: aitp 0.13.2
 #   fixtures: 72  (required for v0.1: 1)
 #   by RFC:   {'RFC-AITP-0001': 5, 'RFC-AITP-0004': 11, 'RFC-AITP-0005': 12, ...}
 #   by tier:  {'core': 62, 'draft': 10}
