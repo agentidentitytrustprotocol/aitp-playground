@@ -392,7 +392,9 @@ async def test_dashboard_overview_passes_window_and_returns_dict() -> None:
         out = await cp.fetch_dashboard_overview(window="7d")
     finally:
         _clear_transport()
-    assert "window=7d" in captured["url"]
+    # The CP's route reads `?range=` (it ignores `window`).
+    assert "range=7d" in captured["url"]
+    assert "window" not in captured["url"]
     assert out["handshakes"] == 12
 
 

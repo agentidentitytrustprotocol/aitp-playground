@@ -156,6 +156,20 @@ async def test_cp_registry_uses_discovered_endpoint_for_external_agent() -> None
     assert peers["ext"]["source"] == "cp_registry"
 
 
+async def test_cp_registry_reads_the_cps_camelcase_handshake_endpoint() -> None:
+    # The control plane's GET /api/registry/agents spells the key `handshakeEndpoint`.
+    cp = _FakeCp(discovered=[{"handshakeEndpoint": "https://ext.example.com/aitp/handshake/hello"}])
+    scenario = _scenario(
+        discovery="cp_registry",
+        agents=[_agent("ext", org="external")],
+        steps=[SimpleNamespace(agent="ext", capability="analyze.data")],
+    )
+    peers = await _orch(cp).resolve_peers(scenario, {"ext": _running("ext", 8302)})
+
+    assert peers["ext"]["manifest_url"] == "https://ext.example.com/.well-known/aitp-manifest"
+    assert peers["ext"]["source"] == "cp_registry"
+
+
 async def test_cp_registry_falls_back_when_no_agents_discovered() -> None:
     cp = _FakeCp(discovered=[])
     scenario = _scenario(

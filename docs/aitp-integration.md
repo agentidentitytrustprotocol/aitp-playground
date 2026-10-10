@@ -216,11 +216,10 @@ For agents marked `org: external`:
 1. Query `GET <CP_BASE_URL>/api/registry/agents?capability=<hint>` where
    the hint is the first workflow capability the runner sees for that
    agent.
-2. If the CP responds with anything, the orchestrator tries the first result's
-   `handshake_endpoint` to derive the manifest URL (today the CP spells the key
-   `handshakeEndpoint`, so it falls back to the local address while still
-   tagging the peer `source: "cp_registry"` — see the caveat in
-   [control-plane.md § Discovery](control-plane.md#discovery-cp_registry)).
+2. If the CP responds with anything, the orchestrator reads the first result's
+   `handshakeEndpoint` (the CP's camelCase key; the snake_case spelling is also
+   accepted) to derive the manifest URL — see
+   [control-plane.md § Discovery](control-plane.md#discovery-cp_registry).
 3. If the CP is disabled, empty, or fails, fall back to localhost
    (`source: "static_fallback"`).
 

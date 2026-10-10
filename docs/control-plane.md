@@ -24,10 +24,7 @@ with a CP when one is wired up.
 > may/may not change without coordination) is the CP's
 > [integration-playground.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/integration-playground.md).
 > This page is only the **playground side**: which playground feature calls
-> which CP endpoint, and what happens when the CP is absent. Two places where
-> the playground's client and the CP's current API disagree are called out
-> below (discovery key casing, dashboard window) — the CP tracks them as
-> [Known contract drift](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/integration-playground.md#known-contract-drift).
+> which CP endpoint, and what happens when the CP is absent.
 
 ## Enabling it
 
@@ -79,7 +76,7 @@ request/response shape, auth, and filters, follow it into the CP's
 | `fetch_tcts(...)` | `GET /api/tcts` | `GET /cp/tcts` | `[]` |
 | `fetch_delegations(...)` | `GET /api/delegations` | `GET /cp/delegations`, `cp_delegation_tree` | `[]` |
 | `replay_session(id, ...)` | `GET /api/sessions/{id}/replay` | `GET /cp/sessions/{id}/replay` | `[]` |
-| `fetch_dashboard_overview(window)` | `GET /api/dashboard/overview` | `GET /cp/dashboard` | `{}` (see the window caveat below) |
+| `fetch_dashboard_overview(window)` | `GET /api/dashboard/overview` | `GET /cp/dashboard` | `{}` |
 | `fetch_dashboard_agents()` | `GET /api/dashboard/agents` | `GET /cp/agents` | `[]` |
 | `list_trust_anchors(ns)` | `GET /api/trust-anchors` | `GET /cp/trust-anchors` | `[]` |
 | `list_pinned_keys(ns)` | `GET /api/pinned-keys` | `GET /cp/pinned-keys` | `[]` |
@@ -91,9 +88,8 @@ The playground does not call every CP route: for example
 `POST /api/registry/enroll` + `POST /api/registry/agents` are called by the *agent
 workers* (see "Two clients, one CP"), not by `CpClient`.
 
-**Dashboard window caveat.** `CpClient.fetch_dashboard_overview` sends
-`?window=<window>`, but the CP's route reads `?range=` (`1h|24h|7d|30d`), so the
-CP answers with its default `24h` window whatever `/cp/dashboard` is asked for.
+`fetch_dashboard_overview(window)` forwards the window to the CP as `?range=`
+(`1h|24h|7d|30d`; an unknown value makes the CP fall back to `24h`).
 
 The list-fetch methods are tolerant of envelope shape — they accept both
 `{items: [...]}` / `{events: [...]}` and a bare top-level list, so they
@@ -109,14 +105,9 @@ When a scenario sets `spec.trust.discovery: cp_registry`, the
 1. Derive a capability hint — the first workflow capability the runner
    sees targeted at that agent.
 2. `GET /api/registry/agents?capability=<hint>`.
-3. If the CP returns anything, read the first result's `handshake_endpoint`,
-   derive the manifest URL, and tag the peer `source: cp_registry`.
-   **Caveat:** the CP's records spell that field `handshakeEndpoint`
-   (camelCase) and the orchestrator reads the snake_case key, so the key is
-   never found and the peer's manifest URL falls back to the agent's *local*
-   address even though the peer is tagged `cp_registry`. A discovery match
-   therefore proves the CP answered, not that the handshake dialed the
-   CP-advertised endpoint.
+3. If the CP returns anything, read the first result's `handshakeEndpoint`
+   (the CP's camelCase key; the snake_case spelling is also accepted), derive
+   the manifest URL from it, and tag the peer `source: cp_registry`.
 4. On empty result, disabled CP, or any error, fall back to
    `http://localhost:<port>` and tag `source: static_fallback`.
 
