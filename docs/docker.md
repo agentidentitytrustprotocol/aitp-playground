@@ -1,7 +1,8 @@
 # Docker
 
 The Dockerfile is multi-stage. Stage 1 obtains the `aitp` Python SDK wheel;
-stage 2 is a slim runtime image that installs it and runs the playground.
+stage 2 is a slim runtime image (Python 3.13) that installs it and runs the
+playground.
 **No host Rust toolchain or maturin required** on either path — see
 [getting-started.md](getting-started.md) for the native (non-Docker) route.
 
@@ -54,10 +55,18 @@ reloader.
 
 ### `docker-compose.test.yml` — end-to-end tests
 
-Brings up the playground (built with `INSTALL_EXTRAS=all-agents`) plus a
-`tests` service that runs the integration suites against it. The tests
-container waits for the playground's healthcheck before starting, and
+Brings up four services: `cp-postgres` (Postgres 18, ephemeral), `aitp-cp`
+(a real Control Plane on Node 24, built from `Dockerfile.cp-e2e`), the
+`playground` (built with `INSTALL_EXTRAS=all-agents`) and a `tests` service
+that runs the integration suites against it. The tests container waits for
+the playground **and** the Control Plane healthchecks before starting, and
 volume-mounts `./tests` read-only so test edits don't require a rebuild.
+
+This stack needs sibling checkouts next to this repo: `../aitp-cp` (the
+`aitp-control-plane` repo — `aitp-cp` is the local directory alias the
+compose file expects) and `../aitp-rs` (the CP image compiles its native
+binding from `aitp-rs` source even though the playground image itself uses
+the PyPI wheel).
 
 ```bash
 cp .env.example .env
@@ -69,6 +78,19 @@ docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 docker compose -f docker-compose.test.yml down
 ```
 
+### `docker-compose.host-ports.yml` — publish ports to the host
+
+An override layered on `docker-compose.test.yml` (used by the
+aitp-ui-console integration test) that publishes the playground (`8000`) and
+Control Plane ports to the host; the base test stack keeps them internal.
+
+```bash
+docker compose -f docker-compose.test.yml -f docker-compose.host-ports.yml up -d playground aitp-cp
+```
+
+The cross-domain federated stack has its own compose files under
+`federated/` — see [federated/README.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/federated/README.md).
+
 To run against Anthropic instead, set `LLM_PROVIDER=anthropic` and provide
 `ANTHROPIC_API_KEY` in `.env` (model override: `ANTHROPIC_MODEL`, default
 `claude-sonnet-4-6`). See [getting-started.md § Development & testing](getting-started.md#development--testing)
@@ -76,9 +98,10 @@ for what this stack actually runs.
 
 ## Common pitfalls
 
-- **First build is slow** — expected. A cold Rust compile of the SDK (the
-  `path` variant) takes several minutes on Apple Silicon. Subsequent builds
-  reuse cache layers and finish in seconds for source-only changes.
+- **First build is slow with `AITP_SDK_SOURCE=path`** — a cold Rust compile
+  of the SDK takes several minutes on Apple Silicon. The default `pypi` build
+  only downloads the wheel (plus the LLM extras if requested). Subsequent
+  builds reuse cache layers and finish in seconds for source-only changes.
 - **Tests container exits 0 instantly** — check `AITP_LLM_E2E=1` and
   `OPENAI_API_KEY` are reaching the container. The LLM test tier is gated
   and skips silently without the env var.
@@ -99,7 +122,7 @@ for what this stack actually runs.
 | Scenario YAML | No (TTL=0; loaded on every lookup) — true for dev compose too. |
 | Python source under `src/` or `agents/` | Yes for the prod image; **no** for `docker-compose.dev.yml` (bind-mounted + uvicorn reload). |
 | `pyproject.toml` (deps) | Yes. |
-| `Dockerfile` or `.dockerignore` | Yes. |
+| `Dockerfile` or `Dockerfile.dockerignore` | Yes. |
 
 ## Where to read next
 

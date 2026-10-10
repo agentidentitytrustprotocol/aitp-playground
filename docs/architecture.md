@@ -170,7 +170,7 @@ scenario contains an `identity_type: oidc` agent. The issuer's private seed
 and public JWK ride along in each agent's bootstrap so OIDC agents can mint
 ID tokens and every agent can verify OIDC peers. Real deployments would
 point at an external IdP instead — see
-[aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces).
+[aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces).
 
 ### Control Plane client (`src/aitp_playground/cp_client/`)
 `CpClient` is fully optional. When `CP_BASE_URL` is empty:

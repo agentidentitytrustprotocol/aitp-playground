@@ -105,7 +105,7 @@ spec:
 `identity_type: oidc` builds the manifest with an OIDC identity hint and
 makes the agent mint ID tokens via the per-run mock issuer at handshake
 time — see `intra-org/oidc-identity` and
-[aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces).
+[aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces).
 `signing_suite: p256` selects the ECDSA suite instead of Ed25519.
 
 Key behaviors:
@@ -439,8 +439,8 @@ a contributor task, with its own recipe in the repo's contributor docs.
 | `intra-org/revocation-demo@1.0.0` | RFC-AITP-0008: revoke a TCT's jti; subsequent calls 403. |
 | `intra-org/revocation-via-cp@1.0.0` | RFC-AITP-0008 federation: revocation *data* propagates through the CP's `/.well-known/aitp-revocation-list` to an unrelated peer. The snapshot is signature-verified against the pinned `CP_AID` before any entry is applied. One caveat remains, in the scenario's own summary: the final 403 comes from the issuer's local deny-set, not the CP-derived one — so propagation is shown, enforcement-from-propagation is not. |
 | `intra-org/delegation-chain@1.0.0` | RFC-AITP-0006: single-hop delegation + redeem. |
-| `intra-org/delegation-multihop@1.0.0` | RFC-AITP-0011: two-hop chain (researcher → sub-researcher → analyst). |
-| `intra-org/key-rotation@1.0.0` | RFC-AITP-0007: writer rotates keys; pre-rotation TCTs become invalid. |
+| `intra-org/delegation-multihop@1.0.0` | Two chained single-hop delegations (researcher → sub-researcher → analyst), each redeemed at the writer, which enforces the revocation deny-set and freshness before minting each TCT. The chain lives in the TCT identities, not in an encoded `chain` claim. |
+| `intra-org/key-rotation@1.0.0` | RFC-AITP-0003 §8 (Manifest Rotation): writer rotates keys; pre-rotation TCTs become invalid. |
 | `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
 | `intra-org/external-enrollment@1.0.0` | Agent self-enrolls via `POST /api/registry/enroll` then `POST /api/registry/agents` with the issued bearer token. |
 | `intra-org/webhook-subscription@1.0.0` | Playground registers a CP webhook and CP fans `handshake.complete` / other audit events back via `POST /webhooks/cp/{run_id}`; inspect deliveries with `GET /runs/{id}/cp-deliveries`. |

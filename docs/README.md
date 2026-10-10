@@ -14,7 +14,7 @@ below.
 | [getting-started.md](getting-started.md) | You're cloning the repo and need it running locally — install, env, endpoints, CLI, and the development & testing workflow (test tiers, ruff, CI). |
 | [docker.md](docker.md) | You'd rather run it in Docker than install Python locally, or you're debugging the compose stack. |
 | [scenarios.md](scenarios.md) | You want to author a new scenario, or understand the YAML schema. |
-| [aitp-integration.md](aitp-integration.md) | You want to know where the SDK is called, how identity/handshake/TCT/revocation work end-to-end, and the post-v0.1 surfaces (OIDC, renewal, bundles, pinning, multi-hop). |
+| [aitp-integration.md](aitp-integration.md) | You want to know where the SDK is called, how identity/handshake/TCT/revocation work end-to-end, and the draft/extension surfaces (OIDC, renewal, bundles, pinning, multi-hop). |
 | [observability.md](observability.md) | You want events, the SSE stream, narration, Prometheus metrics, the dashboard, or run persistence. |
 | [control-plane.md](control-plane.md) | You're wiring the optional Control Plane — discovery, enrollment, revocation, webhooks, trust anchors, observability proxies. |
 | [capabilities.md](capabilities.md) | You want to know which SDK features the installed wheel exposes, how scenarios degrade, and the conformance harness. |
@@ -31,8 +31,8 @@ the project, so they're excluded from the published site:
 | [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md) | You're working on the engine — step types, execution model, trust scoping, event stream. |
 | [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md) | You're changing an agent worker, adding a new framework, or wiring a new capability. |
 | [llm-providers.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/llm-providers.md) | You're adding a new LLM provider, or changing how one of the builder functions works. |
-| [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md) | You're changing the Dockerfile's stages, the build context, or `.dockerignore` — build internals, not how to run the image (see [docs/docker.md](docker.md) for that). |
-| [testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md) | You're changing which tests run when — CI gating, the `uv.lock` trigger for the e2e job, coverage floors. |
+| [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md) | You're changing the Dockerfile's stages, the build context, or `Dockerfile.dockerignore` — build internals, not how to run the image (see [docs/docker.md](docker.md) for that). |
+| [testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md) | You're changing which tests run when — CI gating, the `uv.lock` / Docker-stack triggers for the e2e job, coverage floors. |
 
 ## External references (the source of truth lives elsewhere)
 

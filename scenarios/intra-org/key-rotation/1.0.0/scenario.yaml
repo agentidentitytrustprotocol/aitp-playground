@@ -4,7 +4,7 @@ metadata:
   pack: intra-org
   scenario: key-rotation
   version: 1.0.0
-  name: Key Rotation (RFC-AITP-0007)
+  name: Key Rotation (RFC-AITP-0003 §8)
   summary: >
     Researcher handshakes with writer and successfully invokes
     writer.write.content. Writer then rotates its identity keys —
@@ -19,7 +19,7 @@ metadata:
     manifest to obtain a TCT under the new key. This scenario doesn't
     re-handshake (the failure is the demonstration); a production peer
     would on receiving the first 403.
-  tags: [identity, key-rotation, rfc-0007, manifest, intra-org]
+  tags: [identity, key-rotation, rfc-0003, manifest, intra-org]
 
 spec:
   inputs:

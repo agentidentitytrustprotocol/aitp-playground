@@ -38,10 +38,11 @@ details (features, wheels) are the SDK's own docs:
 and [sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build).
 
 See the comments in `pyproject.toml` for the authoritative story — the floor pin there
-records every wire-breaking `aitp-sdk` bump with a dated rationale bullet (currently five,
-from the pre-0.3 `aitp/0.1` incompatibility through the 0.11.0 pinned-key proof encoding
-fix). Read `pyproject.toml` directly rather than trusting a version number restated here;
-it drifts.
+records every wire-breaking `aitp-sdk` bump with a rationale bullet (from the pre-0.3
+`aitp/0.1` incompatibility through the 0.11.0 pinned-key proof encoding fix, plus routine
+floor tracking). Read `pyproject.toml` directly rather than trusting a version number
+restated here; it drifts. The SDK's own release history is in the
+[aitp-rs CHANGELOG](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/CHANGELOG.md).
 
 ## Install the service
 
@@ -77,6 +78,17 @@ Copy `.env.example` → `.env` and edit. The only key the service strictly
 needs for real LLM output is `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY` if
 you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 
+> **`.env` and native runs.** The service reads `.env` through its pydantic
+> `Settings` only; nothing copies it into the process environment. Agent
+> subprocesses inherit the service's real environment and read
+> `OPENAI_API_KEY` / `LLM_PROVIDER` / `*_MODEL` straight from it. So for a
+> native `uvicorn` run, **export** the LLM variables in your shell (or use
+> `set -a; source .env; set +a`) — a key present only in `.env` is invisible
+> to the agents and they silently use the stub. `docker-compose.yml` and
+> `docker-compose.test.yml` use `env_file: .env`, which puts them in the
+> container environment, so those just work (`docker-compose.dev.yml` does
+> not load `.env`; pass the variables through your shell).
+
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `8000` | uvicorn bind port |
@@ -109,7 +121,11 @@ deliberately **no cross-provider failover** — silently swapping providers
 behind your back would make debugging harder, and the point of the demo is
 to show the real path running. Look for `llm.started` / `llm.complete` in
 the run's event log to confirm a real provider call happened rather than a
-stub.
+stub. A key that is present but fails at call time (expired, wrong scope,
+quota, unreachable) does **not** fall back to the stub: the agent emits
+`llm.failed` (with the provider's error text) and answers HTTP 502, and the
+run fails with a message of the form `<agent> self-execute <capability>
+failed: status=502 detail=…`.
 
 ## Run the service
 
@@ -241,7 +257,7 @@ Linting is ruff (configured in `pyproject.toml`; `ruff format` exists
 but formatting is not CI-enforced):
 
 ```bash
-uv run ruff check .          # what CI runs
+uv run ruff check src agents tests     # what CI runs
 ```
 
 How CI maps onto these (`.github/workflows/`):
@@ -251,23 +267,32 @@ How CI maps onto these (`.github/workflows/`):
   ≥54% — kept separate so a regression in one can't hide behind the
   other's floor) on a Python 3.11/3.13 matrix, run against
   `uv sync --locked` (which installs `aitp-sdk` from PyPI, so the
-  SDK-dependent tests run rather than skip); and the `AITP_E2E=1`
-  runner-integration job.
-- **`docker.yml`** — builds the playground image on PRs; on `main` it
-  pushes to `ghcr.io` (with the `all-agents` LLM extras baked in) and
-  runs the full `docker-compose.test.yml` e2e stack (protocol e2e +
-  LLM e2e when the `OPENAI_API_KEY` secret is set).
+  SDK-dependent tests run rather than skip). That job also clones
+  `aitp-verifier-py` so the vendored JCS canonicalizer's drift guard is a
+  real gate rather than a skip. A separate `AITP_E2E=1` integration job (no ordering
+  dependency on the test job) runs `test_runner.py` and the in-process `test_federated_handshake.py`.
+- **`docker.yml`** — builds the playground image on PRs; on `main` and
+  `v*` tags it pushes to `ghcr.io` (with the `all-agents` LLM extras baked
+  in). It runs the full `docker-compose.test.yml` e2e stack (protocol e2e +
+  LLM e2e when the `OPENAI_API_KEY` secret is set) on `main`, and also on
+  PRs that touch `uv.lock`, `Dockerfile`, `Dockerfile.cp-e2e` or
+  `docker-compose.test.yml`, so an SDK-pin or base-image bump is exercised
+  before it merges.
+- **`bump-aitp.yml`** / **`auto-merge.yml`** — the event-driven `aitp-sdk`
+  lock bump (dispatched when aitp-rs publishes) and the auto-merge of green
+  routine bumps; both call shared workflows from `aitp-ci`.
 - **`notify-website.yml`** — pings the docs site to re-sync when
   `docs/**` or `README.md` change on `main`.
 
-The suite is laid out in three directories:
+The suite is laid out in four directories:
 
 ```
 tests/
 ├── conftest.py       # sets PYTHONPATH and SCENARIOS_DIR
 ├── unit/              # fast, in-process, no subprocesses (default target)
 ├── integration/       # test_runner.py, test_protocol_e2e.py, test_llm_e2e.py,
-│                       #   test_federated_handshake.py — each gated by its own env var
+│                       #   test_federated_handshake.py — gated by AITP_E2E / AITP_PROTOCOL_E2E / AITP_LLM_E2E
+├── e2e_federated/     # two-service federated stack, gated by AITP_FEDERATED_E2E (see federated/README.md)
 └── scenarios/         # offline registry consistency checks (no spawn, no LLM)
 ```
 
@@ -278,6 +303,11 @@ tests/
 | `tests/integration/test_runner.py` | `AITP_E2E=1` | no (stubs) | yes | ~30-45s |
 | `tests/integration/test_protocol_e2e.py` | `AITP_PROTOCOL_E2E=1` | no (stubs) | yes (Docker recommended) | minutes |
 | `tests/integration/test_llm_e2e.py` | `AITP_LLM_E2E=1` | yes | yes (Docker recommended) | minutes |
+
+`test_federated_handshake.py` shares the `AITP_E2E` gate with `test_runner.py` and
+needs no Docker stack (an in-process `TestClient` over two real loopback ports; it still
+spawns agent subprocesses). The
+`tests/e2e_federated/` suite needs the Docker stack from `federated/` up first.
 
 Protocol e2e and LLM e2e are designed to run inside the
 `docker-compose.test.yml` stack, where the gates and service URLs are

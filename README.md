@@ -41,9 +41,9 @@ One service, ~20 scenarios, each isolating one AITP behavior:
 | **Identity** | pinned Ed25519/P-256 keys and OIDC (RFC-AITP-0002) ID-token binding |
 | **Handshake & TCTs** | the 4-message mutual handshake; per-call capability authorization |
 | **Trust gating** | a call with no/insufficient TCT is rejected (403), then succeeds after handshake; grant intersection |
-| **Delegation** | single-hop and multi-hop delegation chains with scope narrowing (RFC-AITP-0006 / 0011) |
+| **Delegation** | single-hop delegation and chained (multi-hop) redemption with scope narrowing (RFC-AITP-0006 / 0011) |
 | **Revocation** | fail-closed local revocation and propagation through the Control Plane's list (RFC-AITP-0008). The CP signs the snapshot and the consuming agent verifies it against the pinned `CP_AID` before applying any entry; an unverifiable snapshot is discarded |
-| **Lifecycle** | key rotation (0007), in-band TCT renewal (0013), a TCT verification cache, session bundles (0010), SPKI pinning |
+| **Lifecycle** | key rotation (0003 §8), in-band TCT renewal (0013), a TCT verification cache, session bundles (0010), SPKI pinning |
 | **Discovery** | static localhost, `did:web`, and Control Plane registry — each with graceful fallback |
 | **Control Plane** | optional enrollment, webhooks, trust-anchor provisioning, delegation-tree observability |
 | **Resilience** | operator-injected faults (`manifest_404`, `peer_offline`) that the run survives with structured outcomes |
@@ -55,12 +55,12 @@ a peer hosted by a different instance of this service — see
 for the full route list.
 
 Everything is optional and degrades cleanly: no LLM key → deterministic
-stubs (handshakes still run); no Control Plane → static fallback. Since
-`aitp-sdk` 0.4.0 the full SDK surface (renewal, session bundles, SPKI
-pinning, TCT cache, multi-hop delegation) ships by default; if you run an
-older or custom `--no-default-features` wheel, the advanced scenarios
-report "feature not available" instead of crashing. Check
-`GET /capabilities` to see what your wheel exposes.
+stubs (handshakes still run); no Control Plane → static fallback. The
+published SDK wheel enables the full surface (renewal, session bundles, SPKI
+pinning, TCT cache, multi-hop delegation) by default; on a slimmed-down or
+older wheel the advanced scenarios report "feature not available" instead of
+crashing. Check `GET /capabilities` to see what your wheel exposes (feature
+flags: [aitp-py README](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/README.md#cargo-features)).
 
 ## Documentation
 
@@ -75,7 +75,7 @@ docs site) — start with [architecture.md](docs/architecture.md):
   authoring guide.
 - **[AITP integration](docs/aitp-integration.md)** — where the SDK is
   called; identity, handshake, TCT, delegation, revocation, and the
-  post-v0.1 surfaces (OIDC, renewal, bundles, pinning, multi-hop).
+  draft/extension surfaces (OIDC, renewal, bundles, pinning, multi-hop).
 - **[Observability](docs/observability.md)** — SSE events, narration,
   Prometheus metrics, the dashboard, run persistence.
 - **[Control plane](docs/control-plane.md)** — the optional CP: discovery,
@@ -108,9 +108,13 @@ Two paths.
 
 ### Docker (no host toolchain)
 
-The Dockerfile is multi-stage and builds the `aitp` SDK from the
-sibling Rust source for you. The compose files set the build context
-to the parent directory so the sibling repo is visible.
+The Dockerfile is multi-stage. By default (`AITP_SDK_SOURCE=pypi`) it
+installs the exact `aitp-sdk` wheel pinned in `uv.lock`; pass
+`--build-arg AITP_SDK_SOURCE=path` to compile the sibling `aitp-rs`
+source instead (needs that checkout next to this repo). The compose files
+set the build context to the parent directory so sibling checkouts are
+visible when needed. Images use Python 3.13 (the full e2e stack also
+uses Node 24 and Postgres 18) — see [docs/docker.md](docs/docker.md).
 
 ```bash
 cp .env.example .env
@@ -126,8 +130,10 @@ docker compose up --build
 docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 ```
 
-First image build is ~5 minutes on Apple Silicon (Rust cold compile);
-subsequent rebuilds are seconds thanks to BuildKit cache mounts.
+The default (PyPI wheel) build takes a minute or two; only the opt-in
+`path` variant pays a Rust cold compile (several minutes). The e2e stack
+also builds the Control Plane image from the sibling `aitp-cp` /
+`aitp-rs` checkouts.
 
 A prebuilt image is published on every push to `main`:
 `ghcr.io/agentidentitytrustprotocol/aitp-playground:latest`. It is built
@@ -180,7 +186,7 @@ aitp-playground/
 ├── docs/                  # reader-facing docs (published to the docs site)
 ├── internal_docs/         # contributor & build docs (not published)
 ├── src/aitp_playground/   # FastAPI service — no AITP protocol logic here
-│   ├── api/               # routes: /runs /scenarios /agents /capabilities /metrics /dashboard /cp/* /webhooks
+│   ├── api/               # routes: /runs /scenarios /agents /hosted-agents /packs /capabilities /metrics /dashboard /cp/* /webhooks /healthz /internal/telemetry
 │   ├── registry/          # YAML pack loader + index + templates
 │   ├── runner/            # scenario engine + run store (+ optional SQLite) + SSE
 │   ├── hosting/           # subprocess spawn, identity, port alloc, adapters
@@ -217,16 +223,18 @@ AITP_PROTOCOL_E2E=1 uv run pytest tests/integration/test_protocol_e2e.py -v
 # Live LLM end-to-end — needs OPENAI_API_KEY (one-command via Docker, see above).
 AITP_LLM_E2E=1 uv run pytest tests/integration/test_llm_e2e.py -v
 
-# Lint (ruff).
-uv run ruff check .
+# Lint (ruff) — same scope CI runs.
+uv run ruff check src agents tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs ruff lint, the unit + scenario
 suites with a coverage floor on Python 3.11 and 3.13 (installing
 `aitp-sdk` from PyPI via `uv sync --locked`, so the SDK-dependent tests
 run too), and the `AITP_E2E=1` subprocess integration suite.
-`docker.yml` builds/pushes the image to ghcr.io and runs the
-docker-compose e2e stack on `main`. See
+`docker.yml` builds/pushes the image to ghcr.io (on `main` and `v*`
+tags) and runs the docker-compose e2e stack on `main` and on pull
+requests that touch `uv.lock`, the Dockerfiles or
+`docker-compose.test.yml`. See
 [docs/getting-started.md](docs/getting-started.md#development--testing)
 for the tier-by-tier map.
 
