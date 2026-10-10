@@ -11,16 +11,22 @@ state machine, TCT issuance and verification, delegation, revocation
 semantics — lives in the `aitp` Python SDK (PyPI distribution
 `aitp-sdk`, built from `aitp-rs/bindings/aitp-py`). Nothing in this repo
 parses an envelope,
-canonicalizes JSON, or signs anything. If a future change makes you want
+canonicalizes JSON, or signs an AITP artifact in `src/` or `agents/`. (The one
+thing signed outside the SDK is the per-run **mock OIDC issuer's ID tokens**:
+`trust/oidc_issuer.py` makes the issuer keys and `agents/base/oidc.py`
+(`mint_jwt_for`) signs the tokens — an *input* to the protocol standing in for
+an external IdP, not an AITP message.) If a future change makes you want
 to, the SDK is what needs the new API.
 
 The repo imports `aitp` almost exclusively from inside agent workers
 (`agents/base/bootstrap.py`, `agents/base/aitp_server.py`,
-`agents/base/agent_admin.py`, `agents/base/oidc.py`). The playground
-service touches the SDK in exactly two places, neither of which holds
+`agents/base/agent_admin.py`, `agents/base/oidc.py`,
+`agents/base/revocation_refresh.py`). The playground
+service touches the SDK in exactly three places, none of which holds
 protocol state: the feature probe (`capabilities.py`, behind
-`GET /capabilities`) and the pure-SDK `spki_pin_check` step in the
-engine.
+`GET /capabilities`), the pure-SDK `spki_pin_check` step in the
+engine, and `verify_manifest_json` in the engine's
+`cp_provision_trust_anchor` step (see "Peer manifest signatures" below).
 
 > **This page documents the playground side only** — *where* and *why* the
 > SDK is called from this repo. For the SDK call signatures and the protocol
@@ -36,6 +42,11 @@ engine.
 
 ## Where the SDK is actually called
 
+Argument lists below are abbreviated to show *which* call is made from *where*;
+the authoritative signatures are the SDK's
+[`aitp.pyi`](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/aitp.pyi) and
+[sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md).
+
 | SDK call | Caller | Purpose |
 | --- | --- | --- |
 | `aitp.AitpAgent.from_seed(bytes)` | `agents/base/bootstrap.py` | Build the agent identity from a deterministic seed. |
@@ -43,25 +54,25 @@ engine.
 | `agent.new_responder()` + `process_hello` / `process_commit` | `agents/base/aitp_server.py` | The responder side of the 4-message handshake. |
 | `agent.new_session()` + `build_hello`, `process_hello_ack`, `complete` | `agents/base/agent_admin.py` (in `/admin/initiate-handshake`) | The initiator side. |
 | `agent.verify_tct(tct_token, required_grant, expected_audience=…, revoked_jtis=…)` | `agents/base/aitp_server.py` (`verify_capability_tct`) | Per-call authorization on `/capabilities/<name>`. |
-| `agent.build_delegation(held_tct, delegatee_aid, pk, scope, ttl)` | `agents/base/agent_admin.py` (`/admin/delegate`) | Mint a DelegationToken from a held TCT. |
+| `agent.build_delegation(voucher_token, delegatee_aid, scope, ttl_secs)` | `agents/base/agent_admin.py` (`/admin/delegate`) | Mint a DelegationToken from the **grant voucher** the handshake returned alongside the TCT (see "Held TCTs"). |
 | `aitp.verify_delegation(token_json, my_aid, revoked_jtis)` | `agents/base/aitp_server.py` (`/aitp/delegation/redeem`) | Verify a presented DelegationToken before issuing a fresh TCT. The deny-set argument is RFC-AITP-0006 §4 step 7 — a revoked source jti MUST refuse a fresh TCT. |
 | `agent.issue_tct_for_delegatee(verified)` | `agents/base/aitp_server.py` (`/aitp/delegation/redeem`) | Mint the redeemed TCT bound to the delegatee's key. |
 
-That covers the **core surface**. The post-v0.1 surfaces below add a
-handful more calls — all shipped by default since `aitp-sdk` 0.4.0, but
-still probed at runtime so older or `--no-default-features` wheels
-degrade cleanly ([capabilities.md](capabilities.md)):
+That covers the **core surface**. The draft/extension surfaces below add a
+handful more calls (availability and the runtime probe are covered under
+[Draft and extension surfaces](#draft-and-extension-surfaces) below):
 
 | SDK call | Caller | Purpose |
 | --- | --- | --- |
 | `agent.new_session(jwks=…, trust_anchors=…)` / `agent.new_responder(jwks=…, …)` | `agent_admin.py`, `aitp_server.py` | OIDC-aware handshake sessions — preload a `JwksProvider` so OIDC peers can be verified. |
-| `aitp.JwksProvider(...)` + `aitp.compute_aid_jkt(aid)` | `agents/base/oidc.py`, `trust/oidc_issuer.py` | Verify OIDC ID tokens; bind a token to the agent's key via the `cnf.jkt` claim. |
+| `aitp.JwksProvider(...)` + `aitp.compute_aid_jkt(aid)` | `agents/base/oidc.py` | Verify OIDC ID tokens; bind a token to the agent's key via the `cnf.jkt` claim. (`trust/oidc_issuer.py` creates the per-run *mock* issuer's keys with `cryptography`, and the worker signs ID tokens with them — neither makes an SDK call.) |
 | `agent.verify_tct_cached(tct_token, grant, store, …)` | `aitp_server.py` (`verify_capability_tct`) | TCT verification with an `aitp.TctStore` cache on the hot path. |
 | `agent.build_renewal_request(tct_token)` / `agent.process_renewal_request(req, …)` | `agent_admin.py` (`/admin/renew-tct`, `/admin/process-renewal`) | RFC-AITP-0013 in-band TCT renewal (holder + issuer sides). |
 | `aitp.SessionBundleBuilder(agent)` + `aitp.verify_session_bundle(env, aid)` | `agent_admin.py` (`/admin/export…`, `/admin/verify-session-bundle`) | RFC-AITP-0010 session-bundle export + verify. |
-| `aitp.verify_manifest_json(envelope)` | `agent_admin.py` (`/admin/initiate-handshake`, `/admin/delegate`), `runner/engine.py` (`cp_provision_trust_anchor`) | Verify a peer `ManifestEnvelope` before reading the AID or endpoint out of it. |
+| `aitp.verify_manifest_json(envelope)` | `agent_admin.py` (`/admin/initiate-handshake`, `/admin/delegate`), `runner/engine.py` (`cp_provision_trust_anchor`) — the service's third SDK touch-point | Verify a peer `ManifestEnvelope` before reading the AID or endpoint out of it. |
+| `aitp.verify_revocation_list(envelope, expected_issuer_aid, …)` | `agents/base/revocation_refresh.py` (`refresh_revocations()`) | Verify a signed revocation snapshot against the pinned issuer AID before any entry is applied (RFC-AITP-0008 §1.5). See "The revocation snapshot has one ingest" below. |
 | `aitp.verify_delegation_multihop(token, aid, max_hops, revoked_jtis)` | `aitp_server.py` (`/aitp/delegation/redeem`) | RFC-AITP-0011 multi-hop delegation verify (replaces `verify_delegation` when enabled). `revoked_jtis` is consulted once for the root voucher's `src_jti` and once per hop (RFC-AITP-0011 §6). |
-| `aitp.AitpAgent.generate(suite=…)` + `agent.build_manifest(...)` | `aitp_server.py` (`/admin/rotate-keys`) | RFC-AITP-0007 key rotation — fresh keypair + republished manifest. |
+| `aitp.AitpAgent.generate(suite=…)` + `agent.build_manifest(...)` | `aitp_server.py` (`/admin/rotate-keys`) | Key rotation — fresh keypair + republished manifest (RFC-AITP-0003 §8, Manifest Rotation). |
 | `aitp.compute_spki_hash(der)` + `aitp.SpkiPinVerifier(...)` | engine (`spki_pin_check` step) | SPKI client-cert pin computation + verification. |
 
 Everything else is HTTP plumbing or telemetry. The boundary is: **nothing
@@ -83,6 +94,8 @@ first or the value is not load-bearing:
   (`refresh_revocations()` in `agents/base/revocation_refresh.py`).
 
 Parsing is not the property that matters; *deciding* is.
+
+### Revocation snapshot ingest
 
 **The revocation snapshot has one ingest, and it verifies.** The snapshot
 served at `/.well-known/aitp-revocation-list` is fetched and checked in exactly
@@ -106,6 +119,8 @@ verify: nothing in `src/` called it, and two ingest paths for the same signed
 artifact is the condition that let the signature-blind version survive in the
 first place. If service-side code ever needs the deny-set, it goes through the
 verifying path — it does not grow a second one.
+
+### Peer manifest signatures
 
 Peer **manifest signatures** were the same shape of gap and are now checked at
 all three sites that ingest one: the handshake (`/admin/initiate-handshake`),
@@ -143,8 +158,10 @@ Each agent's keypair is derived from a deterministic seed:
 seed_hex = SHA256("<org>:<run_id>:<agent_id>")    # hosting/identity.py
 ```
 
-- Same run + same agent_id → same AID across restarts. This is the
-  reason scenarios can re-run cleanly and tests can assert on AIDs.
+- Same run + same agent_id → same AID, so an agent re-spawned within a run
+  keeps its identity. `run_id` is a fresh UUID for every `POST /runs`, so
+  AIDs differ between runs — the seed is deterministic per run, not stable
+  across runs.
 - `org: external` agents are derived under a separate namespace, so
   cross-org scenarios produce AIDs that genuinely look like they come
   from a different org.
@@ -169,10 +186,12 @@ The playground only fishes `offered_capabilities`, `handshake_endpoint`,
 ## Peer discovery (`TrustOrchestrator.resolve_peers`)
 
 Resolves `{agent_id: {manifest_url, did, source?}}` based on the
-scenario's `spec.trust.discovery`. The discovery models themselves
-(`did:web`, registry lookup) are described in the spec's
-[discovery guide](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/discovery.md);
-the `cp_registry` request/response contract is the CP's
+scenario's `spec.trust.discovery`. The spec's
+[discovery guide](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/discovery.md)
+covers out-of-band configuration, DNS SRV and registries; the `did:web`
+resolution below (a DID document carrying an `AitpManifest` service entry) is
+the **playground's own convention**, not something the spec defines. The
+`cp_registry` request/response contract is the CP's
 [integration-playground.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/integration-playground.md).
 What follows is how the playground *applies* them:
 
@@ -197,8 +216,11 @@ For agents marked `org: external`:
 1. Query `GET <CP_BASE_URL>/api/registry/agents?capability=<hint>` where
    the hint is the first workflow capability the runner sees for that
    agent.
-2. If the CP responds with anything, take the first result's
-   `handshake_endpoint` and derive the manifest URL.
+2. If the CP responds with anything, the orchestrator tries the first result's
+   `handshake_endpoint` to derive the manifest URL (today the CP spells the key
+   `handshakeEndpoint`, so it falls back to the local address while still
+   tagging the peer `source: "cp_registry"` — see the caveat in
+   [control-plane.md § Discovery](control-plane.md#discovery-cp_registry)).
 3. If the CP is disabled, empty, or fails, fall back to localhost
    (`source: "static_fallback"`).
 
@@ -226,17 +248,20 @@ Initiator (caller)                                Responder (callee)
                                                   (stash responder under sid)
   commit = session.process_hello_ack(ack, sid)
   POST /aitp/handshake/commit (commit) ───────►   responder.process_commit(commit)
-                                                  → (final_ack, tct_token)
+                                                  → (final_ack, completed JSON)
                                                   emit handshake.complete (responder)
                                        ◄──────── 200 final_ack
-  tct_token = session.complete(final_ack)
-  held_tcts[peer_port] = tct_token
+  completed = session.complete(final_ack)   # JSON {"tct", "grant_voucher"}
+  held_tcts[peer_port] = completed["tct"]
+  held_vouchers[peer_port] = completed["grant_voucher"]  # if present
   emit handshake.complete (initiator)
 ```
 
-Only the **initiator** receives a TCT it can present back to the
-responder. To run the reverse direction the runner triggers
-`/admin/initiate-handshake` on the other agent. The
+Under `aitp/0.2` the responder's `process_commit` also returns a TCT (the one
+its peer issued it), but the worker only reports it in `handshake.complete`
+(`role="responder"`) — it never lands in `held_tcts`. In practice each agent
+holds the TCT for the direction **it initiated**. To get the reverse
+direction the runner triggers `/admin/initiate-handshake` on the other agent. The
 `_establish_pairwise_trust` helper does both directions for every pair
 when `spec.trust.eager: true`.
 
@@ -274,7 +299,7 @@ def verify_capability_tct(self, tct_token, required_grant):
 Four checks before/inside the SDK call:
 
 1. **Local revocation short-circuit** (playground choice). The spec
-   ([RFC-AITP-0008](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md))
+   ([RFC-AITP-0008 §3.3, revocation lookup ordering](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md))
    places the revocation check *after* signature verification so a forged
    jti can't probe the deny set. The demo checks first — every jti in our
    deny set was observed via a prior handshake, so the early-out is safe
@@ -301,7 +326,7 @@ Four checks before/inside the SDK call:
    The signature check against the issuer key derived from `iss` is the
    security gate. The two verification models (holder-receipt vs
    presented-TCT) and what the audience asserts are documented in
-   [sdk-python.md § TCT verification](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#tct-verification-rfc-aitp-0005-9)
+   [sdk-python.md § TCT verification](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#tct-verification-rfc-aitp-0005-72)
    and [RFC-AITP-0005](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0005-tct.md).
    When the wheel exposes `aitp.TctStore`, the same call routes through
    `verify_tct_cached` so repeated verifications hit the cache.
@@ -312,9 +337,12 @@ malformed token) are reported distinctly so debugging is easier.
 ## Held TCTs
 
 Each agent process holds a dict `held_tcts: {peer_port: tct_token}`
-(compact-JWS strings) populated by `/admin/initiate-handshake` and by
-`/admin/redeem-delegation`. The map is module-scoped — all requests
-in this process see the same set.
+(compact-JWS strings) populated by `/admin/initiate-handshake`,
+`/admin/renew-tct` and `/admin/redeem-delegation`. A sibling map,
+`held_vouchers: {peer_port: grant_voucher}`, keeps the **grant voucher**
+the SDK returns next to each TCT (`{"tct", "grant_voucher"}`) — it is what
+`/admin/delegate` builds a delegation from. Both maps are module-scoped — all
+requests in this process see the same set.
 
 `/admin/invoke` looks up `held_tcts[peer_port]` and attaches it as
 `X-AITP-TCT` on the request to `/capabilities/<name>`. If the held
@@ -333,12 +361,11 @@ Single-hop delegation flow:
 
 ```
 delegator (researcher)            delegatee (sub-researcher)        verifier (writer)
-  holds TCT_AB issued by                                            
-  writer for {write.content}                                        
+  holds TCT_AB + grant voucher                                      
+  issued by writer for {write.content}                              
   /admin/delegate                                                   
-    build_delegation(TCT_AB,                                        
-      sub.aid, sub.public_key,                                      
-      scope=[write.content], ttl)                                   
+    build_delegation(voucher_AB,                                    
+      sub.aid, scope=[write.content], ttl)                          
     → DelegationToken (DT)                                          
   ── returns DT ──►          (DT in hand)
                               /admin/redeem-delegation              
@@ -356,12 +383,20 @@ delegator (researcher)            delegatee (sub-researcher)        verifier (wr
 
 Playground-relevant notes (the SDK enforces the rules; the playground just
 sequences the calls):
-- `/admin/delegate` feeds the delegator's *held* TCT into
-  `build_delegation`; the SDK rejects a `scope` wider than that TCT's
-  grants, so a scenario can only narrow.
-- `/aitp/delegation/redeem` only issues if the presenting party matches
-  the token's `delegator` — an agent can't redeem a chain it never
-  authored.
+- `/admin/delegate` feeds the delegator's *held grant voucher* (not the TCT)
+  into `build_delegation`, and a 412 means no voucher is held for that peer;
+  the SDK rejects a `scope` wider than the voucher's grants, so a scenario can
+  only narrow. The delegatee's key binding is derived from its AID, so no
+  public key is passed.
+- `/aitp/delegation/redeem` only issues if *this* agent is the token's
+  original grantor (the SDK's `verify_delegation(token, my_aid, …)` check) — an
+  agent can't redeem a chain it never authored. It performs **no
+  proof-of-possession challenge**, which RFC-AITP-0006 §4 step 9 requires; the
+  handler marks this a demo simplification (the issued TCT is bound to the
+  delegatee's key, so replaying a stolen token only yields a TCT the thief
+  cannot present). The RFC lets an implementation skip the exchange only with
+  an equivalent channel binding, and requires it to document that posture —
+  do not copy this shortcut into a real resource server.
 - The redeemed TCT lands in the delegatee's `held_tcts[target_port]`, so
   the next `/admin/invoke` from delegatee → target presents it
   automatically.
@@ -393,13 +428,18 @@ whose outcome depends on the CP-derived deny-set — the final 403 comes from th
 issuer's *local* set. See
 [control-plane.md](control-plane.md#cp-backed-workflow-steps).
 
-## Post-v0.1 experimental surfaces
+## Draft and extension surfaces
 
-These surfaces ship **by default** on the published `aitp-sdk` wheel
-(since 0.4.0); each is still probed and reported by `GET /capabilities`,
-and scenarios degrade cleanly when an older or `--no-default-features`
-wheel lacks one ([capabilities.md](capabilities.md)). The SDK mechanics
-for all of these are in
+These are optional SDK features rather than part of the minimal handshake/TCT
+path. Some ride on core RFCs (OIDC identity, manifest rotation, the TCT
+verification cache); others are outside the v0.2 core conformance set — the RFC
+index marks [RFC-AITP-0010 and 0011 as Draft/opt-in and 0013 as Planned](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/README.md).
+The published `aitp-sdk` wheel enables all of them by default (feature flags:
+[aitp-py README § Cargo features](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/README.md#cargo-features));
+each is still
+probed and reported by `GET /capabilities`, and scenarios degrade cleanly when
+a wheel lacks one ([capabilities.md](capabilities.md)). The SDK mechanics for
+all of these are in
 [sdk-python.md § Additional capabilities](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#additional-capabilities-on-by-default);
 below is only **what the playground wires up** and **which scenario shows
 it**.
@@ -407,11 +447,11 @@ it**.
 | Surface | Playground wiring (the part that's ours) | Scenario | Spec |
 | --- | --- | --- | --- |
 | **OIDC identity** | The engine mints a per-run **mock OIDC issuer** (`trust/oidc_issuer.py`) and threads its key material through every bootstrap; OIDC agents sign via an `oidc_mint_jwt` callback, pinned-key agents still get a `JwksProvider` to verify OIDC peers. Real deployments swap in an external IdP. | `intra-org/oidc-identity` (+ `p256-suite` template) | [RFC-AITP-0002](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0002-identity.md) · [sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#oidc-identity-rfc-aitp-0002) |
-| **Key rotation** | `/admin/rotate-keys` regenerates the key + republishes the manifest; `verify_capability_tct`'s **issuer-AID guard** then rejects TCTs minted under the old AID before the SDK is consulted. | `intra-org/key-rotation` | [RFC-AITP-0007](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0007-key-resolution.md) |
+| **Key rotation** | `/admin/rotate-keys` regenerates the key + republishes the manifest; `verify_capability_tct`'s **issuer-AID guard** then rejects TCTs minted under the old AID before the SDK is consulted. | `intra-org/key-rotation` | [RFC-AITP-0003 §8 (Manifest Rotation)](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0003-manifest.md) · [operational guidance](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/operational-guidance.md) |
 | **TCT renewal** | Holder's `/admin/renew-tct` → issuer's `/admin/process-renewal`; the holder swaps its held TCT in place. | `intra-org/tct-renewal` | [RFC-AITP-0013](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0013-tct-renewal-extension.md) |
 | **TCT verification cache** | When `aitp.TctStore` exists, `verify_capability_tct` routes through `verify_tct_cached`; `tct_cache_stats` exposes hit/miss counters. | `intra-org/tct-cache-perf` | [RFC-AITP-0005](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0005-tct.md) |
 | **Session bundles** | A coordinator's `/admin/export-session-bundle` packages the TCTs it issued; a verifier's `/admin/verify-session-bundle` returns the `BundleOutcome`. | `intra-org/session-bundle` | [RFC-AITP-0010](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0010-session-trust-bundle.md) |
-| **Multi-hop delegation** | The redeem endpoint swaps `verify_delegation` for `verify_delegation_multihop` when available. | `intra-org/delegation-multihop` | [RFC-AITP-0011](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0011-multihop-delegation.md) |
+| **Multi-hop delegation** | The redeem endpoint swaps `verify_delegation` for `verify_delegation_multihop` when available. (The `delegation-multihop` *scenario* chains single-hop delegations through `/admin/delegate` + `/admin/redeem-delegation`; it does not encode an RFC-AITP-0011 `chain` in the token.) | `intra-org/delegation-multihop` | [RFC-AITP-0011](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0011-multihop-delegation.md) |
 | **SPKI pinning** | A pure-SDK `spki_pin_check` step — no agent involved. | `intra-org/spki-pinning` | [sdk-python.md § SPKI cert pinning](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#spki-cert-pinning-hpkp-style-feature-spki-pinning) |
 
 ## What you can ignore (boundary check)
@@ -431,10 +471,15 @@ should be doing it instead:
   wrapped-form revocation signing input survived a full release across this
   family before 0.5.0. `tests/unit/test_revocation_signing_convention.py`
   therefore verifies with `cryptography` plus an independent RFC 8785
-  canonicalizer vendored in `tests/unit/_jcs_reference.py`. The oracle has to
+  canonicalizer vendored in `tests/unit/_jcs_reference.py`. The same carve-out
+  covers `tests/unit/test_tct_claim_shape_convention.py` (which **mints** TCTs
+  with `cryptography` and verifies them with the wheel, to pin the claim
+  shapes against a non-wheel minter) and
+  `tests/unit/test_pinned_key_proof_convention.py`. The oracle has to
   be independent of the artifact under test. Do not "fix" that into
   circularity.
-- Build any AITP message by hand.
+- Build any AITP message by hand in `src/` or `agents/` (the test oracles
+  above are the only exception).
 - Track handshake state across multiple requests (the responder map
   in `AitpServer._sessions` is keyed by `session_id` from the SDK,
   not state we own).

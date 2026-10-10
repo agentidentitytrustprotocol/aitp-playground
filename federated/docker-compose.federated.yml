@@ -19,9 +19,10 @@ name: aitp-federated
 
 x-playground: &playground
   build:
-    # Grandparent (the agentIdenitytrustprotocol/ dir) so the sibling aitp-rs/
-    # SDK source is in the build context. This compose file lives one level
-    # deeper than the repo root, hence ../.. rather than ..
+    # Grandparent (the agentIdenitytrustprotocol/ dir) as context: the Dockerfile
+    # copies `aitp-playground/...` paths relative to it (and the opt-in
+    # AITP_SDK_SOURCE=path build needs the sibling aitp-rs/). This compose file
+    # lives one level deeper than the repo root, hence ../.. rather than ..
     context: ../..
     dockerfile: aitp-playground/Dockerfile
   image: aitp-playground:federated

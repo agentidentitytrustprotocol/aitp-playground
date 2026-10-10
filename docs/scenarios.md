@@ -25,10 +25,8 @@ scenarios/
 │   │   │       ├── trust-strict.yaml
 │   │   │       └── revoking.yaml
 │   │   └── 1.1.0/scenario.yaml
-│   ├── scoped-capabilities/1.0.0/scenario.yaml
-│   ├── delegation-chain/1.0.0/scenario.yaml
-│   ├── revocation-demo/1.0.0/scenario.yaml
-│   └── trust-gate/1.0.0/scenario.yaml
+│   ├── oidc-identity/1.0.0/          # scenario.yaml + templates/p256-suite.yaml
+│   └── …                              # one directory per scenario — see the table below
 ├── cross-cloud/
 │   ├── pack.yaml
 │   └── distributed-review/1.0.0/scenario.yaml
@@ -36,6 +34,9 @@ scenarios/
     ├── pack.yaml
     └── federated-analysis/1.0.0/scenario.yaml
 ```
+
+The tree above is representative, not exhaustive: `scenarios/` is the source of
+truth, and [Scenarios in the box](#scenarios-in-the-box) lists every one.
 
 Loader rules (`registry/loader.py`):
 - Directories starting with `_` are ignored at the pack level — that's
@@ -105,7 +106,7 @@ spec:
 `identity_type: oidc` builds the manifest with an OIDC identity hint and
 makes the agent mint ID tokens via the per-run mock issuer at handshake
 time — see `intra-org/oidc-identity` and
-[aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces).
+[aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces).
 `signing_suite: p256` selects the ECDSA suite instead of Ed25519.
 
 Key behaviors:
@@ -196,28 +197,31 @@ A step's `type` defaults sensibly when omitted:
 | `handshake` | `initiator`, `responder`, optional `requested_grants` | Runs one direction of the AITP handshake. **Does not** auto-mirror. |
 | `capability_call_no_trust` | `agent`, `target_agent`, `capability`, optional `expect_status` | POST directly to the target's `/capabilities/<name>` with no TCT — used to observe the 403. |
 | `capability_probe` | `agent`, `target_agent`, `capability`, optional `expect_status` | Invoke via `/admin/invoke` and inspect the returned status; doesn't fail the run on a non-2xx. |
-| `delegate` | `delegator`, `delegatee`, `via_peer`, `scope`, optional `ttl_secs` | `delegator` issues a `DelegationToken` to `delegatee` using the TCT it received from `via_peer`. |
+| `delegate` | `delegator`, `delegatee`, `via_peer`, `scope`, optional `ttl_secs` | `delegator` issues a `DelegationToken` to `delegatee`, built from the most recent grant voucher it holds for `via_peer` (from their handshake, a renewal or a redemption). |
 | `redeem_delegation` | `delegatee`, `target`, `via_delegation` | `delegatee` POSTs the prior step's token to `target`'s `/aitp/delegation/redeem`; receives a fresh TCT bound to its own key. |
-| `revoke_tct` | `issuer`, `audience`, optional `via_cp`, optional `reason` | Walks the event log to find the most recent TCT `issuer` granted to `audience`, then POSTs its jti to `issuer`'s `/admin/revoke-tct`. When `via_cp: true`, also POSTs the jti to the CP's `/api/revocation/entries` and asks the audience to pull the updated list from `/.well-known/aitp-revocation-list` (the CP signs it; the audience verifies that signature against the pinned `CP_AID` before applying any entry) — see `intra-org/revocation-via-cp`. |
+| `revoke_tct` | `issuer`, `audience`, optional `via_cp`, optional `reason` | Walks the event log to find the most recent TCT `issuer` granted to `audience`, then POSTs its jti to `issuer`'s `/admin/revoke-tct`. When `via_cp: true`, also POSTs the jti to the CP's `/api/revocation/entries` and asks the audience to pull the updated list from `/.well-known/aitp-revocation-list` (the CP signs it; the audience verifies it against the pinned `CP_AID` before applying any entry — see [control-plane.md](control-plane.md#cp-backed-workflow-steps)) — see `intra-org/revocation-via-cp`. |
 | `rotate_keys` | `agent` | The named agent replaces its keypair, rebuilds its manifest under the new AID, and clears in-flight handshake sessions. Subsequent capability calls that present TCTs issued under the old AID are rejected by `verify_capability_tct`'s issuer-AID guard — see `intra-org/key-rotation`. |
 | `enroll_with_cp` | `agent` | The named agent posts its current manifest to the Control Plane's `/api/registry/enroll` to mint a one-time bearer token, then re-posts to `/api/registry/agents` with that token to register. When `CP_BASE_URL` is unset the step skips. See `intra-org/external-enrollment`. |
-| `cp_subscribe_webhook` | optional `events` | Register a webhook on the Control Plane whose URL points back at this run's `POST /webhooks/cp/{run_id}` receiver. CP returns the webhook id and a secret; the playground stores the secret on the run record so subsequent deliveries can be HMAC-verified (`X-Aitp-Signature: sha256=<hex>`). `events: []` (or omitted) subscribes to every deliverable CP type. When `CP_BASE_URL` is unset the step skips. See `intra-org/webhook-subscription`. |
-| `renew_tct` | `agent` (holder), `via_peer` (issuer) | RFC-AITP-0013 in-band TCT renewal. Holder POSTs to its own `/admin/renew-tct` with the issuer's port; the holder calls `AitpAgent.build_renewal_request` against its held TCT, hands the request to the issuer's `/admin/process-renewal`, which calls `process_renewal_request` and returns a fresh `TctEnvelope`. The holder swaps its held TCT in-place. Requires the SDK's `tct_renewal` feature (shipped by default since `aitp-sdk` 0.4.0; probed via `GET /capabilities`). See `intra-org/tct-renewal`. |
+| `cp_subscribe_webhook` | optional `events` | Register a webhook on the Control Plane whose URL points back at this run's `POST /webhooks/cp/{run_id}` receiver. CP returns the webhook id and a secret; the playground stores the secret on the run record so subsequent deliveries can be HMAC-verified (`X-Aitp-Signature`; receiver contract in [control-plane.md](control-plane.md#webhooks-reverse-fan-out), the CP's sending side in its [api.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md#webhooks)). `events: []` (or omitted) subscribes to every deliverable CP type. When `CP_BASE_URL` is unset the step skips. See `intra-org/webhook-subscription`. |
+| `renew_tct` | `agent` (holder), `via_peer` (issuer), optional `new_ttl_secs` | RFC-AITP-0013 in-band TCT renewal. Holder POSTs to its own `/admin/renew-tct` with the issuer's port; the holder calls `AitpAgent.build_renewal_request` against its held TCT, hands the request to the issuer's `/admin/process-renewal`, which calls `process_renewal_request` and returns a fresh `TctEnvelope`. The holder swaps its held TCT in-place. Requires the SDK's `tct_renewal` feature (shipped by default since `aitp-sdk` 0.4.0; probed via `GET /capabilities`). See `intra-org/tct-renewal`. |
 | `export_session_bundle` | `coordinator`, `participants` | RFC-AITP-0010 session-bundle issuance. The coordinator (responder side of prior handshakes) packages the TCTs it has issued to each participant into a `SessionBundleEnvelope` signed under its own key. Output includes `bundle_envelope` for downstream `verify_session_bundle` steps. Requires the `session_bundle` feature (default since 0.4.0). See `intra-org/session-bundle`. |
 | `verify_session_bundle` | `verifier`, `via_step` | Verify a previously-exported bundle. The verifier's `/admin/verify-session-bundle` calls the SDK's `verify_session_bundle` and returns a `BundleOutcome` (`{kind: clear|degraded, active_aids, dropped_aids}`). Requires the `session_bundle` feature. |
 | `spki_pin_check` | `cert_der_b64`, `pins`, optional `expect_status` | Pure-SDK exercise of `compute_spki_hash` + `SpkiPinVerifier`. Computes the SHA-256 over the given leaf cert's `SubjectPublicKeyInfo` and asserts `is_pinned` matches `expect_status` (`1` = pin must match, `0` = must not match). Requires the `spki_pinning` feature (default since 0.4.0). See `intra-org/spki-pinning`. |
 | `tct_cache_stats` | `agent` | Read the named agent's TCT verification-cache counters (`{enabled, hits, misses, size}`) and emit `tct.cache.stats`. Pair with repeated capability calls to show hot-path cache hits. Requires the SDK's `TctStore` (`tct_cache` feature). See `intra-org/tct-cache-perf`. |
 | `cp_provision_trust_anchor` | `agent`, optional `namespace`, optional `issuer_url` | Push the agent's pinned Ed25519 key (and, when `issuer_url` is set, an OIDC issuer trust anchor) to the Control Plane under `namespace` (defaults to the pack slug), then reads both back. When `CP_BASE_URL` is unset the step skips. See `intra-org/cp-trust-anchor-provisioning`. |
 | `cp_delegation_tree` | `agent` | Flush the run's events to the CP (awaiting the ingest so the projection is populated mid-run), then walk the named delegator's delegation chain as the Control Plane observed it (`GET /api/delegations` with a recursive `root_jti` query) and emit `cp.delegation.tree`. When `CP_BASE_URL` is unset the step skips. See `intra-org/cp-delegation-tree`. |
-| `meta` | — | No-op; records `step.skipped`. |
+| _(implicit `meta`)_ | — | Not a writable `type`: a step that omits `type` and lacks either `agent` or `capability` is classified as `meta`, is skipped, and records `step.skipped` (useful for narration). Writing `type: meta` explicitly fails validation. |
 
 ### Fault injection
 
-Any `handshake`, `workflow`, or `capability_probe` step can carry a
-`fault:` block. The runner mutates the call's target before issuing it
+Only `handshake`, `workflow`, and `capability_probe` steps can carry a
+`fault:` block (on other step types a fault is not applied: `delegate` /
+`redeem_delegation` record a "fault … is not supported" error outcome, and the
+rest fail to resolve a target peer). For the supported types the runner mutates
+the call's target before issuing it
 so the step exercises a failure path, and records the outcome as
 `{fault_injected: true, kind, target, error}` in step_outputs without
-raising the run — downstream steps can branch on the result.
+raising the run (supported types) — downstream steps can branch on the result.
 
 ```yaml
 - id: doomed_call
@@ -234,7 +238,7 @@ Supported `fault.kind` values:
 
 | Kind | What it does |
 | --- | --- |
-| `manifest_404` | Rewrites the targeted peer's manifest URL to a path that 404s. Use to demonstrate "peer is unreachable for discovery" on a handshake or delegate step. |
+| `manifest_404` | Rewrites the targeted peer's manifest URL to a path that 404s. Use to demonstrate "peer is unreachable for discovery" on a handshake or workflow step. |
 | `peer_offline` | Rewrites the targeted peer's port to a closed port. Use to demonstrate transport-level connection failures on handshake or workflow steps. |
 
 See `intra-org/fault-injection` for a worked example. New events:
@@ -437,10 +441,10 @@ a contributor task, with its own recipe in the repo's contributor docs.
 | `intra-org/trust-gate@1.0.0` | A capability call with no TCT is rejected; then it succeeds after handshake. |
 | `intra-org/scoped-capabilities@1.0.0` | Grant intersection — TCT scoped to one of two offered caps. |
 | `intra-org/revocation-demo@1.0.0` | RFC-AITP-0008: revoke a TCT's jti; subsequent calls 403. |
-| `intra-org/revocation-via-cp@1.0.0` | RFC-AITP-0008 federation: revocation *data* propagates through the CP's `/.well-known/aitp-revocation-list` to an unrelated peer. The snapshot is signature-verified against the pinned `CP_AID` before any entry is applied. One caveat remains, in the scenario's own summary: the final 403 comes from the issuer's local deny-set, not the CP-derived one — so propagation is shown, enforcement-from-propagation is not. |
+| `intra-org/revocation-via-cp@1.0.0` | RFC-AITP-0008 federation: revocation *data* propagates through the CP's `/.well-known/aitp-revocation-list` to an unrelated peer. The snapshot is verified before any entry is applied ([how](aitp-integration.md#revocation-snapshot-ingest)). One caveat remains, in the scenario's own summary: the final 403 comes from the issuer's local deny-set, not the CP-derived one — so propagation is shown, enforcement-from-propagation is not. |
 | `intra-org/delegation-chain@1.0.0` | RFC-AITP-0006: single-hop delegation + redeem. |
-| `intra-org/delegation-multihop@1.0.0` | RFC-AITP-0011: two-hop chain (researcher → sub-researcher → analyst). |
-| `intra-org/key-rotation@1.0.0` | RFC-AITP-0007: writer rotates keys; pre-rotation TCTs become invalid. |
+| `intra-org/delegation-multihop@1.0.0` | Two chained single-hop delegations (researcher → sub-researcher → analyst), each redeemed at the writer, which enforces the revocation deny-set and freshness before minting each TCT. The chain lives in the TCT identities, not in an encoded `chain` claim. |
+| `intra-org/key-rotation@1.0.0` | RFC-AITP-0003 §8 (Manifest Rotation): writer rotates keys; pre-rotation TCTs become invalid. |
 | `intra-org/fault-injection@1.0.0` | Operator-injected `manifest_404` and `peer_offline` faults; run continues with structured failure outcomes. |
 | `intra-org/external-enrollment@1.0.0` | Agent self-enrolls via `POST /api/registry/enroll` then `POST /api/registry/agents` with the issued bearer token. |
 | `intra-org/webhook-subscription@1.0.0` | Playground registers a CP webhook and CP fans `handshake.complete` / other audit events back via `POST /webhooks/cp/{run_id}`; inspect deliveries with `GET /runs/{id}/cp-deliveries`. |

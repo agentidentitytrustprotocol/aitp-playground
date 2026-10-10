@@ -8,12 +8,13 @@ dependencies = [
   # NOTE: depend on "aitp-sdk", NOT "aitp" — the latter is an unrelated
   # placeholder package on PyPI that pip would otherwise pull in (the SDK was
   # renamed aitp -> aitp-sdk).
-  # It is the Rust-backed wheel compiled from the sibling
-  # ../aitp-rs/bindings/aitp-py via `maturin develop` (native) or built into
-  # the Docker image (and also published to PyPI as aitp-sdk). For full
-  # scenario coverage, build the wheel with experimental features
-  # (`maturin ... --features experimental`); the service detects what's
-  # available at runtime via GET /capabilities.
+  # It is the Rust-backed wheel from the sibling ../aitp-rs/bindings/aitp-py,
+  # published to PyPI as aitp-sdk and installed from there by default (the
+  # Docker image does the same; AITP_SDK_SOURCE=path compiles the sibling
+  # source instead). The optional capabilities (renewal, session bundles,
+  # SPKI pinning, multi-hop delegation) are default-on cargo features of the
+  # published wheel; the service detects what's available at runtime via
+  # GET /capabilities.
   # The floor records wire compatibility, not "the newest we happened to test".
   # Five breaking changes and one routine adoption are behind it:
   #   0.3.0 — the compact-JWS SDK (protocol `aitp/0.2`). The pre-0.3 wheels
@@ -34,14 +35,16 @@ dependencies = [
   #     `verify_manifest_json` failures carry a typed `.code` (agent_admin.py
   #     classifies it; a missing code on an older wheel reports every failure
   #     as `unknown`), and `verify_delegation`/`verify_delegation_multihop`
-  #     take a deny-set parameter (aitp_server.py:576-593; an older wheel
+  #     take a deny-set parameter (the delegation redeem handler in
+  #     aitp_server.py; an older wheel
   #     raises TypeError, turned into a 503 rather than a silent downgrade).
   #   0.11.0 — the pinned-key identity proof's timestamp encoding changed from
   #     an 8-byte big-endian integer to base-10 ASCII decimal (RFC-AITP-0002
   #     §3.1 erratum, spec issue #17). A HELLO/HELLO_ACK pinned-key proof
   #     minted by <=0.10.x does not verify under >=0.11.0 and vice versa;
   #     aitp-rs implements no dual-accept. This repo's DEFAULT identity_type is
-  #     "pinned_key" (bootstrap.py:34, registry/models.py:242), so this is the
+  #     "pinned_key" (the default in agents/base/bootstrap.py and the registry's
+  #     identity model), so this is the
   #     handshake path, not an edge case — and <=0.10.x never interoperated
   #     with aitp-verifier-py on it at all, which has always used the
   #     ASCII-decimal form. A mixed-version pair fails as handshake.failed with

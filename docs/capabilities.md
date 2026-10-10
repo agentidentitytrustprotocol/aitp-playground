@@ -2,7 +2,7 @@
 
 The `aitp` wheel (PyPI distribution `aitp-sdk`) ships a **core** surface
 (identity, handshake, TCT verify, delegation, revocation) plus several
-post-v0.1 surfaces — renewal, session bundles, SPKI pinning, the TCT
+draft and extension surfaces — renewal, session bundles, SPKI pinning, the TCT
 verification cache, multi-hop delegation verification. Since `aitp-sdk`
 0.4.0 **all of these ship by default** on the published wheel; only an
 older 0.3.x wheel or a custom `--no-default-features` build omits some.
@@ -50,7 +50,7 @@ curl -s http://localhost:8000/capabilities | jq .
 ```json
 {
   "sdk_available": true,
-  "version": "0.4.0",
+  "version": "0.13.2",
   "features": {
     "oidc": true,
     "session_bundle": true,
@@ -62,7 +62,7 @@ curl -s http://localhost:8000/capabilities | jq .
 }
 ```
 
-`version` comes from `aitp.__version__` if present, otherwise the installed
+`version` (yours will differ — it is whatever `uv.lock` resolved) comes from `aitp.__version__` if present, otherwise the installed
 distribution metadata for `aitp-sdk` (falling back to a bare `aitp` dist) —
 the compiled wheel doesn't always set `__version__`.
 
@@ -73,9 +73,10 @@ Nothing special: the PyPI wheel is feature-complete. `uv sync` installs
 (`maturin develop --release` in `aitp-rs/bindings/aitp-py`) compiles the
 same defaults. A slimmed-down wheel only appears if someone builds with
 `--no-default-features` — the probe above is what keeps that (or an old
-0.3.x wheel) from crashing scenarios. The Docker build compiles the wheel
-from the sibling `aitp-rs` source; its `INSTALL_EXTRAS` wiring is in
-[docker.md](docker.md).
+0.3.x wheel) from crashing scenarios. The Docker build installs the same
+lock-pinned PyPI wheel by default (`AITP_SDK_SOURCE=pypi`); compiling the
+sibling `aitp-rs` source is opt-in (`AITP_SDK_SOURCE=path`). The Dockerfile
+wiring is in [docker.md](docker.md).
 The Cargo feature gates and what each one turns on are documented by the
 SDK itself —
 [aitp-rs · sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build)
@@ -101,7 +102,7 @@ The feature-gated step types and their scenarios:
 | `spki_pinning` | `spki_pin_check` | `intra-org/spki-pinning` |
 | `multihop_delegation` | `delegate` / `redeem_delegation` (2-hop) | `intra-org/delegation-multihop` |
 
-See [aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces)
+See [aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces)
 for where each SDK surface is actually called.
 
 ## Conformance harness
@@ -120,11 +121,11 @@ Run it from the CLI:
 ```bash
 uv run python -m aitp_playground.cli conformance
 # Conformance corpus: /…/agentidentitytrustprotocol/schemas/conformance
-#   installed SDK: aitp 0.4.0
-#   fixtures: 53  (required for v0.1: 1)
-#   by RFC:   {'RFC-AITP-0001': 3, 'RFC-AITP-0004': 11, 'RFC-AITP-0005': 10, ...}
-#   by tier:  {'core': 46, 'draft': 7}
-#   wheel readiness: {'available': 7, 'core': 46}
+#   installed SDK: aitp 0.13.2
+#   fixtures: 72  (required for v0.1: 1)
+#   by RFC:   {'RFC-AITP-0001': 5, 'RFC-AITP-0004': 11, 'RFC-AITP-0005': 12, ...}
+#   by tier:  {'core': 62, 'draft': 10}
+#   wheel readiness: {'available': 10, 'core': 62}
 #   ok  fixture metadata valid
 
 uv run python -m aitp_playground.cli conformance --json          # raw report
@@ -152,6 +153,6 @@ Each fixture carries metadata (`id`, `rfc`, `status`, `required_for_v0_1`,
 ## Where to read next
 
 - What each SDK feature actually does → [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md)
-- How each post-v0.1 surface is wired in the playground → [aitp-integration.md](aitp-integration.md#post-v01-experimental-surfaces)
+- How each draft/extension surface is wired in the playground → [aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces)
 - Which scenario demonstrates each feature → [scenarios.md](scenarios.md#scenarios-in-the-box)
-- Building the wheel in Docker → [docker.md](docker.md)
+- Which SDK the Docker image contains (PyPI wheel vs sibling source) → [docker.md](docker.md)

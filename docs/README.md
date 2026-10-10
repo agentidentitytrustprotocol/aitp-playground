@@ -14,7 +14,7 @@ below.
 | [getting-started.md](getting-started.md) | You're cloning the repo and need it running locally — install, env, endpoints, CLI, and the development & testing workflow (test tiers, ruff, CI). |
 | [docker.md](docker.md) | You'd rather run it in Docker than install Python locally, or you're debugging the compose stack. |
 | [scenarios.md](scenarios.md) | You want to author a new scenario, or understand the YAML schema. |
-| [aitp-integration.md](aitp-integration.md) | You want to know where the SDK is called, how identity/handshake/TCT/revocation work end-to-end, and the post-v0.1 surfaces (OIDC, renewal, bundles, pinning, multi-hop). |
+| [aitp-integration.md](aitp-integration.md) | You want to know where the SDK is called, how identity/handshake/TCT/revocation work end-to-end, and the draft/extension surfaces (OIDC, renewal, bundles, pinning, multi-hop). |
 | [observability.md](observability.md) | You want events, the SSE stream, narration, Prometheus metrics, the dashboard, or run persistence. |
 | [control-plane.md](control-plane.md) | You're wiring the optional Control Plane — discovery, enrollment, revocation, webhooks, trust anchors, observability proxies. |
 | [capabilities.md](capabilities.md) | You want to know which SDK features the installed wheel exposes, how scenarios degrade, and the conformance harness. |
@@ -31,8 +31,8 @@ the project, so they're excluded from the published site:
 | [runner.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/runner.md) | You're working on the engine — step types, execution model, trust scoping, event stream. |
 | [agents.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/agents.md) | You're changing an agent worker, adding a new framework, or wiring a new capability. |
 | [llm-providers.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/llm-providers.md) | You're adding a new LLM provider, or changing how one of the builder functions works. |
-| [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md) | You're changing the Dockerfile's stages, the build context, or `.dockerignore` — build internals, not how to run the image (see [docs/docker.md](docker.md) for that). |
-| [testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md) | You're changing which tests run when — CI gating, the `uv.lock` trigger for the e2e job, coverage floors. |
+| [docker.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/docker.md) | You're changing the Dockerfile's stages, the build context, or `Dockerfile.dockerignore` — build internals, not how to run the image (see [docs/docker.md](docker.md) for that). |
+| [testing.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/internal_docs/testing.md) | You're changing which tests run when — CI gating, the `uv.lock` / Docker-stack triggers for the e2e job, coverage floors. |
 
 ## External references (the source of truth lives elsewhere)
 
@@ -48,8 +48,10 @@ sibling wins.
 | --- | --- |
 | The protocol itself (normative) | [AITP RFC index](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/README.md) — handshake (0004), identity (0002), manifest (0003), TCT (0005), delegation (0006), key resolution (0007), revocation (0008), session bundle (0010), multi-hop (0011), renewal (0013) |
 | Consuming a peer-issued TCT; reading order for building a peer | [Integration Guide](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/integration-guide.md) · [Implementer Quickstart](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/implementer-quickstart.md) · [Glossary](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/GLOSSARY.md) |
+| Which repo does what across the whole ecosystem | [Ecosystem map](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/ecosystem.md) |
 | The `aitp` Python SDK API the agents call | [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md) — every call, with RFC sections and feature flags |
 | SDK conformance status | [aitp-rs · conformance.md § v0.2 conformance matrix](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/conformance.md#v02-conformance-matrix) |
+| The independent verifier whose JCS canonicalizer the tests vendor as an oracle | [aitp-verifier-py](https://github.com/agentidentitytrustprotocol/aitp-verifier-py) |
 | The Control Plane HTTP API, events, data model | [aitp-control-plane · docs](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/README.md) — [api.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md) · [events.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/events.md) · [integration contract](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/integration-playground.md) |
 
 ## Conventions
