@@ -11,9 +11,9 @@
 |---|-------|---------------|--------|
 | 1 | Versions, build, CI, Docker facts | Opus | DONE (2 rounds) |
 | 2 | aitp-integration.md accuracy + de-dup | Opus | DONE (3 rounds) |
-| 3 | control-plane.md vs live CP | Opus | TODO |
-| 4 | architecture/scenarios/observability/README | Opus | TODO |
-| 5 | federated README + link sweep | Opus | TODO |
+| 3 | control-plane.md vs live CP | Opus | DONE (2 rounds) |
+| 4 | architecture/scenarios/observability/README | Opus | DONE (2 rounds) |
+| 5 | federated README + link sweep | Opus | DONE (1 round) |
 
 ## Repo map
 
@@ -35,3 +35,5 @@
 - PR strategy: one PR (docs-only, single repo, no natural seams). Risk tiers: P1–P5 all `simple`; gates batched (P1+P2), (P3+P4), (P5 + finalization).
 - Branch `docs/sync-2026-10` created off main @ 035c75b.
 - P1+P2 batch gate: round 1 GAPS (env_file claim, CI ordering wording, stale 'first build slow' lines; core-RFC mislabel, OIDC signer contradiction, revocation_refresh importer, rotation link); round 2 P1 PASS / P2 GAPS (OIDC signer file); fixed. Link checker (scratchpad) 0 unresolved; guard tests + 627 unit/scenario tests pass. Verifier: Opus. Files: README.md, docs/{README,aitp-integration,architecture,capabilities,docker,getting-started,scenarios}.md, pyproject.toml (comments), scenarios/intra-org/key-rotation scenario.yaml, CLAUDE.md (local only).
+- P3+P4 batch gate: round 1 GAPS (POST/GET registry wording, leftover revocation prose, CP api.md section links, fault wording, env vars undocumented); round 2 (with P5 + cumulative) all PASS. Divergence: revocation narrative canonical in aitp-integration.md. Final gate: cumulative PASS (no cross-file contradictions, no leftover post-v0.1, link checker 0 unresolved, ruff clean, 627 unit+scenario tests pass). Nits fixed: fault wording, architecture link parenthesis. Files: docs/{control-plane,aitp-integration,architecture,scenarios,observability,getting-started,README}.md, README.md, federated/{README.md,gen-ca.sh,Caddyfile.org-b,docker-compose.federated.yml} (comments only).
+- ASSUMPTIONS.md: nothing new logged (no one-way doors; nothing UNCONFIRMED for this plan). /reconcile: nothing to reconcile.

@@ -95,6 +95,8 @@ first or the value is not load-bearing:
 
 Parsing is not the property that matters; *deciding* is.
 
+### Revocation snapshot ingest
+
 **The revocation snapshot has one ingest, and it verifies.** The snapshot
 served at `/.well-known/aitp-revocation-list` is fetched and checked in exactly
 one place — `refresh_revocations()` in `agents/base/revocation_refresh.py`.
@@ -117,6 +119,8 @@ verify: nothing in `src/` called it, and two ingest paths for the same signed
 artifact is the condition that let the signature-blind version survive in the
 first place. If service-side code ever needs the deny-set, it goes through the
 verifying path — it does not grow a second one.
+
+### Peer manifest signatures
 
 Peer **manifest signatures** were the same shape of gap and are now checked at
 all three sites that ingest one: the handshake (`/admin/initiate-handshake`),
@@ -212,8 +216,11 @@ For agents marked `org: external`:
 1. Query `GET <CP_BASE_URL>/api/registry/agents?capability=<hint>` where
    the hint is the first workflow capability the runner sees for that
    agent.
-2. If the CP responds with anything, take the first result's
-   `handshake_endpoint` and derive the manifest URL.
+2. If the CP responds with anything, the orchestrator tries the first result's
+   `handshake_endpoint` to derive the manifest URL (today the CP spells the key
+   `handshakeEndpoint`, so it falls back to the local address while still
+   tagging the peer `source: "cp_registry"` — see the caveat in
+   [control-plane.md § Discovery](control-plane.md#discovery-cp_registry)).
 3. If the CP is disabled, empty, or fails, fall back to localhost
    (`source: "static_fallback"`).
 

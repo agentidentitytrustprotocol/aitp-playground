@@ -1,7 +1,8 @@
 # TLS terminator for org-B. Real https on the org-B domain, backed by the
 # local test CA (federated/certs). Agent-facing paths go to the hosted agent's
 # pinned port (9100); anything else falls through to the playground control API
-# (8000) — unused cross-domain but harmless.
+# (8000) — unused cross-domain, but note it exposes the control routes
+# (e.g. /hosted-agents) on this TLS origin: fine for a test stack only.
 {
 	auto_https off
 }

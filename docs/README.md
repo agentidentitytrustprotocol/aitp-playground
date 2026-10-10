@@ -48,8 +48,10 @@ sibling wins.
 | --- | --- |
 | The protocol itself (normative) | [AITP RFC index](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/README.md) — handshake (0004), identity (0002), manifest (0003), TCT (0005), delegation (0006), key resolution (0007), revocation (0008), session bundle (0010), multi-hop (0011), renewal (0013) |
 | Consuming a peer-issued TCT; reading order for building a peer | [Integration Guide](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/integration-guide.md) · [Implementer Quickstart](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/implementer-quickstart.md) · [Glossary](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/GLOSSARY.md) |
+| Which repo does what across the whole ecosystem | [Ecosystem map](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/docs/ecosystem.md) |
 | The `aitp` Python SDK API the agents call | [aitp-rs · sdk-python.md](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md) — every call, with RFC sections and feature flags |
 | SDK conformance status | [aitp-rs · conformance.md § v0.2 conformance matrix](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/conformance.md#v02-conformance-matrix) |
+| The independent verifier whose JCS canonicalizer the tests vendor as an oracle | [aitp-verifier-py](https://github.com/agentidentitytrustprotocol/aitp-verifier-py) |
 | The Control Plane HTTP API, events, data model | [aitp-control-plane · docs](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/README.md) — [api.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md) · [events.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/events.md) · [integration contract](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/integration-playground.md) |
 
 ## Conventions

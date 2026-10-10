@@ -45,8 +45,9 @@ EOF
   rm -f "$d.csr" "$d.ext"
 done
 
-# Concatenate our CA onto the system bundle so services trust both public CAs
-# (for anything else they reach) and our test CA.
+# Concatenate our CA onto the host's system bundle (present on macOS) so the
+# services trust both public CAs and our test CA. Without /etc/ssl/cert.pem the
+# bundle is the test CA alone, which replaces the container's system trust.
 if [ -f /etc/ssl/cert.pem ]; then
   cat /etc/ssl/cert.pem rootCA.pem > ca-bundle.pem
 else

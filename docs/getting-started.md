@@ -175,7 +175,7 @@ curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
 | `GET  /packs` | List loaded scenario packs |
 | `GET  /scenarios` | List all scenarios with refs |
 | `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed (+ template list) |
-| `POST /runs` | Start a run (async; returns run_id immediately). Body accepts `template` to run a variant. |
+| `POST /runs` | Start a run (async; returns run_id immediately). Body accepts `template` to run a variant and an optional free-form `run_label` (echoed back in the create/list/get responses). |
 | `GET  /runs` | List recent runs (in-memory by default; `RUN_HISTORY_DB` makes them durable) |
 | `GET  /runs/{id}` | Full run record incl. outputs and events |
 | `GET  /runs/{id}/status` | Just status + event count |

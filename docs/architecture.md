@@ -113,12 +113,18 @@ large scenarios. The registry is read-only at runtime; set
   `AGENT_BASE_PORT` (default 8100). Honors `port_offset` on each agent
   spec; falls back to monotonic allocation on collision.
 - `identity.py` — derives a deterministic 32-byte seed from
-  `(org, run_id, agent_id)`. Same scenario → same AIDs across runs.
+  `(org, run_id, agent_id)`. `run_id` is a fresh UUID per run, so AIDs are stable
+  within a run (an agent re-spawned mid-run keeps its identity) but differ
+  between runs.
   Cross-org scenarios mark agents `org: external` so their AIDs land in
   a separate namespace.
 - `bootstrap.py` — writes a per-agent JSON file containing seed, port,
   peer placeholders, telemetry URL, and scenario inputs. The agent
-  process reads `AITP_BOOTSTRAP_FILE` to find it.
+  process reads `AITP_BOOTSTRAP_FILE` to find it. The adapter also injects
+  `AGENT_PORT` (the port the agent must bind) and passes the service's own
+  environment through to the subprocess — which is why LLM keys must be
+  *exported*, not just present in `.env` (see
+  [getting-started.md](getting-started.md#configure)).
 - `adapters/` — `PythonAgentAdapter` is the only adapter today; it's
   registered once per framework (`crewai`, `langchain`, `langgraph`,
   `custom`). Adapter responsibilities: validate the manifest, build the
@@ -190,7 +196,11 @@ Per worker the layout is identical:
 3. `AitpServer` mounts the AITP protocol routes.
 4. `build_admin_router()` mounts the `/admin` routes used by the runner.
 5. The worker registers its `/capabilities/<name>` handlers and starts
-   uvicorn. The lifespan emits `AITP_AGENT_READY` once the port is bound.
+   through `run_agent()` (`agents/base/aitp_server.py`), which binds and
+   listens on the socket *before* uvicorn starts. The lifespan then runs a
+   startup revocation refresh and prints `AITP_AGENT_READY` — so a slow Control
+   Plane delays readiness, but the supervisor never dials a port that isn't
+   listening yet.
 
 Adding a new worker (or a new capability to an existing one) is a
 contributor task — the step-by-step recipe lives in the repo's contributor
@@ -216,8 +226,26 @@ routes of its own. All six routes live under the `/hosted-agents` prefix:
 - `POST /hosted-agents/{hosted_id}/invoke` — invoke a capability on a peer
   using the TCT this hosted agent obtained during the handshake.
 
-This is what the Level 1 / Level 2 federated e2e stack (`federated/`) drives
-against two real origins; the intra-org `/runs` flow never touches it.
+Status codes: `400` invalid request or a non-`did:web` peer; `404` unknown
+hosted id; `409` the peer resolved to a loopback origin (unless
+`AITP_FEDERATION_ALLOW_LOOPBACK` is set — tests only) or its origin doesn't
+match the DID host; `502` spawn, `did:web` resolution, handshake or invoke
+failed. These routes raise plain FastAPI errors (`{"detail": "..."}`), unlike
+the envelope below.
+
+This is what the Level 1 / Level 2 federated e2e stack
+[`federated/`](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/federated/README.md)
+(compose files, certs, test knobs)
+drives against two real origins; the intra-org `/runs` flow never touches it.
+
+## Errors
+
+Service-level failures return `{"error": {"code", "message"}}` with codes
+`scenario_not_found` (404), `agent_manifest_not_found` (404),
+`run_not_found` (404), `registry_validation_error` (422),
+`agent_spawn_error` (500) and the `internal_error` (500) default
+(`src/aitp_playground/errors.py`). `/hosted-agents` and the webhook receiver
+instead raise FastAPI `HTTPException`s with a `{"detail": ...}` body.
 
 ## Data flow for one capability call
 
