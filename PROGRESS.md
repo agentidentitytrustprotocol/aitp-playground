@@ -39,3 +39,4 @@
 - ASSUMPTIONS.md: nothing new logged (no one-way doors; nothing UNCONFIRMED for this plan). /reconcile: nothing to reconcile.
 - ship: rebased on origin/main (aitp 0.13.2 bump #87), capabilities example refreshed to 0.13.2; ship-gate verifier PASS (Opus); ruff, 627 unit+scenario, AITP_E2E runner+federated (4), link check all green.
 - pushed docs/sync-2026-10 fa5efe9
+- PR #88 opened: https://github.com/agentidentitytrustprotocol/aitp-playground/pull/88
