@@ -111,6 +111,13 @@ class WorkflowStep(BaseModel):
     # (the original behavior) still works without a CP configured.
     via_cp: Optional[bool] = None
     reason: Optional[str] = None              # reason string passed to CP
+    # With ``via_cp: true``, ``local_revoke: false`` skips the issuer's own
+    # /admin/revoke-tct, so the CP snapshot is the only source of the entry.
+    # ``refresh_agents`` names who pulls the snapshot afterwards (default:
+    # the audience). Together they show a CP entry deciding an outcome on
+    # its own — see `intra-org/revocation-cp-only`.
+    local_revoke: Optional[bool] = None
+    refresh_agents: Optional[list[str]] = None
     # delegate:
     delegator: Optional[str] = None
     delegatee: Optional[str] = None

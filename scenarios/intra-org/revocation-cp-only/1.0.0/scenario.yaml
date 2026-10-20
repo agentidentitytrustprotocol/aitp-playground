@@ -1,0 +1,110 @@
+apiVersion: aitp.dev/v1
+kind: ScenarioVersion
+metadata:
+  pack: intra-org
+  scenario: revocation-cp-only
+  version: 1.0.0
+  name: CP-only Revocation Refuses a Redemption (RFC-AITP-0008)
+  summary: >
+    What `revocation-via-cp` cannot show: a Control Plane revocation
+    entry, on its own, deciding an outcome.
+
+    Writer issues researcher a TCT; researcher delegates it to
+    sub-researcher twice. The first delegation redeems at the writer (the
+    control: without it, a blanket-reject bug would pass). The source TCT's
+    jti is then published to the CP's /api/revocation/entries ONLY: the
+    writer never revokes it locally. The writer pulls the CP's signed
+    /.well-known/aitp-revocation-list, verifies it against the pinned
+    CP_AID, and the second redemption is refused with a 403 whose reason
+    names the source as `cp-snapshot`, not `local`.
+
+    Redemption is where this is load-bearing: it mints a fresh TCT for a
+    third party, so a revoked grant must stop minting (RFC-AITP-0006 §4
+    step 7). On the capability path a CP entry only changes a 403's wording.
+
+    Needs a CP and CP_AID. Without a CP the revoke step records
+    `step.skipped` and the final redemption's expectation fails to match
+    (`matched: false`) — visibly, not silently. Prod-safe: every agent, TCT
+    and jti here is minted by this run and lives only for it; no LLM calls.
+  tags: [revocation, rfc-0008, rfc-0006, control-plane, delegation, intra-org]
+
+spec:
+  inputs:
+    schema:
+      type: object
+      properties:
+        topic:
+          type: string
+          default: "AI agent trust"
+      required: [topic]
+
+  agents:
+    - id: researcher
+      ref: _shared/agents/researcher
+      port_offset: 0
+    - id: writer
+      ref: _shared/agents/writer
+      port_offset: 1
+    - id: sub-researcher
+      ref: _shared/agents/researcher
+      port_offset: 2
+
+  trust:
+    boundary: intra_org
+    discovery: static
+    eager: false
+
+  workflow:
+    steps:
+      - id: trust_researcher_writer
+        type: handshake
+        initiator: researcher
+        responder: writer
+        description: Writer issues researcher a TCT granting write.content.
+
+      - id: delegate_control
+        type: delegate
+        delegator: researcher
+        delegatee: sub-researcher
+        via_peer: writer
+        scope: [write.content]
+        ttl_secs: 600
+
+      - id: redeem_control
+        type: redeem_delegation
+        delegatee: sub-researcher
+        target: writer
+        via_delegation: delegate_control
+        expect_status: 200
+        description: Control — nothing is revoked yet, so the writer mints.
+
+      - id: delegate_after
+        type: delegate
+        delegator: researcher
+        delegatee: sub-researcher
+        via_peer: writer
+        scope: [write.content]
+        ttl_secs: 600
+        description: A second delegation rooted in the same source TCT.
+
+      - id: revoke_via_cp_only
+        type: revoke_tct
+        issuer: writer
+        audience: researcher
+        via_cp: true
+        local_revoke: false
+        refresh_agents: [writer]
+        reason: "cp-only-revocation-demo"
+        description: >
+          Publish the source TCT's jti to the CP and nowhere else. The writer
+          (the grantor, who will be asked to redeem) refreshes its snapshot.
+
+      - id: redeem_refused
+        type: redeem_delegation
+        delegatee: sub-researcher
+        target: writer
+        via_delegation: delegate_after
+        expect_status: 403
+        description: >
+          The writer refuses: its only knowledge of the revocation is the
+          verified CP snapshot, and the 403 says so (`cp-snapshot`).

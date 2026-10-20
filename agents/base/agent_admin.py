@@ -698,7 +698,16 @@ def build_admin_router(
                     "issuer_manifests": issuer_manifests,
                 },
             )
-            r.raise_for_status()
+        if r.status_code in (401, 403):
+            # The grantor refused (revoked source, bad chain, ...). Relay its
+            # status and reason so the caller can tell a refusal from a
+            # transport failure — a bare raise_for_status() made both a 500.
+            try:
+                reason = r.json().get("error") or r.text
+            except (ValueError, AttributeError):
+                reason = r.text
+            raise HTTPException(status_code=r.status_code, detail=reason)
+        r.raise_for_status()
         # Peer returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``: a
         # fresh TCT bound to our key, plus a voucher so we can re-delegate.
         try:

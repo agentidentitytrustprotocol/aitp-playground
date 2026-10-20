@@ -95,7 +95,7 @@ swallowed rather than failing the run):
 | `handshake.started` | — | A responder accepts a hello. |
 | `handshake.complete` | — | Initiator or responder closes the 4-message exchange. |
 | `handshake.failed` | `error` | Bad hello or commit. |
-| `delegation.issued` / `delegation.rejected` / `delegation.redeemed` | — | RFC-AITP-0006 flow milestones. |
+| `delegation.issued` / `delegation.rejected` / `delegation.redeemed` | — | RFC-AITP-0006 flow milestones. A `delegation.rejected` caused by a revoked source TCT carries `cause` `revoked_local` or `revoked_cp_snapshot`. |
 | `trust.peers_pinned` | `added`, `total` | `/admin/trust-peers` changed this agent's handshake trust store. |
 | `tct.revoked` | — | `/admin/revoke-tct` adds a jti. |
 | `identity.key.rotated` | `old_aid`, `new_aid` | `/admin/rotate-keys` replaces this agent's keypair. |
