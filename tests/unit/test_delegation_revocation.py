@@ -173,7 +173,35 @@ def test_a_cp_snapshot_entry_is_enough_to_refuse() -> None:
     )
     assert not state.is_locally_revoked(_src_jti(token))
 
-    assert _redeem(client, token, issuer).status_code == 403
+    resp = _redeem(client, token, issuer)
+    assert resp.status_code == 403
+    # The refusal names its source: a CP entry, not our own revocation.
+    assert "source revoked (cp-snapshot)" in resp.text, resp.text
+    assert _src_jti(token) in resp.text
+
+
+def test_a_local_revocation_is_named_local_at_redeem() -> None:
+    """The other half of the source label, so neither can be hardcoded."""
+    state = RevocationState()
+    server, manifest = _server(state)
+    token, issuer = _delegation_for(server, manifest)
+    state.revoke_local(_src_jti(token))
+
+    resp = _redeem(_client(server), token, issuer)
+    assert resp.status_code == 403
+    assert "source revoked (local)" in resp.text, resp.text
+
+
+def test_a_refusal_not_about_revocation_names_no_source() -> None:
+    """The label is only added when the source jti really is denied."""
+    state = RevocationState()
+    server, manifest = _server(state)
+    token, _issuer = _delegation_for(server, manifest)
+    _other, other_issuer = _delegation_for(server, manifest)
+
+    resp = _redeem(_client(server), token, other_issuer)
+    assert resp.status_code == 403
+    assert "source revoked" not in resp.text, resp.text
 
 
 def test_an_unrelated_revoked_jti_does_not_block_redemption() -> None:
@@ -211,6 +239,7 @@ def test_a_revoked_redemption_is_reported_as_a_rejection() -> None:
     rejected = [f for name, f in events if name == "delegation.rejected"]
     assert rejected, f"no delegation.rejected event; saw {[n for n, _ in events]}"
     assert "revoked" in rejected[0]["error"].lower()
+    assert rejected[0]["cause"] == "revoked_local"
 
 
 # --- Phase 7: rejection branches this file's harness reaches but never tested ---

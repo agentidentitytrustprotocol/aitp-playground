@@ -862,6 +862,113 @@ async def test_revoke_tct_via_cp_publishes_and_refreshes_audience(agent_http) ->
     assert refresh["cp_base_url"] == "http://cp.test"
 
 
+async def test_revoke_tct_cp_only_skips_the_issuer_and_refreshes_named_agents(
+    agent_http,
+) -> None:
+    """`local_revoke: false`: the CP entry is the only source, and the agents
+    in `refresh_agents` (not the audience) are the ones that pull it."""
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"]},
+        cp=FakeCp(enabled=True),
+        steps=[{"id": "rev", "type": "revoke_tct", "issuer": "bob",
+                "audience": "alice", "via_cp": True, "local_revoke": False,
+                "refresh_agents": ["bob"]}],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+    assert "/admin/revoke-tct" not in agent_http.paths()
+    assert env.cp.revocations == [("jti-9500", "step rev")]
+    refreshes = [
+        r.url.port for r in agent_http.requests
+        if r.url.path == "/admin/refresh-revocations"
+    ]
+    assert refreshes == [9501]  # bob only
+    out = result.outputs["rev"]
+    assert out["local_revoke"] is False
+    assert out["refreshed"] == {"bob": 2}
+    assert out["audience_revoked_count"] == 0
+
+
+async def test_revoke_tct_cp_only_without_a_cp_is_skipped(agent_http) -> None:
+    """Nowhere to revoke: say so, rather than quietly revoking locally."""
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"]},
+        steps=[{"id": "rev", "type": "revoke_tct", "issuer": "bob",
+                "audience": "alice", "via_cp": True, "local_revoke": False}],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+    assert result.outputs["rev"] == {"revoked_jti": "jti-9500", "skipped": "no cp"}
+    assert "/admin/revoke-tct" not in agent_http.paths()
+    assert "step.skipped" in _event_types(result)
+
+
+async def test_revoke_tct_local_revoke_false_needs_via_cp(agent_http) -> None:
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"]},
+        steps=[{"id": "rev", "type": "revoke_tct", "issuer": "bob",
+                "audience": "alice", "local_revoke": False}],
+    )
+    result = await _run(env)
+    assert result.status == "failed"
+    assert "local_revoke: false needs via_cp: true" in result.error
+
+
+async def test_redeem_with_expect_status_records_a_refusal(agent_http) -> None:
+    """Probe mode: the grantor's 403 is the expected outcome, not a crash."""
+    agent_http.overrides["/admin/redeem-delegation"] = lambda _r: httpx.Response(
+        403, json={"detail": "delegation rejected: x (source revoked (cp-snapshot))"},
+    )
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"], "carol": ["cap.c"]},
+        steps=[
+            {"id": "del", "type": "delegate", "delegator": "alice",
+             "delegatee": "carol", "via_peer": "bob", "scope": ["cap.b"]},
+            {"id": "redeem", "type": "redeem_delegation", "delegatee": "carol",
+             "target": "bob", "via_delegation": "del", "expect_status": 403},
+        ],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+    out = result.outputs["redeem"]
+    assert out["status_code"] == 403
+    assert out["rejected"] is True and out["matched"] is True
+    assert "cp-snapshot" in out["body"]["detail"]
+
+
+async def test_redeem_with_expect_status_flags_an_unexpected_success(agent_http) -> None:
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"], "carol": ["cap.c"]},
+        steps=[
+            {"id": "del", "type": "delegate", "delegator": "alice",
+             "delegatee": "carol", "via_peer": "bob", "scope": ["cap.b"]},
+            {"id": "redeem", "type": "redeem_delegation", "delegatee": "carol",
+             "target": "bob", "via_delegation": "del", "expect_status": 403},
+        ],
+    )
+    result = await _run(env)
+    out = result.outputs["redeem"]
+    assert out["status_code"] == 200
+    assert out["matched"] is False and out["rejected"] is False
+
+
+async def test_redeem_refusal_without_expect_status_still_fails_the_run(agent_http) -> None:
+    agent_http.overrides["/admin/redeem-delegation"] = lambda _r: httpx.Response(
+        403, json={"detail": "nope"},
+    )
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"], "carol": ["cap.c"]},
+        steps=[
+            {"id": "del", "type": "delegate", "delegator": "alice",
+             "delegatee": "carol", "via_peer": "bob", "scope": ["cap.b"]},
+            {"id": "redeem", "type": "redeem_delegation", "delegatee": "carol",
+             "target": "bob", "via_delegation": "del"},
+        ],
+    )
+    result = await _run(env)
+    assert result.status == "failed"
+
+
 async def test_revoke_tct_without_prior_handshake_fails(agent_http) -> None:
     env = make_env(
         agents={"alice": ["cap.a"], "bob": ["cap.b"]}, eager=False,

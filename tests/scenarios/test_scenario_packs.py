@@ -36,7 +36,7 @@ _AGENT_ID_FIELDS = (
     "issuer",
     "audience",
 )
-_AGENT_ID_LIST_FIELDS = ("participants",)
+_AGENT_ID_LIST_FIELDS = ("participants", "refresh_agents")
 
 # Step fields whose value is the id of another step in the same workflow.
 _STEP_REF_FIELDS = ("input_from", "via_step", "via_delegation")

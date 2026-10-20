@@ -220,3 +220,42 @@ def test_verify_session_bundle_without_a_coordinator_manifest_is_400() -> None:
     )
     assert resp.status_code == 400, resp.text
     assert "coordinator_manifest_url" in resp.text
+
+
+# --- redeem-delegation: the grantor's refusal is relayed, not made a 500 ---
+
+
+def test_a_grantor_refusing_a_redemption_is_relayed_as_its_403(monkeypatch) -> None:
+    """A refusal and a transport failure are different facts; the caller
+    (and the `redeem_delegation` probe) needs the grantor's own status and
+    reason, e.g. that a CP snapshot revoked the source TCT."""
+    grantor = aitp.AitpAgent.generate()
+    grantor_manifest = grantor.build_manifest(
+        "g", "http://g/aitp/handshake/hello", ["x"],
+    )
+    reason = "delegation rejected: … (source revoked (cp-snapshot): src_jti=j)"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=grantor_manifest)
+        return httpx.Response(403, json={"error": reason})
+
+    monkeypatch.setattr(
+        agent_admin, "httpx",
+        types.SimpleNamespace(
+            AsyncClient=lambda *_a, **_k: httpx.AsyncClient(
+                transport=httpx.MockTransport(handler),
+            ),
+            HTTPError=httpx.HTTPError,
+        ),
+    )
+    app, _agent = _app()
+    resp = _client(app).post("/admin/redeem-delegation", json={
+        "redeem_url": "http://g/aitp/delegation/redeem",
+        "delegation_token": "a.b.c",
+        "peer_port": 9,
+        "issuer_manifest_urls": ["http://g/.well-known/aitp-manifest"],
+    })
+    assert resp.status_code == 403, resp.text
+    # The grantor's reason, unwrapped — not its JSON body as a string.
+    assert resp.json()["detail"] == reason

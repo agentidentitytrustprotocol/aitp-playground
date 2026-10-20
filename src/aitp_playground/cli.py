@@ -257,6 +257,17 @@ def _lint_scenario(sv, ref_label: str, reg: RegistryService) -> Iterable[str]:
             val = getattr(step, f, None)
             if val and val not in agent_ids:
                 yield f"{ref_label} step {step.id}: {f}={val!r} not in agents {sorted(agent_ids)}"
+        for val in step.refresh_agents or []:
+            if val not in agent_ids:
+                yield (
+                    f"{ref_label} step {step.id}: refresh_agents entry {val!r} "
+                    f"not in agents {sorted(agent_ids)}"
+                )
+        if step.local_revoke is False and not step.via_cp:
+            yield (
+                f"{ref_label} step {step.id}: local_revoke: false needs via_cp: true "
+                f"(otherwise nothing is revoked anywhere)"
+            )
         if step.capability:
             offering = {a for a, caps in offered.items() if step.capability in caps}
             if not offering:

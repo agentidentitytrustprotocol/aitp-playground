@@ -686,11 +686,21 @@ class AitpServer:
                         revoked_jtis=deny_set,
                     )
             except (RuntimeError, ValueError) as exc:
+                # The SDK has decided; this only names the source, as the
+                # capability path does. A CP-derived entry refusing a
+                # redemption is the federation case, and must not read the
+                # same as our own revocation.
+                revoked = self._revoked_source_of(token_json)
+                error = f"delegation rejected: {exc}"
+                if revoked:
+                    source, src_jti = revoked
+                    error += f" (source revoked ({source}): src_jti={src_jti})"
                 await emit_event(
                     "delegation.rejected", self.bootstrap, error=str(exc),
+                    cause=f"revoked_{revoked[0].replace('-', '_')}" if revoked else None,
                 )
                 return Response(
-                    json.dumps({"error": f"delegation rejected: {exc}"}),
+                    json.dumps({"error": error}),
                     status_code=403, media_type="application/json",
                 )
 
@@ -767,6 +777,25 @@ class AitpServer:
             )
 
         return router
+
+    def _revoked_source_of(self, delegation_token: str) -> Optional[tuple[str, str]]:
+        """``(source, src_jti)`` if the delegation's source TCT is in our
+        deny-set — ``source`` is ``"local"`` or ``"cp-snapshot"`` — else
+        ``None``.
+
+        Reads the voucher's ``src_jti`` from *unverified* claims, purely for
+        the 403's wording — the refusal itself was already the SDK's. Any
+        decode failure means "can't say", never an error.
+        """
+        try:
+            voucher = decode_claims(delegation_token).get("voucher", "")
+            src_jti = decode_claims(voucher).get("src_jti", "")
+        except (ValueError, AttributeError):
+            return None
+        if not src_jti or not self.revocation.is_revoked(src_jti):
+            return None
+        source = "local" if self.revocation.is_locally_revoked(src_jti) else "cp-snapshot"
+        return source, src_jti
 
     def verify_capability_tct(self, tct_token: str, required_grant: str) -> "aitp.TctIdentity":
         """Verify the X-AITP-TCT header on an incoming capability call.

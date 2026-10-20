@@ -477,8 +477,27 @@ class ScenarioRunner:
                         "issuer_manifest_urls": prior.get("issuer_manifest_urls", []),
                     },
                 )
-                r.raise_for_status()
-                data = r.json()
+            if step.expect_status is not None:
+                # Probe mode, like `capability_probe`: record the target's
+                # answer rather than failing the run on a refusal. A 2xx
+                # still stores the redeemed TCT (the admin route did that).
+                observed = r.status_code
+                try:
+                    body: Any = r.json()
+                except ValueError:
+                    body = r.text
+                probe = {
+                    "status_code": observed,
+                    "rejected": observed in (401, 403),
+                    "expected_status": step.expect_status,
+                    "matched": observed == step.expect_status,
+                    "body": body,
+                }
+                step_outputs[step.id] = probe
+                ctx.emit(RunEvent(type="step.complete", step_id=step.id, result=probe))
+                return
+            r.raise_for_status()
+            data = r.json()
             data["delegation_chain"] = {
                 "holder": step.delegatee,
                 "issuer": step.target,
@@ -504,16 +523,34 @@ class ScenarioRunner:
                     f"step {step.id}: no prior trust.established event for "
                     f"audience={step.audience} issuer={step.issuer} — handshake first",
                 )
-            issuer_ra = running[step.issuer]
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.post(
-                    f"http://localhost:{issuer_ra.port}/admin/revoke-tct",
-                    json={"jti": jti},
+            local_revoke = step.local_revoke is not False
+            if not local_revoke and not step.via_cp:
+                raise PlaygroundError(
+                    f"step {step.id}: local_revoke: false needs via_cp: true"
                 )
-                r.raise_for_status()
+            if not local_revoke and not self.cp.enabled:
+                # CP-only revocation with no CP: there is nowhere to revoke.
+                # Record that instead of pretending, so a later step's
+                # expectation visibly fails to match.
+                ctx.emit(RunEvent(
+                    type="step.skipped",
+                    step_id=step.id,
+                    notes="CP not configured (CP_BASE_URL unset)",
+                ))
+                step_outputs[step.id] = {"revoked_jti": jti, "skipped": "no cp"}
+                return
+            if local_revoke:
+                issuer_ra = running[step.issuer]
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    r = await client.post(
+                        f"http://localhost:{issuer_ra.port}/admin/revoke-tct",
+                        json={"jti": jti},
+                    )
+                    r.raise_for_status()
 
             published_to_cp = False
             audience_refreshed = 0
+            refreshed: dict[str, int] = {}
             if step.via_cp:
                 # End-to-end revocation: publish the jti to the CP, then
                 # pull the updated revocation list into the audience's
@@ -528,28 +565,32 @@ class ScenarioRunner:
                     step_id=step.id, jti=jti,
                     result={"to_cp": published_to_cp, "reason": step.reason},
                 ))
-                audience_ra = running[step.audience]
                 refresh_body = {
                     "cp_base_url": self.config.cp_base_url,
                     "cp_api_key": self.config.cp_api_key,
                 }
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    rr = await client.post(
-                        f"http://localhost:{audience_ra.port}/admin/refresh-revocations",
-                        json=refresh_body,
+                for agent_id in step.refresh_agents or [step.audience]:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        rr = await client.post(
+                            f"http://localhost:{running[agent_id].port}"
+                            "/admin/refresh-revocations",
+                            json=refresh_body,
+                        )
+                    # Graceful: if an agent can't reach CP, the step still
+                    # records what happened — the test harness will see a
+                    # zero count and can decide whether to fail.
+                    refreshed[agent_id] = (
+                        int(rr.json().get("revoked_count", 0)) if rr.is_success else 0
                     )
-                    # Graceful: if the audience can't reach CP, the step
-                    # still records what happened — the test harness will
-                    # see audience_refreshed=0 and can decide whether to
-                    # fail.
-                    if rr.is_success:
-                        audience_refreshed = int(rr.json().get("revoked_count", 0))
+                audience_refreshed = refreshed.get(step.audience, 0)
 
-            result_payload = {"revoked_jti": jti}
+            result_payload: dict[str, Any] = {"revoked_jti": jti}
             if step.via_cp:
                 result_payload.update({
                     "published_to_cp": published_to_cp,
                     "audience_revoked_count": audience_refreshed,
+                    "local_revoke": local_revoke,
+                    "refreshed": refreshed,
                 })
             step_outputs[step.id] = result_payload
             ctx.emit(RunEvent(

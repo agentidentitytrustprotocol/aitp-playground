@@ -242,6 +242,34 @@ def _check_revocation_via_cp(body: dict) -> None:
     )
 
 
+def _check_revocation_cp_only(body: dict) -> None:
+    """A CP entry alone refuses a redemption. The grantor never revoked the
+    source TCT locally, so the 403 must name `cp-snapshot` — a `local` here
+    would mean the CP path proved nothing."""
+    control = _step(body, "redeem_control")
+    assert control.get("status_code") == 200 and control.get("matched") is True, (
+        f"revocation-cp-only: control redemption should succeed: {control!r}"
+    )
+
+    revoke = _step(body, "revoke_via_cp_only")
+    assert revoke.get("published_to_cp") is True, (
+        f"revocation-cp-only: jti was not published to the CP: {revoke!r}"
+    )
+    assert revoke.get("local_revoke") is False, revoke
+    assert revoke.get("refreshed", {}).get("writer", 0) >= 1, (
+        f"revocation-cp-only: the grantor did not pull the CP snapshot: {revoke!r}"
+    )
+
+    refused = _step(body, "redeem_refused")
+    assert refused.get("status_code") == 403 and refused.get("matched") is True, (
+        f"revocation-cp-only: expected the redemption refused, got {refused!r}"
+    )
+    detail = str((refused.get("body") or {}).get("detail", ""))
+    assert "source revoked (cp-snapshot)" in detail, detail
+    assert "(local)" not in detail, detail
+    assert revoke["revoked_jti"] in detail, detail
+
+
 def _check_delegation_multihop(body: dict) -> None:
     """Two-hop delegation: each delegate step must produce a non-empty
     token, each redeem step must complete, and the terminal capability
@@ -388,6 +416,11 @@ SCENARIOS: list[ProtocolCase] = [
         ref="intra-org/revocation-via-cp@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_revocation_via_cp,
+    ),
+    ProtocolCase(
+        ref="intra-org/revocation-cp-only@1.0.0",
+        inputs={"topic": "AITP self-test"},
+        check=_check_revocation_cp_only,
     ),
     ProtocolCase(
         ref="intra-org/delegation-multihop@1.0.0",
