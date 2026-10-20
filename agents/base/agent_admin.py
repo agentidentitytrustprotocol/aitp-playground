@@ -198,10 +198,33 @@ def build_admin_router(
     if held_vouchers is None:
         held_vouchers = {}
 
-    def _new_session():
+    def _new_session(peer_aid: str):
+        # aitp-sdk >= 0.14: a pinned_key peer must be in the trust store. The
+        # only AID we pin is the one out of the peer Manifest we just
+        # verified, so the session is built after that verification. The
+        # Manifest is self-authenticating to its AID; which AID to expect
+        # comes from the caller-supplied manifest URL (runner or did:web).
         if oidc.enabled:
-            return agent.new_session(jwks=oidc.jwks, trust_anchors=oidc.trust_anchors)
-        return agent.new_session()
+            return agent.new_session(
+                jwks=oidc.jwks, trust_anchors=oidc.trust_anchors,
+                pinned_keys=[peer_aid],
+            )
+        return agent.new_session(pinned_keys=[peer_aid])
+
+    async def _raise_if_peer_refused(r: httpx.Response, step: str) -> None:
+        # A peer's refusal (e.g. "pinned_key not in local trust store") is the
+        # useful part of the failure; a bare raise_for_status() would surface
+        # it as an opaque 500 from this agent.
+        if r.is_success:
+            return
+        await emit_event(
+            "handshake.failed", bootstrap, role="initiator",
+            error=f"peer refused {step} ({r.status_code}): {r.text}",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"peer refused {step} ({r.status_code}): {r.text}",
+        )
 
     @router.post("/initiate-handshake")
     async def initiate_handshake(request: Request) -> dict[str, Any]:
@@ -209,7 +232,6 @@ def build_admin_router(
         peer_manifest_url: str = body["peer_manifest_url"]
         requested_grants: Optional[list[str]] = body.get("requested_grants")
 
-        session = _new_session()
         async with httpx.AsyncClient(timeout=15.0) as client:
             manifest_res = await client.get(peer_manifest_url)
             manifest_res.raise_for_status()
@@ -220,6 +242,7 @@ def build_admin_router(
             peer_manifest = await _verify_peer_manifest(
                 peer_manifest_json, peer_manifest_url, bootstrap
             )
+            session = _new_session(peer_manifest["aid"])
             # Wire field is `offered_capabilities` (see aitp-manifest types).
             offered = list(peer_manifest.get("offered_capabilities", []))
             if requested_grants is None or len(requested_grants) == 0:
@@ -238,7 +261,7 @@ def build_admin_router(
                 content=hello,
                 headers={"Content-Type": "application/json"},
             )
-            r1.raise_for_status()
+            await _raise_if_peer_refused(r1, "hello")
             session_id = r1.headers["x-aitp-session-id"]
 
             commit = session.process_hello_ack(r1.text, session_id)
@@ -251,9 +274,9 @@ def build_admin_router(
                     "X-Aitp-Session-Id": session_id,
                 },
             )
-            r2.raise_for_status()
+            await _raise_if_peer_refused(r2, "commit")
 
-        # v0.2: complete() returns
+        # complete() returns
         # ``{"tct": "<compact JWS>", "grant_voucher": "<compact JWS>"|null}``.
         completed = json.loads(session.complete(r2.text))
         tct_token = completed["tct"]
@@ -478,12 +501,37 @@ def build_admin_router(
         """Verifier side of RFC-AITP-0010. Returns the BundleOutcome dict
         (``{kind, active_aids, dropped_aids}``) from the SDK so the
         playground engine can attach it as the step result.
-        """
-        import aitp
 
+        Body: ``bundle_envelope`` and ``coordinator_manifest_url``. Since
+        aitp-sdk 0.16 the coordinator key comes from the coordinator's
+        verified Manifest (RFC-AITP-0010 §5 step 5); there is no AID-only
+        fallback. We fetch it fresh on every call rather than caching it, so
+        the Manifest-expiry cap on participant TCTs is evaluated against the
+        coordinator's *current* Manifest. A rejected bundle is a 403, a
+        malformed one a 400 — not the bare 500 an uncaught SDK error gave.
+        """
         body = await request.json()
         envelope: str = body["bundle_envelope"]
-        outcome = aitp.verify_session_bundle(envelope, agent.aid)
+        coordinator_manifest_url = body.get("coordinator_manifest_url")
+        if not coordinator_manifest_url:
+            raise HTTPException(
+                status_code=400,
+                detail="coordinator_manifest_url is required to verify a session bundle",
+            )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            mr = await client.get(coordinator_manifest_url)
+            mr.raise_for_status()
+        await _verify_peer_manifest(mr.text, coordinator_manifest_url, bootstrap)
+        try:
+            outcome = aitp.verify_session_bundle(envelope, agent.aid, mr.text)
+        except (RuntimeError, ValueError) as exc:
+            await emit_event(
+                "session.bundle.rejected", bootstrap, error=str(exc),
+            )
+            raise HTTPException(
+                status_code=403 if isinstance(exc, RuntimeError) else 400,
+                detail=f"session bundle rejected: {exc}",
+            ) from exc
         await emit_event(
             "session.bundle.verified", bootstrap,
             kind=outcome.get("kind"),
@@ -494,8 +542,14 @@ def build_admin_router(
     @router.post("/process-renewal")
     async def process_renewal(request: Request) -> Response:
         """Issuer side of TCT renewal. Verifies the renewal request and
-        mints a fresh TctEnvelope JSON. The manifest-expiry bound is
-        derived from this agent's manifest TTL.
+        mints a fresh TctEnvelope JSON.
+
+        The manifest-expiry bound is the ``expires_at`` of the Manifest this
+        agent is serving right now (a renewed TCT must not outlive it), and
+        the revocation deny-set is the same union the capability path
+        enforces. Since aitp-sdk 0.15 the SDK refuses a replayed request
+        and a request whose grants are no longer offered; both are the
+        caller's problem, so they are a 409, not a 500.
         """
         import time
 
@@ -503,11 +557,24 @@ def build_admin_router(
         cfg = bootstrap.get("aitp", {})
         ttl_secs = int(cfg.get("ttl_secs", 3600))
         manifest_exp = int(time.time()) + ttl_secs
+        if manifest_provider is not None:
+            served = json.loads(manifest_provider()).get("manifest", {})
+            served_exp = served.get("expires_at")
+            if isinstance(served_exp, int):
+                manifest_exp = served_exp
         # Returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``; we hand
         # the whole envelope back to the holder, who stores both halves.
-        new_tct_envelope_json = agent.process_renewal_request(
-            request_payload, manifest_exp, ttl_secs,
-        )
+        try:
+            new_tct_envelope_json = agent.process_renewal_request(
+                request_payload, manifest_exp, ttl_secs,
+                revoked_jtis=revocation.effective_jtis,
+            )
+        except (RuntimeError, ValueError) as exc:
+            await emit_event("tct.renewal.rejected", bootstrap, error=str(exc))
+            raise HTTPException(
+                status_code=409 if isinstance(exc, RuntimeError) else 400,
+                detail=f"renewal rejected: {exc}",
+            ) from exc
         new_token = json.loads(new_tct_envelope_json)["tct"]
         claims = decode_claims(new_token)
         await emit_event(
@@ -598,16 +665,38 @@ def build_admin_router(
           - ``delegation_token``: the DelegationEnvelope JSON received from
             the delegator's /admin/delegate response.
           - ``peer_port``: the port we'll use as the key in held_tcts.
+          - ``issuer_manifest_urls``: where to fetch the delegator's Manifest
+            (and, for a chained token, every hop issuer's). The redeemer
+            needs them to verify the token (aitp-sdk >= 0.16), so we fetch,
+            verify and forward them as ``issuer_manifests``.
         """
         body = await request.json()
         redeem_url: str = body["redeem_url"]
         token_json: str = body["delegation_token"]
         peer_port = int(body["peer_port"])
+        issuer_manifest_urls = body.get("issuer_manifest_urls") or []
+        if not issuer_manifest_urls:
+            raise HTTPException(
+                status_code=400,
+                detail="issuer_manifest_urls is required to redeem a delegation",
+            )
 
         async with httpx.AsyncClient(timeout=15.0) as client:
+            issuer_manifests: list[str] = []
+            for url in issuer_manifest_urls:
+                mr = await client.get(url)
+                mr.raise_for_status()
+                # Verifying here is a courtesy (an early, attributable 502);
+                # the redeemer re-verifies each one and checks it designates
+                # the token's issuer, so this is not what makes it safe.
+                await _verify_peer_manifest(mr.text, url, bootstrap)
+                issuer_manifests.append(mr.text)
             r = await client.post(
                 redeem_url,
-                json={"delegation_token": token_json},
+                json={
+                    "delegation_token": token_json,
+                    "issuer_manifests": issuer_manifests,
+                },
             )
             r.raise_for_status()
         # Peer returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``: a

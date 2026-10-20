@@ -169,7 +169,11 @@ keyed by the scenario's `discovery` mode:
 
 The orchestrator only chooses **where** to look. The handshake itself
 is initiated by the runner POSTing `/admin/initiate-handshake` to the
-agent, which uses the SDK.
+agent, which uses the SDK. Before the first handshake the runner POSTs
+every launched agent's AID (read from its `AITP_AGENT_READY` line) to each
+agent's `/admin/trust-peers`, because a responder only admits pinned_key
+peers in its trust store (aitp-sdk >= 0.14). See
+[aitp-integration.md § Trust store](aitp-integration.md#trust-store).
 
 `oidc_issuer.py` mints a per-run mock OIDC issuer (Ed25519 keypair) when a
 scenario contains an `identity_type: oidc` agent. The issuer's private seed
@@ -213,7 +217,7 @@ handshake between agents hosted by two different instances of this service
 scenario where the runner spawns and drives both sides of a handshake itself.
 `api/hosted.py` mounts the routes; `hosting/hosted.py`'s `HostedAgentManager`
 holds the actual lifecycle logic (spawn, track, stop) and registers no
-routes of its own. All six routes live under the `/hosted-agents` prefix:
+routes of its own. All seven routes live under the `/hosted-agents` prefix:
 - `POST /hosted-agents` — spawn a long-lived agent from a scenario ref at
   this service's public origin.
 - `GET  /hosted-agents` — list currently hosted agents.
@@ -223,14 +227,19 @@ routes of its own. All six routes live under the `/hosted-agents` prefix:
   `did:web` (fail-closed: a resolution that lands on a loopback origin is
   refused, so a green test can't be a same-process handshake in disguise)
   and drive this hosted agent's SDK handshake against the resolved peer.
+- `POST /hosted-agents/{hosted_id}/trust-peer` — the responder side of the
+  same: resolve a peer's `did:web` under the same rules, verify the Manifest
+  it points at, and pin the AID it declares in this hosted agent's trust
+  store. A remote org's AID can't be known when the agent is spawned, so this
+  is the explicit operator step; without it the peer's HELLO is refused.
 - `POST /hosted-agents/{hosted_id}/invoke` — invoke a capability on a peer
   using the TCT this hosted agent obtained during the handshake.
 
 Status codes: `400` invalid request or a non-`did:web` peer; `404` unknown
 hosted id; `409` the peer resolved to a loopback origin (unless
 `AITP_FEDERATION_ALLOW_LOOPBACK` is set — tests only) or its origin doesn't
-match the DID host; `502` spawn, `did:web` resolution, handshake or invoke
-failed. These routes raise plain FastAPI errors (`{"detail": "..."}`), unlike
+match the DID host; `502` spawn, `did:web` resolution, Manifest
+verification, trust-peer push, handshake or invoke failed. These routes raise plain FastAPI errors (`{"detail": "..."}`), unlike
 the envelope below.
 
 This is what the Level 1 / Level 2 federated e2e stack

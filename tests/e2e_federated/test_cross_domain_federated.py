@@ -71,6 +71,14 @@ def stack() -> dict:
     _wait_healthy(ORG_B_URL)
     analyzer = _host(ORG_B_URL, "_shared/agents/analyzer")
     researcher = _host(ORG_A_URL, "_shared/agents/researcher")
+    # aitp-sdk >= 0.14: org-B's responder admits only provisioned pinned_key
+    # peers, so org-B pins org-A's AID out of its did:web-resolved Manifest.
+    tp = httpx.post(
+        f"{ORG_B_URL}/hosted-agents/{analyzer['hosted_id']}/trust-peer",
+        json={"peer_did": researcher["did"]},
+        timeout=60.0,
+    )
+    assert tp.status_code == 200, f"trust-peer on org-B: {tp.status_code} {tp.text}"
     try:
         yield {"analyzer": analyzer, "researcher": researcher}
     finally:

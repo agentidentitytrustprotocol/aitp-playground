@@ -506,3 +506,47 @@ don't share an owner or a resolution path.
 
 See `plans/aitp-rs-breaking-changes-adoption.md` Phase 4, `ASSUMPTIONS.md`'s Phase 4
 entry (status `CONFIRMED`), `PENDING.md` P15/P16.
+
+## D-22 — Where the responder trust store comes from (aitp-sdk 0.14+)
+**2026-10-20 · recorded, pending owner review (PR #94, open question 1)**
+
+aitp-sdk 0.14 removed possession-only admission. A responder now admits a
+`pinned_key` initiator only if that AID is in the `pinned_keys` it built the
+session with, and an empty store rejects everyone. Something has to fill the store,
+and the one source that must never fill it is the AID the HELLO itself claims.
+Auto-pinning that would bring back exactly the mode 0.14 removed.
+
+**Chosen:**
+- **Runner-launched agents:** the runner pushes the AIDs of the agents it
+  launched. Each `RunningAgent.aid` comes from the child's `AITP_AGENT_READY`
+  stdout line, the same parent-child pipe the runner already trusts for ports
+  (`engine.py`, `_push_trusted_peers`). After spawning, it POSTs
+  `{"aids": [every other agent], "replace": true}` to each agent's
+  `/admin/trust-peers`. After a `rotate_keys` step it pushes again, using the AID
+  from the agent's own `/admin/rotate-keys` response.
+- **Hosted / federated agents:** an explicit operator step,
+  `POST /hosted-agents/{id}/trust-peer {peer_did}`. It resolves the `did:web`
+  under the same fail-closed rules as `resolve-and-handshake`, verifies the
+  Manifest at the DID's origin, and pins the AID that Manifest declares.
+- **Initiators:** pin the AID of the peer Manifest they just verified. The SDK
+  also refuses a HELLO_ACK signed by anyone else.
+
+**Rejected:** (b) agents pulling the CP's `/api/pinned-keys` for their namespace.
+The service must work without a CP (CLAUDE.md invariant), so this could at most
+be an addition, and it would make CP availability part of handshake admission.
+
+**Two separate sources, on purpose.** The CP pinned-key registry
+(`cp_provision_trust_anchor`: `upsert_pinned_key` / `list_pinned_keys`) is the
+*CP's* trust store, used for CP-side verification of observed artifacts. The
+agents' `trusted_peer_aids` is each agent's handshake admission list. They do not
+read from each other. Each is filled from a verified source: a verified Manifest
+for the CP, the launch pipe or a verified did:web Manifest for agents.
+
+**Known limits:**
+- `/admin/trust-peers` is unauthenticated, like every `/admin` route. That is
+  the loopback-only demo posture, and anyone who can reach `/admin` can already
+  drive the agent. It asks the SDK to validate the new set before adopting it,
+  so a malformed AID is a 400 and leaves the store unchanged.
+- The initiator side is TOFU on the Manifest URL the runner supplied. The
+  Manifest is self-authenticating to its AID, but the URL choice is the
+  runner's.

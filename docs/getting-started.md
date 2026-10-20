@@ -41,7 +41,9 @@ See the comments in `pyproject.toml` for the authoritative story — the floor p
 records every wire-breaking `aitp-sdk` bump with a rationale bullet (from the pre-0.3
 `aitp/0.1` incompatibility through the 0.11.0 pinned-key proof encoding fix, plus routine
 floor tracking). Read `pyproject.toml` directly rather than trusting a version number
-restated here; it drifts. The SDK's own release history is in the
+restated here; it drifts. Since 0.17 the floor is the `aitp/0.3` wire
+protocol, so a control plane you point this at must run aitp >= 0.17 too.
+The SDK's own release history is in the
 [aitp-rs CHANGELOG](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/CHANGELOG.md).
 
 ## Install the service

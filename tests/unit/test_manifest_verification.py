@@ -194,6 +194,31 @@ async def test_verification_failure_emits_a_named_event_distinct_from_expiry(
     assert events[0][1]["source_url"] == "http://peer/m"
 
 
+async def test_an_extra_manifest_member_is_classified_unknown_field(
+    peer: "aitp.AitpAgent", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """aitp-sdk >= 0.15 rejects a member outside the closed Manifest schema
+    with `code="unknown_field"`. The classifier passes the code through, so
+    telemetry names it instead of folding it into `malformed` or `unknown`."""
+    import agent_admin
+
+    events: list[tuple[str, dict]] = []
+
+    async def _capture(event_type, _bootstrap, **fields):
+        events.append((event_type, fields))
+
+    monkeypatch.setattr(agent_admin, "emit_event", _capture)
+
+    envelope = json.loads(_mint(peer))
+    envelope["manifest"]["device_id"] = "phone-77"
+    with pytest.raises(HTTPException) as exc:
+        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+
+    assert exc.value.status_code == 502
+    assert events[0][0] == "manifest.verify_failed"
+    assert events[0][1]["cause"] == "unknown_field"
+
+
 async def test_malformed_input_is_its_own_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     import agent_admin
 

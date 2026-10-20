@@ -237,6 +237,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agentidentitytrustprotocol/aitp-control-plane
+          # TEMPORARY (aitp/0.3 wave 1): the CP's aitp 0.17 branch, because
+          # CP main still speaks aitp/0.2 and there is no dual-accept.
+          # REVERT this line before merging; see PR #94.
+          ref: deps/aitp-0.17.0
           path: aitp-cp
 
       - name: Set up Docker Buildx

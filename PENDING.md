@@ -552,3 +552,36 @@ artifact actually minted by `aitp-control-plane` and confirm it verifies clean u
 successor release's wheel, before merging, not after. If it doesn't, that is a genuine
 cross-repo interop break, not a local bug — file it upstream rather than widening
 `TCT_CLAIMS_MEMBERS` locally or downstream.
+
+## P17 — The handshake routes add no RFC-AITP-0009 §3.1 replay or timestamp check
+**From:** `plans/aitp-rs-0.17-adoption.md` open question 4 · **Blocks:** nothing ·
+**Cost:** a captured HELLO can be replayed to `/aitp/handshake/hello` inside its
+validity window. It only buys the attacker a responder session they cannot complete
+without the initiator's key, but the MUST is unmet.
+
+The binding's `process_hello` / `process_commit` check neither `message_id` reuse
+nor timestamp skew, and the playground routes call them directly. The fix belongs
+in the SDK, or at least in one shared helper. Per spec §5.4.3 any dedup set must
+key on `message_id`, never on the envelope bytes. Out of scope for the 0.17 bump.
+
+## P18 — The SDK `TctStore` caches by a hash of the raw compact-JWS bytes (spec §5.4.3)
+**From:** the aitp/0.3 adoption review (PR #94) · **Blocks:** nothing · **Owner:**
+aitp-rs (`bindings/aitp-py/src/tct.rs`, `tct_token_key`)
+
+RFC-AITP-0001 §5.4.3 (spec `597efbd`): implementations MUST NOT use the raw bytes
+of a signed object, or a hash of them, as its identity for replay detection,
+dedup, caching or audit correlation. `aitp.TctStore` keys its verification cache
+on SHA-256 of the exact compact-JWS string. `AitpServer` uses it on every
+capability call (`verify_tct_cached` in `verify_capability_tct`).
+
+**Why it is not disabled here:** the cache fails safe. A miss (for example, the
+same TCT re-encoded) only costs a full re-verify, and policy (grant, audience,
+expiry, deny-set) is re-checked on every hit; only the signature check is
+skipped. The §5.4.3 malleability argument is about the JCS-profile tag prefix.
+A compact JWS's signature segment is base64url with no tag, so an alternate
+encoding of the same token is a different string that cannot hit a cache entry
+it was not issued for. It is still a literal violation of the MUST, so it is
+recorded here and raised with aitp-rs rather than worked around locally (D-1:
+this repo does not hand-roll verifier logic). **Close when** the SDK keys the
+store on the claims' `jti` and `iss` (or the JWS payload), or when the spec
+carves out a cache-only exception.

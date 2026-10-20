@@ -77,7 +77,9 @@ def _initiator_hello(server: AitpServer, *, grants: list[str] | None = None):
         handshake_endpoint="http://localhost:10/aitp/handshake/hello",
         offered_caps=["demo.read"],
     )
-    session = initiator.new_session()
+    session = initiator.new_session(pinned_keys=[server.agent.aid])
+    # What the runner's /admin/trust-peers push does for a launched peer.
+    server.trusted_peer_aids.add(initiator.aid)
     hello = session.build_hello(server.manifest_json, grants or ["demo.write"])
     return initiator, session, hello
 
@@ -288,3 +290,86 @@ def test_did_web_document_route_absent_without_a_configured_host() -> None:
     server = _server()
     resp = _client(server).get("/.well-known/did.json")
     assert resp.status_code == 404
+
+
+# ── responder trust store (aitp-sdk >= 0.14) ─────────────────────────────
+
+
+def test_hello_route_refuses_an_initiator_outside_the_trust_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine, correctly signed HELLO from an AID nobody pushed is refused.
+    The store is never filled from what a HELLO claims, so this is the
+    fail-closed default the runner's trust-peers push must not erode."""
+    server = _server()
+    events = _events(monkeypatch)
+    initiator, _session, hello = _initiator_hello(server)
+    server.trusted_peer_aids.discard(initiator.aid)  # undo the helper's pin
+
+    resp = _client(server).post("/aitp/handshake/hello", content=hello)
+
+    assert resp.status_code == 400, resp.text
+    assert "trust store" in resp.json()["error"]
+    assert server._sessions == {}
+    assert server.trusted_peer_aids == set(), "a HELLO must never seed the store"
+    assert [e["type"] for e in events if e["type"] == "handshake.started"] == []
+
+
+def test_trust_peers_adds_then_replaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = _server()
+    events = _events(monkeypatch)
+    a, b = aitp.AitpAgent.generate().aid, aitp.AitpAgent.generate().aid
+    client = _client(server)
+
+    resp = client.post("/admin/trust-peers", json={"aids": [a]})
+    assert resp.status_code == 200, resp.text
+    resp = client.post("/admin/trust-peers", json={"aids": [b]})
+    assert resp.json() == {"trusted_peer_aids": sorted([a, b])}
+
+    resp = client.post("/admin/trust-peers", json={"aids": [b], "replace": True})
+    assert resp.json() == {"trusted_peer_aids": [b]}
+    assert server.trusted_peer_aids == {b}
+
+    pinned = [e for e in events if e["type"] == "trust.peers_pinned"]
+    assert [e["total"] for e in pinned] == [1, 2, 1]
+
+
+@pytest.mark.parametrize("body", [
+    {},
+    {"aids": "aid:pubkey:x"},
+    {"aids": [""]},
+    {"aids": ["not-an-aid"]},
+    {"aids": ["aid:pubkey:AAAA"]},
+])
+def test_trust_peers_rejects_bad_input_and_leaves_the_store_alone(body) -> None:
+    server = _server()
+    good = aitp.AitpAgent.generate().aid
+    server.trusted_peer_aids = {good}
+
+    resp = _client(server).post("/admin/trust-peers", json=body)
+
+    assert resp.status_code == 400, resp.text
+    assert server.trusted_peer_aids == {good}
+
+
+def test_an_initiator_refuses_a_hello_ack_from_another_agent() -> None:
+    """The initiator pins the AID from the verified Manifest it dialled. A
+    HELLO_ACK signed by a different agent (here spliced in from a real
+    handshake with that agent) is refused even when that agent is in the
+    initiator's store too: the ACK's identity must be the intended peer's."""
+    initiator, intended, other = (aitp.AitpAgent.generate() for _ in range(3))
+    initiator.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.read"])
+    intended_m = intended.build_manifest("x", "http://x/aitp/handshake/hello", ["demo.write"])
+    other_m = other.build_manifest("y", "http://x/aitp/handshake/hello", ["demo.write"])
+    trusted = [intended.aid, other.aid]
+
+    session = initiator.new_session(pinned_keys=trusted)
+    session.build_hello(intended_m, ["demo.write"])
+
+    decoy = initiator.new_session(pinned_keys=trusted)
+    ack, sid = other.new_responder(pinned_keys=[initiator.aid]).process_hello(
+        decoy.build_hello(other_m, ["demo.write"])
+    )
+
+    with pytest.raises(RuntimeError, match="does not match the intended peer"):
+        session.process_hello_ack(ack, sid)

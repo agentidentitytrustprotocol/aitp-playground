@@ -138,8 +138,8 @@ def test_mint_jwt_for_produces_a_jwt_a_real_handshake_actually_accepts() -> None
     mint_cb = ctx.mint_jwt_for(audience=b.aid, agent=a)
     assert mint_cb is not None
 
-    sess = a.new_session(jwks=ctx.jwks, trust_anchors=ctx.trust_anchors)
-    responder = b.new_responder(jwks=ctx.jwks, trust_anchors=ctx.trust_anchors)
+    sess = a.new_session(jwks=ctx.jwks, trust_anchors=ctx.trust_anchors, pinned_keys=[b.aid])
+    responder = b.new_responder(jwks=ctx.jwks, trust_anchors=ctx.trust_anchors, pinned_keys=[a.aid])
 
     hello = sess.build_hello(b_manifest, ["demo.y"], oidc_mint_jwt=mint_cb)
     ack, session_id = responder.process_hello(hello)
