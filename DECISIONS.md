@@ -508,7 +508,7 @@ See `plans/aitp-rs-breaking-changes-adoption.md` Phase 4, `ASSUMPTIONS.md`'s Pha
 entry (status `CONFIRMED`), `PENDING.md` P15/P16.
 
 ## D-22 — Where the responder trust store comes from (aitp-sdk 0.14+)
-**2026-10-20 · recorded, pending owner review (PR #94, open question 1)**
+**2026-10-20 · recorded, owner-approved as shipped (PR #94, open question 1)**
 
 aitp-sdk 0.14 removed possession-only admission. A responder now admits a
 `pinned_key` initiator only if that AID is in the `pinned_keys` it built the
@@ -543,7 +543,8 @@ read from each other. Each is filled from a verified source: a verified Manifest
 for the CP, the launch pipe or a verified did:web Manifest for agents.
 
 **Known limits:**
-- `/admin/trust-peers` is unauthenticated, like every `/admin` route. That is
+- `/admin/trust-peers` is unauthenticated, like every `/admin` route (tracked in
+  [#95](https://github.com/agentidentitytrustprotocol/aitp-playground/issues/95)). That is
   the loopback-only demo posture, and anyone who can reach `/admin` can already
   drive the agent. It asks the SDK to validate the new set before adopting it,
   so a malformed AID is a 400 and leaves the store unchanged.
