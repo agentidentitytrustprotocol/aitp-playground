@@ -50,7 +50,7 @@ def test_persisted_runs_survive_process_restart(tmp_path: Path) -> None:
         "outputs": {}, "events": [], "error": None,
     })
     store.append_event("r1", {"type": "run.started", "scenario_ref": "x"})
-    store.append_event("r1", {"type": "handshake.completed", "agent_id": "a"})
+    store.append_event("r1", {"type": "handshake.complete", "agent_id": "a"})
     store.upsert("r1", {"status": "success", "outputs": {"final": "ok"}})
     store.close()
 
@@ -61,7 +61,7 @@ def test_persisted_runs_survive_process_restart(tmp_path: Path) -> None:
     assert rec["status"] == "success"
     assert rec["outputs"] == {"final": "ok"}
     assert [e["type"] for e in rec["events"]] == [
-        "run.started", "handshake.completed",
+        "run.started", "handshake.complete",
     ]
     assert reopened.list_ids() == ["r1"]
     reopened.close()
