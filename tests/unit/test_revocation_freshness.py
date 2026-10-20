@@ -29,6 +29,9 @@ from revocation_state import RevocationState  # noqa: E402
 
 _MAX_STALENESS = 300
 
+# The wire version a minted snapshot claims; aitp-sdk 0.17 accepts only this.
+PROTOCOL = "aitp/0.3"
+
 
 def _server(
     *,
@@ -209,7 +212,7 @@ def test_soft_fail_never_rescues_a_forged_snapshot() -> None:
     forged_jti = str(uuid.uuid4())
     now = int(time.time())
     body = {
-        "version": "aitp/0.2",
+        "version": PROTOCOL,
         "issuer": attacker_aid,
         "published_at": now,
         "expires_at": now + 3600,
@@ -228,9 +231,13 @@ def test_soft_fail_never_rescues_a_forged_snapshot() -> None:
     _apply_snapshot(state, [], age_secs=_MAX_STALENESS + 60)
     server = _server(revocation=state, fail_mode="soft_fail")
 
-    # Axis A runs regardless of fail_mode: the forgery is rejected at ingest.
-    with pytest.raises(Exception):
+    # Axis A runs regardless of fail_mode: the forgery is rejected at ingest,
+    # and for the reason under test. Asserting the cause matters: with a stale
+    # protocol version this raised too, as unsupported_version, and the test
+    # passed without ever reaching the issuer pin.
+    with pytest.raises(Exception) as excinfo:
         aitp.verify_revocation_list(forged, pinned_aid)
+    assert getattr(excinfo.value, "code", None) == "issuer_mismatch", excinfo.value
 
     # And soft_fail — which governs only the ABSENCE of a fresh snapshot —
     # cannot put it into force.

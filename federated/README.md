@@ -104,7 +104,11 @@ AITP_E2E=1 uv run pytest tests/integration/test_federated_handshake.py -v
 - `/hosted-agents` (`src/aitp_playground/api/hosted.py`) is the federation
   primitive: it spawns a long-lived agent addressable at this service's
   **public origin**, resolves a peer `did:web` fail-closed, drives the
-  handshake and makes the cross-origin call. The route list and status codes
+  handshake and makes the cross-origin call. Before org-A can handshake,
+  org-B must call `POST /hosted-agents/{id}/trust-peer` with org-A's
+  `did:web`: the responder only admits peers whose AID it has pinned
+  (aitp-sdk >= 0.14), and it takes that AID from org-A's verified Manifest,
+  never from the HELLO. The route list and status codes
   are in [docs/architecture.md § Hosted agents](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/docs/architecture.md#hosted-agents-srcaitp_playgroundapihostedpy).
   `PUBLIC_HOST` / `PUBLIC_SCHEME` set the origin; the agent's manifest then
   advertises a real handshake endpoint instead of `localhost`

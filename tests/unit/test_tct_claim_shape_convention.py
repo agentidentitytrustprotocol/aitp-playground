@@ -22,12 +22,15 @@ import pytest
 aitp = pytest.importorskip("aitp")
 ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
 
+# The wire version tct-012 is minted under (spec bf00e75). A literal, never
+# read from `aitp`: the oracle stays independent of the SDK it checks.
+PROTOCOL = "aitp/0.3"
 ISSUER_SEED_HEX = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 GRANT = "macp.mode.task.v1"
 
 # tct-012's claims, minus the `ext` member (the plain, fully-defined shape).
 BASE_CLAIMS = {
-    "ver": "aitp/0.2",
+    "ver": PROTOCOL,
     "jti": "550e8400-e29b-41d4-a716-446655443012",
     "iss": "aid:pubkey:A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
     "sub": "aid:pubkey:O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik",

@@ -183,6 +183,14 @@ class AitpServer:
                 self.revocation_fail_mode,
             )
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
+        # Pinned-key trust store for the responder side (aitp-sdk >= 0.14
+        # rejects every pinned_key peer whose AID is not in it). Populated
+        # only by whoever launched or hosts this agent, via
+        # /admin/trust-peers — the runner pushes the AIDs it read off each
+        # spawned agent's AITP_AGENT_READY pipe line. Never seeded from the
+        # AID a HELLO self-asserts: that would recreate the possession-only
+        # admission 0.14 removed.
+        self.trusted_peer_aids: set[str] = set()
         # Issued-TCT log keyed by peer AID. Populated when a responder
         # session completes — gives /admin/export-session-bundle access
         # to the TCTs we (the coordinator) handed out.
@@ -202,14 +210,17 @@ class AitpServer:
 
     def _new_responder(self):
         """Construct a ResponderSession with the OIDC verifier wired in
-        when the run has an OIDC issuer configured. Plain pinned-key
-        runs leave both kwargs at their None defaults."""
+        when the run has an OIDC issuer configured. ``pinned_keys`` is the
+        provisioned trust store; an empty one rejects every pinned_key
+        peer (fail-closed), which is the SDK's own default."""
+        pinned = sorted(self.trusted_peer_aids)
         if self.oidc.enabled:
             return self.agent.new_responder(
                 jwks=self.oidc.jwks,
                 trust_anchors=self.oidc.trust_anchors,
+                pinned_keys=pinned,
             )
-        return self.agent.new_responder()
+        return self.agent.new_responder(pinned_keys=pinned)
 
     # ── background revocation refresh ────────────────────────────────────
 
@@ -513,6 +524,43 @@ class AitpServer:
                 media_type="application/json",
             )
 
+        @router.post("/admin/trust-peers")
+        async def trust_peers(request: Request) -> Response:
+            """Add peer AIDs to this agent's responder trust store.
+
+            Body: ``{"aids": [...], "replace": false}``. Callers are the
+            playground runner (AIDs of the agents it launched, read from each
+            child's AITP_AGENT_READY line) and the hosted-agent API (an AID
+            out of a did:web-resolved, verified Manifest). Like every
+            ``/admin`` route this is unauthenticated: the demo trusts whoever
+            can reach the agent's loopback admin port.
+            """
+            body = await request.json()
+            aids = body.get("aids")
+            if not isinstance(aids, list) or not all(
+                isinstance(a, str) and a for a in aids
+            ):
+                raise HTTPException(
+                    status_code=400, detail="aids must be a list of AID strings",
+                )
+            candidate = set(aids) if body.get("replace") else self.trusted_peer_aids | set(aids)
+            # Let the SDK judge each AID before it enters the store: one bad
+            # entry would otherwise make every later HELLO fail to build a
+            # responder session.
+            try:
+                self.agent.new_responder(pinned_keys=sorted(candidate))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            self.trusted_peer_aids = candidate
+            await emit_event(
+                "trust.peers_pinned", self.bootstrap,
+                added=sorted(aids), total=len(self.trusted_peer_aids),
+            )
+            return Response(
+                json.dumps({"trusted_peer_aids": sorted(self.trusted_peer_aids)}),
+                media_type="application/json",
+            )
+
         if self.did_web_host:
             @router.get("/.well-known/did.json")
             def get_did_document() -> Response:
@@ -580,12 +628,33 @@ class AitpServer:
             """
             body = await request.json()
             token_json: str = body["delegation_token"]
+            # aitp-sdk >= 0.16 verifies every delegation under the key the
+            # issuer's Manifest designates (RFC-AITP-0006 §4 step 1,
+            # RFC-AITP-0011 §3 step 1), so the redeemer needs the delegator's
+            # Manifest — and, for a chained token, every hop issuer's. We are
+            # the responder here and never fetched them, so the delegatee
+            # forwards them (`/admin/redeem-delegation`). That needs no
+            # transport trust: the SDK verifies each Manifest and checks it
+            # designates the token's `iss`, so a forwarded Manifest for
+            # anyone else just fails KEY_RESOLUTION_FAILED.
+            issuer_manifests = body.get("issuer_manifests")
+            if (
+                not isinstance(issuer_manifests, list)
+                or not issuer_manifests
+                or not all(isinstance(m, str) for m in issuer_manifests)
+            ):
+                return Response(
+                    json.dumps({
+                        "error": "issuer_manifests must be a non-empty list "
+                        "of ManifestEnvelope JSON strings",
+                    }),
+                    status_code=400, media_type="application/json",
+                )
             # Opt-in draft RFC-AITP-0011 multi-hop verification. When the
-            # scenario sets ``aitp.allow_multihop_delegation`` AND the wheel
-            # was built with multi-hop verification (default in the SDK),
-            # accept a chained token up to ``max_delegation_hops``. Otherwise
-            # fall back to strict v0.1 single-hop, which rejects any non-empty
-            # chain with DELEGATION_MULTIHOP_NOT_SUPPORTED.
+            # scenario sets ``aitp.allow_multihop_delegation``, accept a
+            # chained token up to ``max_delegation_hops``. Otherwise strict
+            # v0.1 single-hop, which rejects any non-empty chain with
+            # DELEGATION_MULTIHOP_NOT_SUPPORTED.
             cfg = self.bootstrap.get("aitp", {})
             allow_multihop = bool(cfg.get("allow_multihop_delegation"))
             max_hops = int(cfg.get("max_delegation_hops", 3))
@@ -606,31 +675,16 @@ class AitpServer:
             # while we cannot tell whether its source grant is still live.
             self._enforce_revocation_freshness()
             try:
-                if allow_multihop and hasattr(
-                    aitp, "verify_delegation_multihop"
-                ):
+                if allow_multihop:
                     verified = aitp.verify_delegation_multihop(
-                        token_json, self.agent.aid, max_hops, deny_set,
+                        token_json, self.agent.aid, issuer_manifests,
+                        max_delegation_hops=max_hops, revoked_jtis=deny_set,
                     )
                 else:
                     verified = aitp.verify_delegation(
-                        token_json, self.agent.aid, deny_set,
+                        token_json, self.agent.aid, issuer_manifests,
+                        revoked_jtis=deny_set,
                     )
-            except TypeError as exc:
-                # The installed SDK predates the revocation parameter
-                # (aitp-sdk < 0.7.0). Fail closed and say so. Probing with
-                # ``hasattr`` and silently dropping the deny-set would
-                # reinstate exactly the gap this call site exists to close:
-                # a capability probe is not consent, so an old SDK must never
-                # silently downgrade enforcement — it must refuse loudly.
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "installed aitp-sdk cannot enforce delegation "
-                        "revocation (needs >=0.7.0) — refusing to redeem a "
-                        f"delegation we cannot check: {exc}"
-                    ),
-                ) from exc
             except (RuntimeError, ValueError) as exc:
                 await emit_event(
                     "delegation.rejected", self.bootstrap, error=str(exc),

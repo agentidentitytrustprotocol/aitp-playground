@@ -5,17 +5,20 @@ the module's own precondition or wiring check, not a downstream failure —
 `DECISIONS.md` D-10's taxonomy names them 412 (caller state), 404 (unknown
 capability), 500 (wiring bug here).
 
-Also covers `/admin/verify-session-bundle`'s forged-bundle behavior, which
-was likewise untested.
+Also covers `/admin/verify-session-bundle`'s forged-bundle and
+wrong-coordinator rejections (403) and its missing-Manifest guard (400).
 """
 from __future__ import annotations
 
 import json
 import sys
 import time
+import types
+import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,6 +28,7 @@ if str(_AGENT_BASE) not in sys.path:
 
 import aitp  # noqa: E402
 
+import agent_admin  # noqa: E402
 from agent_admin import build_admin_router  # noqa: E402
 from revocation_state import RevocationState  # noqa: E402
 
@@ -122,12 +126,12 @@ def test_self_execute_unknown_capability_is_404() -> None:
     assert "not registered" in resp.text.lower()
 
 
-# --- verify-session-bundle: a forged bundle, currently uncaught ---
+# --- verify-session-bundle: forged bundles and a missing coordinator ---
 
 
 def _participant_handshake(participant, coordinator, coord_manifest) -> str:
-    sess = participant.new_session()
-    rsess = coordinator.new_responder()
+    sess = participant.new_session(pinned_keys=[coordinator.aid])
+    rsess = coordinator.new_responder(pinned_keys=[participant.aid])
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
@@ -135,48 +139,84 @@ def _participant_handshake(participant, coordinator, coord_manifest) -> str:
     return json.loads(sess.complete(commit_ack))["tct"]
 
 
-def test_verify_session_bundle_with_a_tampered_signature_is_rejected() -> None:
-    """`/admin/verify-session-bundle` has no `try`/`except` around
-    `aitp.verify_session_bundle` — unlike every other verify site in this
-    module. A tampered bundle raises a bare `RuntimeError` today, which
-    propagates as a 500 rather than the 403/502 shape every other rejection
-    in this module uses. Recorded honestly: this test pins CURRENT
-    behaviour (a forged bundle IS rejected — the request does not succeed —
-    just not with the taxonomy the rest of the module has), not the taxonomy
-    this route would ideally have. Fixing the shape is a follow-up, not a
-    silent asserted improvement.
-    """
+def _bundle_parties():
     coord = aitp.AitpAgent.generate()
     participant = aitp.AitpAgent.generate()
     coord_manifest = coord.build_manifest(
         "coord", "http://coord/aitp/handshake/hello", ["session.member"],
     )
-    participant.build_manifest(
-        "p", "http://p/aitp/handshake/hello", ["x"],
-    )
+    participant.build_manifest("p", "http://p/aitp/handshake/hello", ["x"])
     tct = _participant_handshake(participant, coord, coord_manifest)
-
     builder = aitp.SessionBundleBuilder(coord)
-    builder.session_id("12345678-1234-1234-1234-1234567890ab")
+    builder.session_id(str(uuid.uuid4()))
     builder.issued_at(int(time.time()))
     builder.participant(participant.aid, tct)
-    envelope = builder.build()
+    return coord, coord_manifest, participant, builder.build()
 
-    doc = json.loads(envelope)
-    doc["session_bundle"]["session_id"] = "00000000-0000-0000-0000-000000000000"
-    tampered = json.dumps(doc)
 
-    coord_bootstrap = {"run_id": "r", "agent_id": "coord", "aitp": {}}
-    router = build_admin_router(
-        agent=coord, bootstrap=coord_bootstrap, held_tcts={},
-        revocation=RevocationState(),
+def _serve_manifest(monkeypatch, manifest_json: str) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=manifest_json)
+
+    monkeypatch.setattr(
+        agent_admin, "httpx",
+        types.SimpleNamespace(
+            AsyncClient=lambda *_a, **_k: httpx.AsyncClient(
+                transport=httpx.MockTransport(handler),
+            ),
+            HTTPError=httpx.HTTPError,
+        ),
     )
+
+
+def _verifier_app(agent) -> FastAPI:
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(build_admin_router(
+        agent=agent, bootstrap={"run_id": "r", "agent_id": "p", "aitp": {}},
+        held_tcts={}, revocation=RevocationState(),
+    ))
+    return app
 
-    resp = _client(app).post(
-        "/admin/verify-session-bundle", json={"bundle_envelope": tampered},
+
+def test_verify_session_bundle_with_a_tampered_signature_is_403(monkeypatch) -> None:
+    _coord, coord_manifest, participant, envelope = _bundle_parties()
+    doc = json.loads(envelope)
+    doc["session_bundle"]["session_id"] = str(uuid.uuid4())  # changed after signing
+    _serve_manifest(monkeypatch, coord_manifest)
+
+    resp = _client(_verifier_app(participant)).post(
+        "/admin/verify-session-bundle",
+        json={
+            "bundle_envelope": json.dumps(doc),
+            "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+        },
     )
-    assert resp.status_code != 200, (
-        "a tampered session bundle must not be reported as verified"
+    assert resp.status_code == 403, resp.text
+
+
+def test_verify_session_bundle_under_the_wrong_coordinator_is_403(monkeypatch) -> None:
+    """A genuine bundle checked against someone else's (valid) Manifest: the
+    signer is not the coordinator the caller named."""
+    _coord, _coord_manifest, participant, envelope = _bundle_parties()
+    impostor = aitp.AitpAgent.generate()
+    _serve_manifest(monkeypatch, impostor.build_manifest(
+        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+    ))
+
+    resp = _client(_verifier_app(participant)).post(
+        "/admin/verify-session-bundle",
+        json={
+            "bundle_envelope": envelope,
+            "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+        },
     )
+    assert resp.status_code == 403, resp.text
+
+
+def test_verify_session_bundle_without_a_coordinator_manifest_is_400() -> None:
+    _coord, _coord_manifest, participant, envelope = _bundle_parties()
+    resp = _client(_verifier_app(participant)).post(
+        "/admin/verify-session-bundle", json={"bundle_envelope": envelope},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "coordinator_manifest_url" in resp.text

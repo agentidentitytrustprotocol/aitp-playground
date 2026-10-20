@@ -162,6 +162,9 @@ class _AgentHttpHandler:
             })
         if path == "/admin/rotate-keys":
             return httpx.Response(200, json={"aid": "aid-rotated"})
+        if path == "/admin/trust-peers":
+            body = json.loads(request.content)
+            return httpx.Response(200, json={"trusted_peer_aids": body["aids"]})
         return httpx.Response(404, json={"unhandled": path})
 
 
@@ -433,6 +436,18 @@ async def test_successful_run_full_lifecycle(agent_http) -> None:
         assert expected in types, f"missing {expected}: {types}"
     # Eager trust between 2 agents → both directions handshaked.
     assert types.count("trust.established") == 2
+    # Before any handshake, each agent's responder trust store was set to
+    # the other agent's launch-time AID (aitp-sdk >= 0.14).
+    assert types.index("trust.peers_pinned") < types.index("trust.established")
+    pushes = {
+        r.url.port: json.loads(r.content) for r in agent_http.requests
+        if r.url.path == "/admin/trust-peers"
+    }
+    aid_of = {ra.port: ra.aid for ra in env.supervisor.agents.values()}
+    assert pushes == {
+        9500: {"aids": [aid_of[9501]], "replace": True},
+        9501: {"aids": [aid_of[9500]], "replace": True},
+    }
 
     # Store finalized as success with the outputs.
     record = env.store.get("run-1")
@@ -734,7 +749,7 @@ async def test_delegate_then_redeem_flow(agent_http) -> None:
     result = await _run(env)
     assert result.status == "success", result.error
     assert result.outputs["del"]["delegation_token"] == "DT-1"
-    assert result.outputs["redeem"] == {"redeemed": True}
+    assert result.outputs["redeem"]["redeemed"] is True
 
     delegate_body = agent_http.body_of("/admin/delegate")
     assert delegate_body["held_tct_peer_port"] == 9501  # bob issued the held TCT
@@ -746,10 +761,43 @@ async def test_delegate_then_redeem_flow(agent_http) -> None:
     assert redeem_body["delegation_token"] == "DT-1"
     assert redeem_body["redeem_url"].endswith(":9501/aitp/delegation/redeem")
     assert redeem_body["peer_port"] == 9501
+    # The redeemer needs the delegator's Manifest (aitp-sdk >= 0.16).
+    assert redeem_body["issuer_manifest_urls"] == [
+        "http://localhost:9500/.well-known/aitp-manifest",
+    ]
 
     types = _event_types(result)
     assert "delegation.issuing" in types
     assert "delegation.redeeming" in types
+
+
+async def test_a_second_hop_forwards_every_issuer_manifest(agent_http) -> None:
+    """carol holds bob's grant through alice's delegation, so carol's own
+    delegation to dave is verified under both alice's and carol's Manifests."""
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"], "carol": ["cap.c"], "dave": ["cap.d"]},
+        steps=[
+            {"id": "d1", "type": "delegate", "delegator": "alice",
+             "delegatee": "carol", "via_peer": "bob", "scope": ["cap.b"]},
+            {"id": "r1", "type": "redeem_delegation", "delegatee": "carol",
+             "target": "bob", "via_delegation": "d1"},
+            {"id": "d2", "type": "delegate", "delegator": "carol",
+             "delegatee": "dave", "via_peer": "bob", "scope": ["cap.b"]},
+            {"id": "r2", "type": "redeem_delegation", "delegatee": "dave",
+             "target": "bob", "via_delegation": "d2"},
+        ],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+    redeems = [
+        json.loads(r.content) for r in agent_http.requests
+        if r.url.path == "/admin/redeem-delegation"
+    ]
+    assert [b["issuer_manifest_urls"] for b in redeems] == [
+        ["http://localhost:9500/.well-known/aitp-manifest"],
+        ["http://localhost:9500/.well-known/aitp-manifest",
+         "http://localhost:9502/.well-known/aitp-manifest"],
+    ]
 
 
 async def test_delegate_requires_non_empty_scope(agent_http) -> None:
@@ -1089,7 +1137,11 @@ async def test_session_bundle_export_then_verify(agent_http) -> None:
     assert result.outputs["export"]["session_id"] == "sess-1"
     # The verifier re-presents the exported envelope.
     verify_body = agent_http.body_of("/admin/verify-session-bundle")
-    assert verify_body == {"bundle_envelope": {"payload": "bundle"}}
+    # ...with the coordinator's Manifest URL (aitp-sdk >= 0.16 requires it).
+    assert verify_body == {
+        "bundle_envelope": {"payload": "bundle"},
+        "coordinator_manifest_url": "http://localhost:9500/.well-known/aitp-manifest",
+    }
     assert result.outputs["verify"]["kind"] == "session_bundle"
     types = _event_types(result)
     assert "session.bundle.exported" in types
@@ -1125,6 +1177,20 @@ async def test_rotate_keys_updates_the_running_agent_aid(agent_http) -> None:
     assert env.supervisor.agents["alice"].aid == "aid-rotated"
     rotated = [e for e in result.events if e.type == "identity.key.rotated"]
     assert rotated and rotated[0].aid == "aid-rotated"
+
+
+async def test_rotate_keys_re_pins_the_new_aid_at_every_peer(agent_http) -> None:
+    env = make_env(
+        agents={"alice": ["cap.a"], "bob": ["cap.b"]}, eager=False,
+        steps=[{"id": "rot", "type": "rotate_keys", "agent": "alice"}],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+    to_bob = [
+        json.loads(r.content)["aids"] for r in agent_http.requests
+        if r.url.path == "/admin/trust-peers" and r.url.port == 9501
+    ]
+    assert to_bob[-1] == ["aid-rotated"]
 
 
 # --------------------------------------------------------------------------- #

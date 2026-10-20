@@ -552,3 +552,27 @@ artifact actually minted by `aitp-control-plane` and confirm it verifies clean u
 successor release's wheel, before merging, not after. If it doesn't, that is a genuine
 cross-repo interop break, not a local bug — file it upstream rather than widening
 `TCT_CLAIMS_MEMBERS` locally or downstream.
+
+## P17 — The handshake routes add no RFC-AITP-0009 §3.1 replay or timestamp check
+**From:** `plans/aitp-rs-0.17-adoption.md` open question 4 · **Blocks:** nothing ·
+**Cost:** a captured HELLO can be replayed to `/aitp/handshake/hello` inside its
+validity window. It only buys the attacker a responder session they cannot complete
+without the initiator's key, but the MUST is unmet.
+
+The binding's `process_hello` / `process_commit` check neither `message_id` reuse
+nor timestamp skew, and the playground routes call them directly. The fix belongs
+in the SDK, or at least in one shared helper. Per spec §5.4.3 any dedup set must
+key on `message_id`, never on the envelope bytes. Out of scope for the 0.17 bump.
+
+## ~~P18 — The SDK `TctStore` caches by a hash of the raw compact-JWS bytes (spec §5.4.3)~~ — **CLOSED 2026-10-20, compliant**
+**From:** the aitp/0.3 adoption review (PR #94) · **Closed by:** aitp-rs's RFC-AITP-0001
+§5.4.3 audit in [aitp-rs#266](https://github.com/agentidentitytrustprotocol/aitp-rs/pull/266)
+
+`aitp.TctStore` keys its verification cache on SHA-256 of the whole compact JWS,
+signature segment included. The flagged risk was a second encoding of a signed object
+being treated as the same object. That can't happen here. Any token that differs in a
+single byte, including a different signature, misses the cache and is fully verified.
+A hit therefore only ever skips re-verifying bytes that already verified. And policy
+(grant, audience, expiry, deny-set) is re-checked on every hit. aitp-rs's audit found
+no §5.4.3 violation, and #266 adds tests that pin this
+(`bindings/aitp-py/tests/test_tct_cache.py`, plus the Node equivalent). No change in this repo.

@@ -15,6 +15,9 @@ import pytest
 
 import tct_claims
 
+# The wire version the current aitp-sdk floor speaks.
+PROTOCOL = "aitp/0.3"
+
 
 def _compact_jws(claims: dict) -> str:
     """Encode a minimal three-segment compact JWS carrying ``claims`` as its
@@ -30,7 +33,7 @@ def _compact_jws(claims: dict) -> str:
 
 def test_decode_claims_round_trips_jwt_claim_names() -> None:
     claims = {
-        "ver": "aitp/0.2",
+        "ver": PROTOCOL,
         "iss": "aid:pubkey:issuer",
         "sub": "aid:pubkey:subject",
         "aud": "aid:pubkey:subject",

@@ -59,15 +59,23 @@ def test_the_sdk_exposes_the_verify_surface_this_module_depends_on() -> None:
     )
 
 
+# The protocol version every minted snapshot claims; aitp-sdk 0.17 accepts
+# only this one (a strict cutover from aitp/0.2).
+PROTOCOL = "aitp/0.3"
+
+_JTIS: dict[str, str] = {}
+
+
 def _jti(label: str) -> str:
-    """A stable UUID per label.
+    """A UUID v4 per label, stable within the test run.
 
     `jti` is a `Uuid` in the signed body (`aitp-tct`'s `RevocationEntry`), so a
     readable placeholder like "jti-1" fails deserialization as `malformed`
     before verification is even reached — which would make several of the
-    assertions below pass for entirely the wrong reason.
+    assertions below pass for entirely the wrong reason. aitp-sdk >= 0.14
+    also rejects any non-v4 UUID, so a name-based (v5) UUID is just as wrong.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_OID, label))
+    return _JTIS.setdefault(label, str(uuid.uuid4()))
 
 
 def _snapshot(entries, *, issuer_key=None, published_at=None, ttl=3600, sign_wrapped=False):
@@ -77,7 +85,7 @@ def _snapshot(entries, *, issuer_key=None, published_at=None, ttl=3600, sign_wra
     aid = "aid:pubkey:" + base64.urlsafe_b64encode(raw).decode().rstrip("=")
     now = int(time.time()) if published_at is None else published_at
     body: dict[str, Any] = {
-        "version": "aitp/0.2",
+        "version": PROTOCOL,
         "issuer": aid,
         "published_at": now,
         "expires_at": now + ttl,
@@ -431,7 +439,7 @@ async def test_a_verified_but_malformed_body_is_discarded_not_a_500(monkeypatch)
     aid = "aid:pubkey:does-not-matter-verification-is-stubbed"
     envelope = json.dumps({
         "revocation_list": {
-            "version": "aitp/0.2",
+            "version": PROTOCOL,
             "issuer": aid,
             "published_at": int(time.time()),
             # "expires_at" deliberately omitted.

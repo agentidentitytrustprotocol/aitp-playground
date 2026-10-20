@@ -84,26 +84,32 @@ def _server(revocation: RevocationState):
 
 
 def _delegation_for(server, manifest_json: str):
-    """B handshakes with A, then delegates to C. Returns the token."""
+    """B handshakes with A, then delegates to C.
+
+    Returns ``(token, b_manifest)``: A verifies the token under B's Manifest
+    (aitp-sdk >= 0.16), so every redeem needs it.
+    """
     b = aitp.AitpAgent.generate()
     c = aitp.AitpAgent.generate()
     # Both need a manifest before they can hold a session or be delegated to.
+    manifests = {}
     for agent, name, port in ((b, "B", 10), (c, "C", 11)):
-        agent.build_manifest(
+        manifests[name] = agent.build_manifest(
             display_name=name,
             handshake_endpoint=f"http://localhost:{port}/aitp/handshake/hello",
             offered_caps=["demo.write"],
         )
 
-    sess = b.new_session()
-    rsess = server.agent.new_responder()
+    sess = b.new_session(pinned_keys=[server.agent.aid])
+    rsess = server.agent.new_responder(pinned_keys=[b.aid])
     hello = sess.build_hello(manifest_json, ["demo.write"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
     commit_ack, _ = rsess.process_commit(commit)
     completed = json.loads(sess.complete(commit_ack))
 
-    return b.build_delegation(completed["grant_voucher"], c.aid, ["demo.write"])
+    token = b.build_delegation(completed["grant_voucher"], c.aid, ["demo.write"])
+    return token, manifests["B"]
 
 
 def _client(server) -> TestClient:
@@ -112,17 +118,20 @@ def _client(server) -> TestClient:
     return TestClient(app)
 
 
-def _redeem(client, token):
-    return client.post("/aitp/delegation/redeem", json={"delegation_token": token})
+def _redeem(client, token, issuer_manifest):
+    return client.post(
+        "/aitp/delegation/redeem",
+        json={"delegation_token": token, "issuer_manifests": [issuer_manifest]},
+    )
 
 
 def test_a_delegation_redeems_while_nothing_is_revoked() -> None:
     """The control. Without it, a blanket-reject bug passes every test below."""
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
 
-    resp = _redeem(_client(server), token)
+    resp = _redeem(_client(server), token, issuer)
     assert resp.status_code == 200, resp.text
     assert "tct" in resp.json()
 
@@ -131,13 +140,13 @@ def test_revoking_the_source_tct_refuses_to_mint_a_new_tct() -> None:
     """The MUST that was unreachable, stated in what it actually prevents."""
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
     client = _client(server)
 
-    assert _redeem(client, token).status_code == 200
+    assert _redeem(client, token, issuer).status_code == 200
 
     state.revoke_local(_src_jti(token))
-    resp = _redeem(client, token)
+    resp = _redeem(client, token, issuer)
 
     assert resp.status_code == 403, (
         "a delegation rooted in a revoked source TCT still minted a fresh "
@@ -155,7 +164,7 @@ def test_a_cp_snapshot_entry_is_enough_to_refuse() -> None:
     """
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
     client = _client(server)
 
     now = int(time.time())
@@ -164,18 +173,18 @@ def test_a_cp_snapshot_entry_is_enough_to_refuse() -> None:
     )
     assert not state.is_locally_revoked(_src_jti(token))
 
-    assert _redeem(client, token).status_code == 403
+    assert _redeem(client, token, issuer).status_code == 403
 
 
 def test_an_unrelated_revoked_jti_does_not_block_redemption() -> None:
     """The deny-set is consulted by jti, not by "is it non-empty"."""
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
 
     state.revoke_local("00000000-0000-4000-8000-000000000000")
 
-    assert _redeem(_client(server), token).status_code == 200
+    assert _redeem(_client(server), token, issuer).status_code == 200
 
 
 def test_a_revoked_redemption_is_reported_as_a_rejection() -> None:
@@ -189,13 +198,13 @@ def test_a_revoked_redemption_is_reported_as_a_rejection() -> None:
 
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
     state.revoke_local(_src_jti(token))
 
     original = aitp_server.emit_event
     aitp_server.emit_event = _capture
     try:
-        _redeem(_client(server), token)
+        _redeem(_client(server), token, issuer)
     finally:
         aitp_server.emit_event = original
 
@@ -207,34 +216,31 @@ def test_a_revoked_redemption_is_reported_as_a_rejection() -> None:
 # --- Phase 7: rejection branches this file's harness reaches but never tested ---
 
 
-def test_an_old_sdk_that_cannot_take_the_revocation_parameter_fails_closed() -> None:
-    """`aitp_server.py`'s `except TypeError` — item 1.
-
-    The whole point of this guard is that it does not silently drop the
-    deny-set on an old SDK; it refuses loudly with 503. A test asserting only
-    "this is rejected" would pass on a `hasattr`-probe-and-drop
-    implementation just as well — the status code and the message naming the
-    SDK are both load-bearing.
-    """
-    import aitp_server
-
+def test_redeem_without_issuer_manifests_is_400() -> None:
+    """aitp-sdk >= 0.16 resolves the delegator key from its Manifest; a
+    request that brings none is malformed, not a verification failure."""
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, _issuer = _delegation_for(server, manifest)
 
-    def _too_old(*_args, **_kwargs):
-        raise TypeError("verify_delegation() takes 2 positional arguments but 3 were given")
+    resp = _client(server).post("/aitp/delegation/redeem", json={"delegation_token": token})
 
-    original = aitp_server.aitp.verify_delegation
-    aitp_server.aitp.verify_delegation = _too_old
-    try:
-        resp = _redeem(_client(server), token)
-    finally:
-        aitp_server.aitp.verify_delegation = original
+    assert resp.status_code == 400, resp.text
+    assert "issuer_manifests" in resp.text
 
-    assert resp.status_code == 503, resp.text
-    assert "aitp-sdk" in resp.text.lower()
-    assert ">=0.7.0" in resp.text
+
+def test_redeem_under_someone_elses_manifest_is_refused() -> None:
+    """A valid Manifest that does not designate the token's issuer must not
+    resolve its key (KEY_RESOLUTION_FAILED), so nothing is minted."""
+    state = RevocationState()
+    server, manifest = _server(state)
+    token, _issuer = _delegation_for(server, manifest)
+    _other_token, other_issuer = _delegation_for(server, manifest)
+
+    resp = _redeem(_client(server), token, other_issuer)
+
+    assert resp.status_code == 403, resp.text
+    assert "tct" not in resp.json()
 
 
 def test_redeem_enforces_axis_b_freshness_before_minting() -> None:
@@ -250,11 +256,11 @@ def test_redeem_enforces_axis_b_freshness_before_minting() -> None:
     """
     state = RevocationState()
     server, manifest = _server(state)
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
     # Axis B back on, deliberately, unlike every other test in this file.
     server.can_verify_revocation = True
 
-    resp = _redeem(_client(server), token)
+    resp = _redeem(_client(server), token, issuer)
 
     assert resp.status_code == 403, resp.text
     assert "degraded" in resp.text.lower()
@@ -271,20 +277,14 @@ def test_multihop_branch_also_enforces_the_deny_set() -> None:
     A single-hop token is enough to prove THIS branch — not the `else` one —
     is what enforced the revocation.
     """
-    import aitp_server
-
-    assert hasattr(aitp_server.aitp, "verify_delegation_multihop"), (
-        "installed aitp-sdk lacks verify_delegation_multihop — this test "
-        "needs the multihop-delegation feature the 0.7.0+ floor assumes"
-    )
 
     state = RevocationState()
     server, manifest = _server(state)
     server.bootstrap.setdefault("aitp", {})["allow_multihop_delegation"] = True
-    token = _delegation_for(server, manifest)
+    token, issuer = _delegation_for(server, manifest)
 
     state.revoke_local(_src_jti(token))
-    resp = _redeem(_client(server), token)
+    resp = _redeem(_client(server), token, issuer)
 
     assert resp.status_code == 403, (
         "the multihop branch did not honour the deny-set for a revoked "
@@ -317,8 +317,8 @@ def test_capability_tct_issuer_mismatch_is_refused_before_signature_verification
         handshake_endpoint="http://localhost:13/aitp/handshake/hello",
         offered_caps=["demo.write"],
     )
-    sess = holder.new_session()
-    rsess = other_issuer.new_responder()
+    sess = holder.new_session(pinned_keys=[other_issuer.aid])
+    rsess = other_issuer.new_responder(pinned_keys=[holder.aid])
     hello = sess.build_hello(other_manifest, ["demo.write"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)

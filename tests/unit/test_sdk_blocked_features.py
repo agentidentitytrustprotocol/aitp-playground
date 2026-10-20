@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+import uuid
 
 import pytest
 
@@ -79,8 +80,8 @@ def test_tct_renewal_round_trip() -> None:
     issuer = aitp.AitpAgent.generate()
     _h_m = holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
     i_m = issuer.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
-    sh = holder.new_session()
-    si = issuer.new_responder()
+    sh = holder.new_session(pinned_keys=[issuer.aid])
+    si = issuer.new_responder(pinned_keys=[holder.aid])
     hello = sh.build_hello(i_m, ["demo.y"])
     ack, sid = si.process_hello(hello)
     commit = sh.process_hello_ack(ack, sid)
@@ -115,8 +116,8 @@ def test_tct_cache_hit_miss_len_delta() -> None:
     issuer = aitp.AitpAgent.generate()
     holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
     i_m = issuer.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
-    sh = holder.new_session()
-    si = issuer.new_responder()
+    sh = holder.new_session(pinned_keys=[issuer.aid])
+    si = issuer.new_responder(pinned_keys=[holder.aid])
     hello = sh.build_hello(i_m, ["demo.y"])
     ack, sid = si.process_hello(hello)
     commit = sh.process_hello_ack(ack, sid)
@@ -142,8 +143,8 @@ def _participant_handshake(participant, coordinator, coord_manifest):
     """Participant initiates a handshake against the coordinator (responder).
     Returns the coordinator-issued TCT (compact-JWS token) the participant
     now holds."""
-    sess = participant.new_session()
-    rsess = coordinator.new_responder()
+    sess = participant.new_session(pinned_keys=[coordinator.aid])
+    rsess = coordinator.new_responder(pinned_keys=[participant.aid])
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
@@ -170,13 +171,14 @@ def test_session_bundle_export_and_verify() -> None:
     b_tct = _participant_handshake(b, coord, coord_m)
 
     builder = aitp.SessionBundleBuilder(coord)
-    builder.session_id("12345678-1234-1234-1234-1234567890ab")
+    builder.session_id(str(uuid.uuid4()))  # aitp-sdk >= 0.14: UUID v4 only
     builder.issued_at(int(time.time()))
     builder.participant(a.aid, a_tct)
     builder.participant(b.aid, b_tct)
     envelope = builder.build()
 
-    outcome = aitp.verify_session_bundle(envelope, a.aid)
+    # aitp-sdk >= 0.16: the coordinator key comes from its verified Manifest.
+    outcome = aitp.verify_session_bundle(envelope, a.aid, coord_m)
     assert outcome["kind"] == "clear"
     assert a.aid in outcome["active_aids"]
     assert b.aid in outcome["active_aids"]
@@ -256,8 +258,8 @@ def test_oidc_handshake_p256_initiator() -> None:
         cnf_jkt=a_jkt,
         now_unix_secs=now,
     )
-    sa = a.new_session(jwks=provider, trust_anchors=[issuer.issuer_url])
-    sb = b.new_responder(jwks=provider, trust_anchors=[issuer.issuer_url])
+    sa = a.new_session(jwks=provider, trust_anchors=[issuer.issuer_url], pinned_keys=[b.aid])
+    sb = b.new_responder(jwks=provider, trust_anchors=[issuer.issuer_url], pinned_keys=[a.aid])
     hello = sa.build_hello(b_m, ["demo.y"], oidc_mint_jwt=a_mint)
     ack, sid = sb.process_hello(hello)
     commit = sa.process_hello_ack(ack, sid)
@@ -300,8 +302,8 @@ def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
         now_unix_secs=now,
     )
 
-    sa = a.new_session(jwks=provider, trust_anchors=[issuer.issuer_url])
-    sb = b.new_responder(jwks=provider, trust_anchors=[issuer.issuer_url])
+    sa = a.new_session(jwks=provider, trust_anchors=[issuer.issuer_url], pinned_keys=[b.aid])
+    sb = b.new_responder(jwks=provider, trust_anchors=[issuer.issuer_url], pinned_keys=[a.aid])
     hello = sa.build_hello(b_m, ["demo.y"], oidc_mint_jwt=a_mint)
     ack, sid = sb.process_hello(hello)
     commit = sa.process_hello_ack(ack, sid)

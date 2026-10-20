@@ -2,6 +2,13 @@
 #
 # Self-contained CP image used by docker-compose.test.yml.
 #
+# STALE (2026-10): the CP now resolves its SDK from npm
+# (`"aitp": "npm:@agentidentitytrustprotocol/aitp@^0.17.0"` in its package.json)
+# and its own Dockerfile needs no aitp-rs checkout. So `npm ci` below never
+# reads the binding this napi stage builds; the stage only costs build time.
+# Removing it, and the aitp-rs checkout in docker.yml, is a follow-up kept out
+# of the aitp 0.17 PR so the e2e build stays as it was.
+#
 # The sibling aitp-cp/Dockerfile assumes the napi binding at
 # aitp-rs/bindings/aitp-node ships pre-built .node files for every target
 # platform — but the checkout only has aitp.darwin-arm64.node, so a

@@ -50,7 +50,7 @@ curl -s http://localhost:8000/capabilities | jq .
 ```json
 {
   "sdk_available": true,
-  "version": "0.13.2",
+  "version": "0.17.0",
   "features": {
     "oidc": true,
     "session_bundle": true,
@@ -62,7 +62,8 @@ curl -s http://localhost:8000/capabilities | jq .
 }
 ```
 
-`version` (yours will differ — it is whatever `uv.lock` resolved) comes from `aitp.__version__` if present, otherwise the installed
+`version` (yours will differ — it is whatever `uv.lock` resolved inside the
+`pyproject.toml` range, currently `>=0.17.0,<0.18`, the `aitp/0.3` wire floor) comes from `aitp.__version__` if present, otherwise the installed
 distribution metadata for `aitp-sdk` (falling back to a bare `aitp` dist) —
 the compiled wheel doesn't always set `__version__`.
 
@@ -121,7 +122,7 @@ Run it from the CLI:
 ```bash
 uv run python -m aitp_playground.cli conformance
 # Conformance corpus: /…/agentidentitytrustprotocol/schemas/conformance
-#   installed SDK: aitp 0.13.2
+#   installed SDK: aitp 0.17.0
 #   fixtures: 72  (required for v0.1: 1)
 #   by RFC:   {'RFC-AITP-0001': 5, 'RFC-AITP-0004': 11, 'RFC-AITP-0005': 12, ...}
 #   by tier:  {'core': 62, 'draft': 10}

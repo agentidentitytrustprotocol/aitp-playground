@@ -95,6 +95,7 @@ def _peer(offered_caps: list[str], *, port: int = 9):
         bootstrap=bootstrap, revocation=revocation,
     )
     app = FastAPI()
+    app.state.server = server
     app.include_router(server.router)
     app.include_router(build_admin_router(
         agent=agent, bootstrap=bootstrap, held_tcts={}, revocation=revocation,
@@ -102,6 +103,12 @@ def _peer(offered_caps: list[str], *, port: int = 9):
         issued_tcts=server._issued_tcts,
     ))
     return agent, app
+
+
+def _pin(peer_app: FastAPI, aid: str) -> None:
+    """What the runner's /admin/trust-peers push does for a launched peer:
+    put `aid` in the peer's responder trust store (aitp-sdk >= 0.14)."""
+    peer_app.state.server.trusted_peer_aids.add(aid)
 
 
 def _initiator(*, held_tcts: dict[int, str] | None = None):
@@ -131,7 +138,8 @@ def test_initiate_handshake_success_stores_a_held_tct_and_emits_complete(
     _route_agent_admin_http_to(monkeypatch, peer_app)
     events = _events(monkeypatch)
 
-    _initiator_agent, client, held = _initiator()
+    initiator_agent, client, held = _initiator()
+    _pin(peer_app, initiator_agent.aid)
     resp = client.post(
         "/admin/initiate-handshake",
         json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
@@ -163,7 +171,8 @@ def test_initiate_handshake_with_explicit_requested_grants_subsets_offered(
     _route_agent_admin_http_to(monkeypatch, peer_app)
     _events(monkeypatch)
 
-    _initiator_agent, client, _held = _initiator()
+    initiator_agent, client, _held = _initiator()
+    _pin(peer_app, initiator_agent.aid)
     resp = client.post(
         "/admin/initiate-handshake",
         json={
@@ -174,6 +183,30 @@ def test_initiate_handshake_with_explicit_requested_grants_subsets_offered(
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["grants"] == ["demo.write"]
+
+
+def test_a_peer_refuses_an_initiator_nobody_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The responder trust store is only ever filled by the runner (or an
+    operator's trust-peer); a validly signed HELLO from an AID it was never
+    given must be refused, and no TCT may be stored."""
+    _peer_agent, peer_app = _peer(["demo.write"])
+    _route_agent_admin_http_to(monkeypatch, peer_app)
+    events = _events(monkeypatch)
+
+    _initiator_agent, client, held = _initiator()  # deliberately not pinned
+    resp = client.post(
+        "/admin/initiate-handshake",
+        json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
+    )
+    # The peer's 400 reason is passed through, not lost in an opaque 500.
+    assert resp.status_code == 502, resp.text
+    assert "peer refused hello (400)" in resp.text
+    assert "trust store" in resp.text
+    assert held == {}
+    failed = [e for e in events if e["type"] == "handshake.failed"]
+    assert failed and failed[0]["role"] == "initiator"
 
 
 def test_initiate_handshake_rejects_an_unverifiable_peer_manifest(
@@ -299,6 +332,7 @@ def test_renew_tct_success_swaps_the_held_tct_for_a_fresh_one(
     events = _events(monkeypatch)
 
     initiator_agent, client, held = _initiator()
+    _pin(peer_app, initiator_agent.aid)
     handshake = client.post(
         "/admin/initiate-handshake",
         json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
@@ -349,8 +383,8 @@ def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatc
     participant.build_manifest("p", "http://p/aitp/handshake/hello", ["x"])
 
     # A real handshake, so the TCT the bundle carries is genuine.
-    sess = participant.new_session()
-    rsess = coordinator.new_responder()
+    sess = participant.new_session(pinned_keys=[coordinator.aid])
+    rsess = coordinator.new_responder(pinned_keys=[participant.aid])
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
@@ -388,8 +422,27 @@ def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatc
     participant_app.include_router(participant_router)
     participant_client = TestClient(participant_app)
 
+    # The participant fetches and verifies the coordinator's Manifest itself
+    # (aitp-sdk >= 0.16 checks the bundle signature against it).
+    def serve_coord_manifest(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://coord/.well-known/aitp-manifest"
+        return httpx.Response(200, text=coord_manifest)
+
+    monkeypatch.setattr(
+        agent_admin, "httpx",
+        types.SimpleNamespace(
+            AsyncClient=lambda *_a, **_k: httpx.AsyncClient(
+                transport=httpx.MockTransport(serve_coord_manifest),
+            ),
+            HTTPError=httpx.HTTPError,
+        ),
+    )
     verify_resp = participant_client.post(
-        "/admin/verify-session-bundle", json={"bundle_envelope": body["bundle_envelope"]},
+        "/admin/verify-session-bundle",
+        json={
+            "bundle_envelope": body["bundle_envelope"],
+            "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+        },
     )
     assert verify_resp.status_code == 200, verify_resp.text
     outcome = verify_resp.json()

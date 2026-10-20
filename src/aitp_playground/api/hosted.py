@@ -17,6 +17,7 @@ import os
 from typing import Any, Optional
 from urllib.parse import unquote
 
+import aitp
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -107,28 +108,18 @@ def stop_agent(
     return {"stopped": hosted_id}
 
 
-@router.post("/{hosted_id}/resolve-and-handshake")
-async def resolve_and_handshake(
-    hosted_id: str,
-    body: HandshakeRequest,
-    mgr: HostedAgentManager = Depends(get_hosted_manager),
-) -> dict[str, Any]:
-    """Resolve ``peer_did`` via did:web (fail-closed) and drive this hosted
-    agent's SDK handshake against the resolved peer origin."""
-    hosted = mgr.get(hosted_id)
-    if hosted is None:
-        raise HTTPException(status_code=404, detail=f"no hosted agent {hosted_id}")
-
-    if not body.peer_did.startswith("did:web:"):
+async def _resolve_peer_did(peer_did: str) -> tuple[str, str]:
+    """Resolve a did:web peer to ``(manifest_url, origin)``, fail-closed."""
+    if not peer_did.startswith("did:web:"):
         raise HTTPException(
-            status_code=400, detail=f"only did:web peers supported, got {body.peer_did}"
+            status_code=400, detail=f"only did:web peers supported, got {peer_did}"
         )
     try:
-        peer_manifest_url = await resolve_did_web(body.peer_did)
+        peer_manifest_url = await resolve_did_web(peer_did)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
-            detail=f"did:web resolution failed for {body.peer_did}: {exc}",
+            detail=f"did:web resolution failed for {peer_did}: {exc}",
         ) from exc
 
     peer_origin = _origin_of(peer_manifest_url)
@@ -144,20 +135,82 @@ async def resolve_and_handshake(
         raise HTTPException(
             status_code=409,
             detail=(
-                f"refusing cross-domain handshake: {body.peer_did} resolved to a "
+                f"refusing cross-domain handshake: {peer_did} resolved to a "
                 f"loopback origin ({peer_origin}); expected a real remote origin"
             ),
         )
-    expected_host = unquote(body.peer_did[len("did:web:"):])
+    expected_host = unquote(peer_did[len("did:web:"):])
     resolved_host = peer_origin.split("://", 1)[-1]
     if resolved_host != expected_host:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"did:web origin mismatch: {body.peer_did} resolved to "
+                f"did:web origin mismatch: {peer_did} resolved to "
                 f"{resolved_host!r}, expected {expected_host!r}"
             ),
         )
+
+    return peer_manifest_url, peer_origin
+
+
+class TrustPeerRequest(BaseModel):
+    peer_did: str
+
+
+@router.post("/{hosted_id}/trust-peer")
+async def trust_peer(
+    hosted_id: str,
+    body: TrustPeerRequest,
+    mgr: HostedAgentManager = Depends(get_hosted_manager),
+) -> dict[str, Any]:
+    """Add a did:web peer to this hosted agent's responder trust store.
+
+    aitp-sdk >= 0.14 rejects any pinned_key initiator whose AID the responder
+    has not been provisioned with, and a hosted agent cannot know a remote
+    org's AID up front. This is the explicit operator step: resolve the DID
+    (same fail-closed rules as resolve-and-handshake), verify the Manifest it
+    points at, and pin the AID that Manifest declares. The AID is taken from
+    a verified Manifest at the DID's own origin, never from a HELLO.
+    """
+    hosted = mgr.get(hosted_id)
+    if hosted is None:
+        raise HTTPException(status_code=404, detail=f"no hosted agent {hosted_id}")
+    peer_manifest_url, _ = await _resolve_peer_did(body.peer_did)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            mr = await client.get(peer_manifest_url)
+            mr.raise_for_status()
+            try:
+                aitp.verify_manifest_json(mr.text)
+            except Exception as exc:  # noqa: BLE001 — SDK raises RuntimeError/ValueError
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"peer manifest for {body.peer_did} failed verification: {exc}",
+                ) from exc
+            peer_aid = mr.json()["manifest"]["aid"]
+            r = await client.post(
+                f"http://localhost:{hosted.port}/admin/trust-peers",
+                json={"aids": [peer_aid]},
+            )
+            r.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"trust-peer failed: {exc}") from exc
+    return {"peer_did": body.peer_did, "peer_aid": peer_aid, "trusted": True}
+
+
+@router.post("/{hosted_id}/resolve-and-handshake")
+async def resolve_and_handshake(
+    hosted_id: str,
+    body: HandshakeRequest,
+    mgr: HostedAgentManager = Depends(get_hosted_manager),
+) -> dict[str, Any]:
+    """Resolve ``peer_did`` via did:web (fail-closed) and drive this hosted
+    agent's SDK handshake against the resolved peer origin."""
+    hosted = mgr.get(hosted_id)
+    if hosted is None:
+        raise HTTPException(status_code=404, detail=f"no hosted agent {hosted_id}")
+
+    peer_manifest_url, peer_origin = await _resolve_peer_did(body.peer_did)
 
     admin = f"http://localhost:{hosted.port}/admin/initiate-handshake"
     try:

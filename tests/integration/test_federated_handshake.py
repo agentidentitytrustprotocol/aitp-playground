@@ -72,6 +72,23 @@ def test_cross_domain_handshake_and_capability(monkeypatch) -> None:
         assert analyzer["did"] == f"did:web:127.0.0.1%3A{port_b}"
         assert analyzer["handshake_url"] == f"http://127.0.0.1:{port_b}/aitp/handshake/hello"
 
+        # ── responder trust store (aitp-sdk >= 0.14) ────────────────────────
+        # Unprovisioned, org-B's analyzer rejects org-A's pinned_key HELLO:
+        # it must never admit an AID just because the HELLO asserts it.
+        unprovisioned = client.post(
+            f"/hosted-agents/{researcher['hosted_id']}/resolve-and-handshake",
+            json={"peer_did": analyzer["did"], "requested_grants": ["analyze.data"]},
+        )
+        assert unprovisioned.status_code == 502, unprovisioned.text
+        assert "trust store" in unprovisioned.text
+
+        tp = client.post(
+            f"/hosted-agents/{analyzer['hosted_id']}/trust-peer",
+            json={"peer_did": researcher["did"]},
+        )
+        assert tp.status_code == 200, f"trust-peer failed: {tp.status_code} {tp.text}"
+        assert tp.json()["peer_aid"] == researcher["aid"]
+
         # ── cross-domain handshake ──────────────────────────────────────────
         hs = client.post(
             f"/hosted-agents/{researcher['hosted_id']}/resolve-and-handshake",

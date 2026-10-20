@@ -16,7 +16,7 @@ dependencies = [
   # published wheel; the service detects what's available at runtime via
   # GET /capabilities.
   # The floor records wire compatibility, not "the newest we happened to test".
-  # Five breaking changes and one routine adoption are behind it:
+  # These breaking changes, and one routine adoption, are behind it:
   #   0.3.0 — the compact-JWS SDK (protocol `aitp/0.2`). The pre-0.3 wheels
   #     (JCS, protocol `aitp/0.1`) are wire-incompatible.
   #   0.5.0 — the JCS signing input moved from the transport wrapper to the
@@ -36,8 +36,8 @@ dependencies = [
   #     classifies it; a missing code on an older wheel reports every failure
   #     as `unknown`), and `verify_delegation`/`verify_delegation_multihop`
   #     take a deny-set parameter (the delegation redeem handler in
-  #     aitp_server.py; an older wheel
-  #     raises TypeError, turned into a 503 rather than a silent downgrade).
+  #     aitp_server.py; an older wheel raised TypeError, turned into a 503
+  #     rather than a silent downgrade, until 0.16 made the floor moot).
   #   0.11.0 — the pinned-key identity proof's timestamp encoding changed from
   #     an 8-byte big-endian integer to base-10 ASCII decimal (RFC-AITP-0002
   #     §3.1 erratum, spec issue #17). A HELLO/HELLO_ACK pinned-key proof
@@ -61,11 +61,29 @@ dependencies = [
   #     taxonomy, not aitp-core's ErrorCode; and IdentityDescriptor is read as
   #     a plain untyped dict (engine.py), never a typed pyclass, so an
   #     unrecognized wire field just passes through invisibly.
+  #   0.14.0 — a pinned_key peer is admitted only if its AID is in the
+  #     session's trust store (`pinned_keys=`; empty rejects every peer), and
+  #     every UUID on the wire (jti, message_id, session_id) must be v4. The
+  #     runner pushes each launched agent's AID to its peers
+  #     (/admin/trust-peers); hosted agents take a did:web-verified one
+  #     (/hosted-agents/{id}/trust-peer). See DECISIONS.md D-22.
+  #   0.15.0 / 0.16.0 — keys come from verified Manifests, never from the
+  #     artifact: `verify_delegation` needs the issuer Manifests and
+  #     `verify_session_bundle` the coordinator Manifest. The engine carries
+  #     their URLs and the agents fetch and verify them. The 0.7.0 TypeError
+  #     503 is gone. Manifest members outside the schema fail `unknown_field`.
+  #   0.17.0 — protocol `aitp/0.3`, a strict cutover with no dual-accept:
+  #     envelope signing input v2 (version, message_type and extensions are
+  #     now signed), and every Manifest, TCT, delegation, snapshot and bundle
+  #     says `aitp/0.3`. An aitp/0.2 peer or control plane fails verification,
+  #     so the control plane must be on aitp >= 0.17 too. The upper bound
+  #     keeps the next wire cutover a deliberate bump.
+  #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.17.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.12.0",
+  "aitp-sdk>=0.17.0,<0.18",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",

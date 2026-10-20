@@ -47,6 +47,7 @@ ordered stream.
 
 | Type | Carries | When |
 | --- | --- | --- |
+| `trust.peers_pinned` | `peers: {agent_id: aid}` | After the runner pushed every launched agent's AID into its peers' trust stores, before any handshake (and again after `rotate_keys`). |
 | `trust.establishing` | `initiator`, `target` | Before the handshake is initiated. |
 | `trust.established` | `initiator`, `target`, `grants`, `jti` | After successful handshake. |
 | `manifest.verify_failed` | `step_id`, `agent_id`, `cause`, `source_url` | A trust-anchor step: the agent's own manifest failed verification before its key could be pinned. |
@@ -95,6 +96,7 @@ swallowed rather than failing the run):
 | `handshake.complete` | — | Initiator or responder closes the 4-message exchange. |
 | `handshake.failed` | `error` | Bad hello or commit. |
 | `delegation.issued` / `delegation.rejected` / `delegation.redeemed` | — | RFC-AITP-0006 flow milestones. |
+| `trust.peers_pinned` | `added`, `total` | `/admin/trust-peers` changed this agent's handshake trust store. |
 | `tct.revoked` | — | `/admin/revoke-tct` adds a jti. |
 | `identity.key.rotated` | `old_aid`, `new_aid` | `/admin/rotate-keys` replaces this agent's keypair. |
 | `capability.self_execute` | — | `/admin/self-execute` runs. |
@@ -104,6 +106,8 @@ swallowed rather than failing the run):
 | `tct.renewal.requested` / `tct.renewal.issued` | `jti`, plus TCT identifying fields | Holder requests a fresh TCT before the held one expires / issuer mints it. |
 | `session.bundle.exported` | `session_id`, `participant_count` | RFC-AITP-0010 coordinator built a session bundle. |
 | `session.bundle.verified` | `kind`, `active_count` | RFC-AITP-0010 verifier checked one. |
+| `session.bundle.rejected` | `error` | The bundle failed verification against the coordinator Manifest (a 403). |
+| `tct.renewal.rejected` | `error` | The issuer refused a renewal request (revoked, expired, or bad proof). |
 | `cp.enroll_succeeded` | `aid`, `registered_at` | `/admin/enroll-with-cp` completed. |
 | `cp.enroll_failed` | `stage` (`enroll`/`register`), plus `status_code`/`body` or `transport` or `decode` | Either step of `/admin/enroll-with-cp` failed. |
 | `revocation.list_fetched` | `jti_count`, `added`, `verified`, `issuer` | A revocation snapshot verified and was applied. |

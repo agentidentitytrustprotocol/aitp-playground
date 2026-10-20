@@ -53,6 +53,19 @@ def _classify_manifest_verify_failure(exc: BaseException) -> str:
     return cause
 
 
+def _held_delegation_chain(
+    step_outputs: dict[str, Any], holder: str, issuer: str,
+) -> list[str]:
+    """Manifest URLs of the delegators behind ``holder``'s grant from
+    ``issuer``, if ``holder`` got it by redeeming a delegation (most recent
+    redemption wins). Empty when it holds the grant from its own handshake."""
+    for out in reversed(list(step_outputs.values())):
+        chain = out.get("delegation_chain") if isinstance(out, dict) else None
+        if chain and chain.get("holder") == holder and chain.get("issuer") == issuer:
+            return list(chain.get("issuer_manifest_urls", []))
+    return []
+
+
 class ScenarioRunner:
     def __init__(
         self,
@@ -188,6 +201,11 @@ class ScenarioRunner:
                 )
                 running[agent_spec.id] = ra
                 ctx.emit(RunEvent(type="agent.ready", agent_id=agent_spec.id, aid=ra.aid, port=ra.port))
+
+            # 4b. Provision each agent's responder trust store with the AIDs
+            # of the agents this run launched (aitp-sdk >= 0.14 rejects every
+            # pinned_key peer that is not in it).
+            await self._push_trusted_peers(running, ctx)
 
             # 5. Resolve peer manifest URLs
             peers = await self.trust.resolve_peers(scenario, running)
@@ -414,6 +432,13 @@ class ScenarioRunner:
                 )
                 r.raise_for_status()
                 data = r.json()
+            # The redeemer verifies the token under each hop issuer's Manifest
+            # (aitp-sdk >= 0.16). A delegator that holds its grant through an
+            # earlier redemption carries that chain's issuers forward.
+            data["issuer_manifest_urls"] = [
+                *_held_delegation_chain(step_outputs, step.delegator, step.via_peer),
+                delegator_ra.manifest_url,
+            ]
             step_outputs[step.id] = data
             ctx.emit(RunEvent(
                 type="step.complete", step_id=step.id,
@@ -449,10 +474,16 @@ class ScenarioRunner:
                         "redeem_url": redeem_url,
                         "delegation_token": prior["delegation_token"],
                         "peer_port": target_ra.port,
+                        "issuer_manifest_urls": prior.get("issuer_manifest_urls", []),
                     },
                 )
                 r.raise_for_status()
                 data = r.json()
+            data["delegation_chain"] = {
+                "holder": step.delegatee,
+                "issuer": step.target,
+                "issuer_manifest_urls": list(prior.get("issuer_manifest_urls", [])),
+            }
             step_outputs[step.id] = data
             ctx.emit(RunEvent(
                 type="step.complete", step_id=step.id,
@@ -834,6 +865,9 @@ class ScenarioRunner:
                 )
                 r.raise_for_status()
                 data = r.json()
+            # The verifier needs the coordinator's Manifest (aitp-sdk >= 0.16,
+            # RFC-AITP-0010 §5 step 5); carry where to fetch it with the bundle.
+            data["coordinator_manifest_url"] = coord_ra.manifest_url
             step_outputs[step.id] = data
             ctx.emit(RunEvent(
                 type="session.bundle.exported",
@@ -866,7 +900,10 @@ class ScenarioRunner:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 r = await client.post(
                     f"http://localhost:{verifier_ra.port}/admin/verify-session-bundle",
-                    json={"bundle_envelope": bundle_envelope},
+                    json={
+                        "bundle_envelope": bundle_envelope,
+                        "coordinator_manifest_url": prior.get("coordinator_manifest_url"),
+                    },
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -944,6 +981,9 @@ class ScenarioRunner:
                 data = r.json()
             new_aid = data.get("aid") or ""
             ra.aid = new_aid
+            # The rotated agent is a new pinned_key identity; its peers must
+            # be told before it can handshake with them again.
+            await self._push_trusted_peers(running, ctx)
             step_outputs[step.id] = {
                 "old_aid": old_aid, "new_aid": new_aid,
             }
@@ -1315,6 +1355,35 @@ class ScenarioRunner:
             target=target.agent_id,
             grants=list(data.get("grants", [])),
             jti=data.get("jti"),
+        ))
+
+    async def _push_trusted_peers(
+        self, running: dict[str, RunningAgent], ctx: RunContext,
+    ) -> None:
+        """Replace each agent's pinned-key trust store with the AIDs of the
+        other agents in this run.
+
+        The AIDs are ``RunningAgent.aid``: read by the supervisor from each
+        child's own ``AITP_AGENT_READY`` line over the parent-child pipe (see
+        the ``cp_provision_trust_anchor`` step for why that channel is the
+        authentic one), or from the agent's own ``/admin/rotate-keys``
+        response after a rotation. Never from a HELLO: a peer's self-asserted
+        AID is exactly what the trust store exists to check.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for agent_id, ra in running.items():
+                aids = sorted(
+                    other.aid for other_id, other in running.items()
+                    if other_id != agent_id and other.aid
+                )
+                r = await client.post(
+                    f"http://localhost:{ra.port}/admin/trust-peers",
+                    json={"aids": aids, "replace": True},
+                )
+                r.raise_for_status()
+        ctx.emit(RunEvent(
+            type="trust.peers_pinned",
+            peers={agent_id: ra.aid for agent_id, ra in running.items()},
         ))
 
     async def _establish_pairwise_trust(

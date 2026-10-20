@@ -6,7 +6,8 @@ fail-closed loopback/origin-mismatch guards on
 
 This file covers the rest of the route surface: ``POST /hosted-agents``
 (host), ``GET /hosted-agents``, ``GET /hosted-agents/{id}``,
-``DELETE /hosted-agents/{id}``, and ``POST /hosted-agents/{id}/invoke`` —
+``DELETE /hosted-agents/{id}``, ``POST /hosted-agents/{id}/invoke`` and
+``POST /hosted-agents/{id}/trust-peer`` —
 each success path plus an error path, against a fake ``HostedAgentManager``
 so no subprocess is ever spawned. Follows the same "swap the module's httpx
 reference for a MockTransport-backed client" pattern
@@ -179,7 +180,11 @@ def _patch_httpx_transport(monkeypatch, handler) -> None:
 
     monkeypatch.setattr(
         hosted_api_mod, "httpx",
-        SimpleNamespace(AsyncClient=_client, HTTPStatusError=httpx.HTTPStatusError),
+        SimpleNamespace(
+            AsyncClient=_client,
+            HTTPStatusError=httpx.HTTPStatusError,
+            HTTPError=httpx.HTTPError,
+        ),
     )
 
 
@@ -368,3 +373,105 @@ def test_resolve_and_handshake_502_when_the_admin_dial_raises(monkeypatch) -> No
     assert resp.status_code == 502, resp.text
     assert "handshake failed" in resp.text
     assert "connection refused" in resp.text
+
+
+# --------------------------------------------------------------------------- #
+# POST /hosted-agents/{id}/trust-peer
+# --------------------------------------------------------------------------- #
+
+
+def _org_c_manifest(*, tamper: bool = False) -> tuple[str, str]:
+    import aitp
+
+    peer = aitp.AitpAgent.generate()
+    manifest = peer.build_manifest(
+        "analyzer", "https://org-c.aitp.test/aitp/handshake/hello", ["analyze.data"],
+    )
+    if tamper:
+        doc = json.loads(manifest)
+        doc["manifest"]["display_name"] = "evil"
+        manifest = json.dumps(doc)
+    return peer.aid, manifest
+
+
+def _trust_peer_handler(manifest: str, pushed: list[dict[str, Any]]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert str(request.url) == "https://org-c.aitp.test/.well-known/aitp-manifest"
+            return httpx.Response(200, text=manifest)
+        assert str(request.url) == "http://localhost:9100/admin/trust-peers"
+        body = json.loads(request.content)
+        pushed.append(body)
+        return httpx.Response(200, json={"trusted_peer_aids": body["aids"]})
+    return handler
+
+
+def test_trust_peer_pins_the_aid_of_the_verified_manifest(monkeypatch) -> None:
+    async def _fake_resolve(peer_did: str) -> str:
+        return "https://org-c.aitp.test/.well-known/aitp-manifest"
+
+    monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
+    peer_aid, manifest = _org_c_manifest()
+    pushed: list[dict[str, Any]] = []
+    _patch_httpx_transport(monkeypatch, _trust_peer_handler(manifest, pushed))
+    mgr = FakeHostedManager()
+    mgr.seed(_hosted_agent("h1"))
+
+    resp = TestClient(_app(mgr)).post(
+        "/hosted-agents/h1/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "peer_did": "did:web:org-c.aitp.test", "peer_aid": peer_aid, "trusted": True,
+    }
+    assert pushed == [{"aids": [peer_aid]}]
+
+
+def test_trust_peer_refuses_a_manifest_that_does_not_verify(monkeypatch) -> None:
+    async def _fake_resolve(peer_did: str) -> str:
+        return "https://org-c.aitp.test/.well-known/aitp-manifest"
+
+    monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
+    _aid, manifest = _org_c_manifest(tamper=True)
+    pushed: list[dict[str, Any]] = []
+    _patch_httpx_transport(monkeypatch, _trust_peer_handler(manifest, pushed))
+    mgr = FakeHostedManager()
+    mgr.seed(_hosted_agent("h1"))
+
+    resp = TestClient(_app(mgr)).post(
+        "/hosted-agents/h1/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
+    )
+
+    assert resp.status_code == 502, resp.text
+    assert "failed verification" in resp.text
+    assert pushed == [], "an unverified Manifest's AID must never be pinned"
+
+
+def test_trust_peer_404_for_an_unknown_hosted_id() -> None:
+    resp = TestClient(_app(FakeHostedManager())).post(
+        "/hosted-agents/nope/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_trust_peer_502_when_the_agent_refuses_the_push(monkeypatch) -> None:
+    async def _fake_resolve(peer_did: str) -> str:
+        return "https://org-c.aitp.test/.well-known/aitp-manifest"
+
+    monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
+    _aid, manifest = _org_c_manifest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=manifest)
+        return httpx.Response(400, json={"detail": "bad aid"})
+
+    _patch_httpx_transport(monkeypatch, handler)
+    mgr = FakeHostedManager()
+    mgr.seed(_hosted_agent("h1"))
+
+    resp = TestClient(_app(mgr)).post(
+        "/hosted-agents/h1/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
+    )
+    assert resp.status_code == 502, resp.text

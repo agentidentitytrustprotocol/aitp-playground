@@ -3,7 +3,7 @@
 Skipped if the `aitp` extension isn't importable (run `maturin develop`
 in aitp-rs/bindings/aitp-py to install it into the playground venv).
 
-Under AITP v0.2 every portable trust artifact (TCT, grant voucher,
+Under AITP v0.2+ every portable trust artifact (TCT, grant voucher,
 delegation token) is an opaque compact-JWS string. A handshake completion
 returns ``{"tct": "<jws>", "grant_voucher": "<jws>"}``; a delegation is
 built from the *voucher*, not the TCT.
@@ -29,9 +29,9 @@ def _is_compact_jws(token: str) -> bool:
 def _handshake(initiator, responder, responder_manifest, grants):
     """Run a full handshake; return the initiator's completion dict
     ``{"tct", "grant_voucher"}``."""
-    sess = initiator.new_session()
+    sess = initiator.new_session(pinned_keys=[responder.aid])
     hello = sess.build_hello(responder_manifest, grants)
-    rsess = responder.new_responder()
+    rsess = responder.new_responder(pinned_keys=[initiator.aid])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
     commit_ack, _ = rsess.process_commit(commit)
@@ -48,7 +48,7 @@ def test_delegation_round_trip() -> None:
     manifest_A = A.build_manifest(
         "A", "http://localhost:1/aitp/handshake/hello", ["write.content"],
     )
-    B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
+    manifest_B = B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
     C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
 
     # B initiates with A; A issues B a TCT + grant voucher for write.content.
@@ -60,8 +60,9 @@ def test_delegation_round_trip() -> None:
     delegation = B.build_delegation(voucher_b, C.aid, ["write.content"], 600)
     assert _is_compact_jws(delegation)
 
-    # A verifies and mints a fresh TCT for C.
-    verified = aitp.verify_delegation(delegation, A.aid)
+    # A verifies (under B's Manifest: B signed the token) and mints a fresh
+    # TCT for C.
+    verified = aitp.verify_delegation(delegation, A.aid, [manifest_B])
     assert verified.delegator == A.aid
     assert verified.delegatee == C.aid
     assert verified.grants == ["write.content"]
@@ -104,7 +105,7 @@ def test_verify_delegation_wrong_verifier_rejected() -> None:
     manifest_A = A.build_manifest(
         "A", "http://localhost:1/aitp/handshake/hello", ["x"],
     )
-    B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
+    manifest_B = B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
     C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
     D.build_manifest("D", "http://localhost:4/aitp/handshake/hello", ["x"])
 
@@ -112,4 +113,21 @@ def test_verify_delegation_wrong_verifier_rejected() -> None:
     delegation = B.build_delegation(voucher_b, C.aid, ["x"], 600)
     # D (not A) tries to verify — fails.
     with pytest.raises(RuntimeError):
-        aitp.verify_delegation(delegation, D.aid)
+        aitp.verify_delegation(delegation, D.aid, [manifest_B])
+
+
+def test_verify_delegation_without_the_delegator_manifest_is_rejected() -> None:
+    """aitp-sdk >= 0.16: the delegator key comes from its verified Manifest,
+    never from the token; a Manifest for someone else does not resolve it."""
+    A = _agent(b"A4")
+    B = _agent(b"B4")
+    C = _agent(b"C4")
+
+    manifest_A = A.build_manifest("A", "http://localhost:1/aitp/handshake/hello", ["x"])
+    B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
+    manifest_C = C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
+
+    voucher_b = _handshake(B, A, manifest_A, ["x"])["grant_voucher"]
+    delegation = B.build_delegation(voucher_b, C.aid, ["x"], 600)
+    with pytest.raises(RuntimeError):
+        aitp.verify_delegation(delegation, A.aid, [manifest_C])
