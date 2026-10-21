@@ -35,7 +35,7 @@ CP_TIMEOUT_MS=5000                    # per-request timeout (default 5000)
 ```
 
 The CP must speak the same wire protocol: this playground is on `aitp/0.3`
-(aitp-sdk 0.18; `aitp/0.3` since 0.17), so it needs a CP built on aitp >= 0.17. There is no
+(aitp-sdk 0.19; `aitp/0.3` since 0.17), so it needs a CP built on aitp >= 0.17. There is no
 dual-accept: an older CP rejects the agents' Manifests at enrollment.
 
 `CpClient.enabled` is simply `bool(settings.cp_base_url)`. The Dockerized

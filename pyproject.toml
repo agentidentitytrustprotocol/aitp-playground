@@ -85,12 +85,20 @@ dependencies = [
   #     REVOCATION_SNAPSHOT_INVALID — the Python cause stays
   #     `version_unknown`. The floor moves with the bounded range, not for
   #     a wire break: the `<0.18` upper bound made this a deliberate bump.
-  #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.18.md.
+  #   0.19.0 — no wire change (still `aitp/0.3`; 0.18 peers interoperate).
+  #     The bindings sign only a lowercase UUID v4 `message_id`/`session_id`
+  #     (the playground passes `str(uuid.uuid4())` and never sets a
+  #     message_id), and a non-UUID `revoked_jtis` entry now raises instead
+  #     of being ignored — so `/admin/revoke-tct` refuses one with 400 and
+  #     stores the canonical form. Also fixes the Python binding never
+  #     matching an uppercase or braced deny-list entry. The floor moves
+  #     with the bounded range: the `<0.19` upper bound made this deliberate.
+  #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.18.0,<0.19",
+  "aitp-sdk>=0.19.0,<0.20",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",

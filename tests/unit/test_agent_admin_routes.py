@@ -259,3 +259,39 @@ def test_a_grantor_refusing_a_redemption_is_relayed_as_its_403(monkeypatch) -> N
     assert resp.status_code == 403, resp.text
     # The grantor's reason, unwrapped — not its JSON body as a string.
     assert resp.json()["detail"] == reason
+
+
+# --- /admin/revoke-tct: only canonical UUIDs reach the deny-list ---
+
+
+def _revocation_app() -> tuple[FastAPI, RevocationState]:
+    revocation = RevocationState()
+    router = build_admin_router(
+        agent=aitp.AitpAgent.generate(),
+        bootstrap={"run_id": "r", "agent_id": "a", "aitp": {}},
+        held_tcts={},
+        revocation=revocation,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    return app, revocation
+
+
+def test_revoke_tct_rejects_a_non_uuid_jti() -> None:
+    """aitp-sdk 0.19 raises on a non-UUID `revoked_jtis` entry, so storing one
+    would make every later TCT check on this agent fail. Refuse it at 400."""
+    app, revocation = _revocation_app()
+    client = _client(app)
+    for body in ({"jti": "not-a-uuid"}, {"jti": 7}, {}):
+        resp = client.post("/admin/revoke-tct", json=body)
+        assert resp.status_code == 400, (body, resp.text)
+    assert revocation.effective_jtis == set()
+
+
+def test_revoke_tct_stores_the_canonical_form() -> None:
+    app, revocation = _revocation_app()
+    jti = str(uuid.uuid4())
+    resp = _client(app).post("/admin/revoke-tct", json={"jti": "{" + jti.upper() + "}"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["revoked"] == jti
+    assert revocation.effective_jtis == {jti}
