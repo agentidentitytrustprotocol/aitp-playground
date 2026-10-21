@@ -158,6 +158,7 @@ class ScenarioRunner:
             ))
 
         bootstrap_files: dict[str, str] = {}
+        admin_tokens: dict[str, str] = {}
         for agent_spec in scenario.spec.agents:
             placeholder_peers = {
                 other.id: {
@@ -176,6 +177,7 @@ class ScenarioRunner:
                 oidc=run_oidc,
             )
             bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
+            admin_tokens[agent_spec.id] = bs["admin_token"]
 
         # 4. Spawn all agents
         running: dict[str, RunningAgent] = {}
@@ -197,6 +199,7 @@ class ScenarioRunner:
                     agent_id=agent_spec.id,
                     prepared=prepared,
                     port=ports[agent_spec.id],
+                    admin_token=admin_tokens[agent_spec.id],
                     startup_timeout_ms=int(manifest.spec.host.get("startupTimeoutMs", 30_000)),
                 )
                 running[agent_spec.id] = ra
@@ -420,7 +423,7 @@ class ScenarioRunner:
                 initiator=step.delegator, target=step.delegatee,
                 grants=scope,
             ))
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.post(
                     f"http://localhost:{delegator_ra.port}/admin/delegate",
                     json={
@@ -467,7 +470,7 @@ class ScenarioRunner:
                 type="delegation.redeeming",
                 initiator=step.delegatee, target=step.target,
             ))
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.post(
                     f"http://localhost:{delegatee_ra.port}/admin/redeem-delegation",
                     json={
@@ -541,7 +544,7 @@ class ScenarioRunner:
                 return
             if local_revoke:
                 issuer_ra = running[step.issuer]
-                async with httpx.AsyncClient(timeout=5.0) as client:
+                async with httpx.AsyncClient(timeout=5.0, auth=self.supervisor.admin_auth) as client:
                     r = await client.post(
                         f"http://localhost:{issuer_ra.port}/admin/revoke-tct",
                         json={"jti": jti},
@@ -570,7 +573,7 @@ class ScenarioRunner:
                     "cp_api_key": self.config.cp_api_key,
                 }
                 for agent_id in step.refresh_agents or [step.audience]:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
+                    async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
                         rr = await client.post(
                             f"http://localhost:{running[agent_id].port}"
                             "/admin/refresh-revocations",
@@ -615,7 +618,7 @@ class ScenarioRunner:
             ctx.emit(RunEvent(
                 type="cp.enroll_started", step_id=step.id, agent_id=step.agent,
             ))
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.post(
                     f"http://localhost:{ra.port}/admin/enroll-with-cp",
                     json={},
@@ -696,7 +699,7 @@ class ScenarioRunner:
                 return
             ra = running[step.agent]
             namespace = step.namespace or scenario.metadata.pack
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
                 mr = await client.get(ra.manifest_url)
                 mr.raise_for_status()
                 # Verify before reading key material out of the envelope. This
@@ -827,7 +830,7 @@ class ScenarioRunner:
                 )
             holder_ra = running[step.agent]
             issuer_ra = running[step.via_peer]
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.post(
                     f"http://localhost:{holder_ra.port}/admin/renew-tct",
                     json={"peer_port": issuer_ra.port},
@@ -857,7 +860,7 @@ class ScenarioRunner:
                     f"step {step.id}: tct_cache_stats requires agent"
                 )
             target_ra = running[step.agent]
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.get(
                     f"http://localhost:{target_ra.port}/admin/tct-cache-stats"
                 )
@@ -887,7 +890,7 @@ class ScenarioRunner:
             # issued token back from the SDK — each participant holds it. So we
             # collect each participant's held (coordinator-issued) token and
             # hand them to the coordinator to sign into the bundle.
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
                 participant_tcts: list[dict[str, Any]] = []
                 for p_id in step.participants:
                     p_ra = running[p_id]
@@ -938,7 +941,7 @@ class ScenarioRunner:
                     f"produce a bundle_envelope"
                 )
             verifier_ra = running[step.verifier]
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.post(
                     f"http://localhost:{verifier_ra.port}/admin/verify-session-bundle",
                     json={
@@ -1013,7 +1016,7 @@ class ScenarioRunner:
                 )
             ra = running[step.agent]
             old_aid = ra.aid
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
                 r = await client.post(
                     f"http://localhost:{ra.port}/admin/rotate-keys",
                     json={},
@@ -1224,7 +1227,7 @@ class ScenarioRunner:
             initiator=caller.agent_id, target=target.agent_id,
             capability=capability,
         ))
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
             r = await client.post(
                 f"http://localhost:{target.port}/capabilities/{capability}",
                 content="{}",
@@ -1269,7 +1272,7 @@ class ScenarioRunner:
             initiator=caller.agent_id, target=target.agent_id,
             capability=capability,
         ))
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, auth=self.supervisor.admin_auth) as client:
             r = await client.post(
                 f"http://localhost:{caller.port}/admin/invoke",
                 json={
@@ -1379,7 +1382,7 @@ class ScenarioRunner:
             type="trust.establishing",
             initiator=initiator.agent_id, target=target.agent_id,
         ))
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, auth=self.supervisor.admin_auth) as client:
             r = await client.post(
                 f"http://localhost:{initiator.port}/admin/initiate-handshake",
                 json={
@@ -1411,7 +1414,7 @@ class ScenarioRunner:
         response after a rotation. Never from a HELLO: a peer's self-asserted
         AID is exactly what the trust store exists to check.
         """
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
             for agent_id, ra in running.items():
                 aids = sorted(
                     other.aid for other_id, other in running.items()
@@ -1455,7 +1458,7 @@ class ScenarioRunner:
         payload: Any,
         ctx: RunContext,
     ) -> Any:
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=180.0, auth=self.supervisor.admin_auth) as client:
             r = await client.post(
                 f"http://localhost:{caller.port}/admin/invoke",
                 json={
@@ -1485,7 +1488,7 @@ class ScenarioRunner:
         capability: str,
         payload: Any,
     ) -> Any:
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=180.0, auth=self.supervisor.admin_auth) as client:
             r = await client.post(
                 f"http://localhost:{runner_agent.port}/admin/self-execute",
                 json={"capability": capability, "payload": payload},

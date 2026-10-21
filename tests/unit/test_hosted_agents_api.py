@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from aitp_playground.api import hosted as hosted_api_mod
 from aitp_playground.api._deps import get_hosted_manager
+from aitp_playground.hosting.supervisor import AdminTokenAuth
 from aitp_playground.api.hosted import router as hosted_router
 from aitp_playground.hosting.hosted import HostedAgent
 
@@ -50,6 +51,8 @@ class FakeHostedManager:
         self.host_error = host_error
         self.host_calls: list[dict[str, Any]] = []
         self._hosted: dict[str, HostedAgent] = {}
+        self.admin_tokens: dict[int, str] = {}
+        self.supervisor = SimpleNamespace(admin_auth=AdminTokenAuth(self.admin_tokens))
 
     async def host(self, **kwargs: Any) -> HostedAgent:
         self.host_calls.append(kwargs)
@@ -176,7 +179,7 @@ def _patch_httpx_transport(monkeypatch, handler) -> None:
     transport = httpx.MockTransport(handler)
 
     def _client(**kwargs: Any) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=transport)
+        return httpx.AsyncClient(transport=transport, auth=kwargs.get("auth"))
 
     monkeypatch.setattr(
         hosted_api_mod, "httpx",

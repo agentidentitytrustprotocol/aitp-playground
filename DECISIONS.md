@@ -543,11 +543,42 @@ read from each other. Each is filled from a verified source: a verified Manifest
 for the CP, the launch pipe or a verified did:web Manifest for agents.
 
 **Known limits:**
-- `/admin/trust-peers` is unauthenticated, like every `/admin` route (tracked in
-  [#95](https://github.com/agentidentitytrustprotocol/aitp-playground/issues/95)). That is
-  the loopback-only demo posture, and anyone who can reach `/admin` can already
-  drive the agent. It asks the SDK to validate the new set before adopting it,
+- `/admin/trust-peers` was unauthenticated, like every `/admin` route, until
+  [#95](https://github.com/agentidentitytrustprotocol/aitp-playground/issues/95) put
+  `/admin` behind a per-agent token (D-23). It asks the SDK to validate the new set before adopting it,
   so a malformed AID is a 400 and leaves the store unchanged.
 - The initiator side is TOFU on the Manifest URL the runner supplied. The
   Manifest is self-authenticating to its AID, but the URL choice is the
   runner's.
+
+## D-23 — `/admin` behind a per-agent token, minted at spawn (#95)
+**2026-10-20 · recorded**
+
+D-22 made `/admin/trust-peers` the source of each agent's handshake admission list, and agents
+bind `0.0.0.0`. So anyone who could reach an agent's port could have it admit any AID as a
+`pinned_key` peer, which defeats the admission control aitp-sdk 0.14 added.
+
+**Chosen: the per-agent bearer token that #95 suggests.**
+- `BootstrapBuilder.build` mints `admin_token` (`secrets.token_urlsafe(32)`) for each spawn. The
+  bootstrap file is now written 0600, since it already carried the agent's seed.
+- `run_agent()` serves the app behind `AdminAuthMiddleware` (`agents/base/admin_auth.py`), which
+  requires the token in `X-Aitp-Admin-Token` on `/admin` and `/admin/*`. `admin_token` is a
+  required keyword. A bootstrap without one means every guarded call gets 401. There is no
+  open fallback.
+- The supervisor keeps tokens keyed by port, outside `RunningAgent` and `HostedAgent`, because
+  both are serialized with `asdict()` in API responses. `AdminTokenAuth`, an `httpx.Auth`,
+  attaches the token only to loopback `/admin` URLs on a live agent's port. The engine and the
+  hosted-agent API use it, so a client that also talks to peers or the CP never sends the
+  token off-box.
+- `/admin/process-renewal` is exempt. The holder agent calls it on the issuer (RFC-AITP-0013)
+  without the issuer's token. Its body is a signed renewal request that the SDK verifies
+  against a TCT the issuer minted, so the protocol authenticates it.
+
+No new secret, env var or deployment step: the token lives only as long as the agent process.
+
+**Rejected:**
+- *A separate loopback-only admin listener.* It needs a second socket per agent and changes to
+  `run_agent()`'s bind-before-ready guarantee. It also does not cover hosted agents, whose admin
+  calls come from the same host anyway.
+- *A service-wide shared secret from env.* It needs provisioning, and one leaked value would
+  open every agent.

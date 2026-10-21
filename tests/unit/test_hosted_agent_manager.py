@@ -67,9 +67,11 @@ class FakeSupervisor:
 
     async def launch(
         self, *, run_id: str, agent_id: str, prepared: Any, port: int,
+        admin_token: Optional[str] = None,
         startup_timeout_ms: int = 30_000,
     ) -> RunningAgent:
         self.launched.append(agent_id)
+        self.admin_token = admin_token
         if self.fail:
             raise RuntimeError("subprocess failed to signal ready")
         return RunningAgent(

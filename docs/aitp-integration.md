@@ -374,8 +374,8 @@ AID a HELLO claims. Instead:
   declares. A handshake from an unprovisioned peer fails with
   `pinned_key not in local trust store`.
 
-`/admin/trust-peers` is unauthenticated like every `/admin` route (loopback
-demo posture). It asks the SDK to validate the new set before adopting it, so
+Like every `/admin` route, `/admin/trust-peers` needs the agent's admin token
+in `X-Aitp-Admin-Token` and returns 401 without it (`DECISIONS.md` D-23). It asks the SDK to validate the new set before adopting it, so
 a malformed AID is a 400 and leaves the store unchanged. See
 `DECISIONS.md` D-22.
 

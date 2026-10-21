@@ -177,7 +177,7 @@ async def trust_peer(
         raise HTTPException(status_code=404, detail=f"no hosted agent {hosted_id}")
     peer_manifest_url, _ = await _resolve_peer_did(body.peer_did)
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, auth=mgr.supervisor.admin_auth) as client:
             mr = await client.get(peer_manifest_url)
             mr.raise_for_status()
             try:
@@ -214,7 +214,7 @@ async def resolve_and_handshake(
 
     admin = f"http://localhost:{hosted.port}/admin/initiate-handshake"
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, auth=mgr.supervisor.admin_auth) as client:
             r = await client.post(
                 admin,
                 json={
@@ -256,7 +256,7 @@ async def invoke(
 
     admin = f"http://localhost:{hosted.port}/admin/invoke"
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=180.0, auth=mgr.supervisor.admin_auth) as client:
             r = await client.post(
                 admin,
                 json={

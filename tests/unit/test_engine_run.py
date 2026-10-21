@@ -27,7 +27,7 @@ from aitp_playground.errors import ScenarioNotFoundError
 from aitp_playground.hosting.adapters.base import ManifestValidation
 from aitp_playground.hosting.bootstrap import BootstrapBuilder
 from aitp_playground.hosting.port_allocator import PortAllocator
-from aitp_playground.hosting.supervisor import RunningAgent
+from aitp_playground.hosting.supervisor import AdminTokenAuth, RunningAgent
 from aitp_playground.registry.models import AgentManifest, ScenarioVersion, StepFault
 from aitp_playground.runner import engine as engine_mod
 from aitp_playground.runner.engine import ScenarioRunner
@@ -178,7 +178,8 @@ def agent_http(monkeypatch) -> _AgentHttpHandler:
     transport = httpx.MockTransport(handler)
 
     def _client(**kwargs: Any) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=transport)
+        # Keep the engine's auth hook so /admin calls carry the agent's token.
+        return httpx.AsyncClient(transport=transport, auth=kwargs.get("auth"))
 
     monkeypatch.setattr(engine_mod, "httpx", SimpleNamespace(AsyncClient=_client))
     return handler
@@ -205,9 +206,14 @@ class FakeSupervisor:
         self.launched: list[str] = []
         self.agents: dict[str, RunningAgent] = {}
         self.killed: list[str] = []
+        self.admin_tokens: dict[int, str] = {}
+        self.admin_auth = AdminTokenAuth(self.admin_tokens)
 
     async def launch(self, *, run_id: str, agent_id: str, prepared: Any, port: int,
+                     admin_token: Optional[str] = None,
                      startup_timeout_ms: int = 30_000) -> RunningAgent:
+        if admin_token:
+            self.admin_tokens[port] = admin_token
         if agent_id == self.fail_on:
             raise RuntimeError(f"launch failed for {agent_id}")
         ra = RunningAgent(
@@ -1516,3 +1522,23 @@ async def test_run_failed_not_emitted_when_dispatch_races_a_cancel(agent_http) -
         "the STORE record must stay cancelled, not be overwritten to "
         "'failed' downstream of the guard"
     )
+
+
+async def test_every_admin_call_carries_the_launched_agents_token(agent_http) -> None:
+    """Issue #95: agents refuse /admin without their token. Every /admin call
+    the engine makes — the trust-peers push included — carries the token from
+    that agent's own bootstrap, and a different agent's token is never sent."""
+    env = make_env(
+        agents={"alice": ["research.query"], "bob": ["write.content"]},
+        steps=[{"id": "write", "agent": "alice", "capability": "write.content",
+                "input_template": "x"}],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+
+    tokens = env.supervisor.admin_tokens
+    assert len(tokens) == 2 and len(set(tokens.values())) == 2
+    admin_calls = [r for r in agent_http.requests if r.url.path.startswith("/admin/")]
+    assert {r.url.path for r in admin_calls} >= {"/admin/trust-peers", "/admin/invoke"}
+    for r in admin_calls:
+        assert r.headers.get("X-Aitp-Admin-Token") == tokens[r.url.port], r.url

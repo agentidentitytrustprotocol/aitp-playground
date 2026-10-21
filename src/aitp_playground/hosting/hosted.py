@@ -136,6 +136,7 @@ class HostedAgentManager:
                 agent_id=agent_id,
                 prepared=prepared,
                 port=port,
+                admin_token=bs["admin_token"],
                 startup_timeout_ms=int(
                     resolved_manifest.spec.host.get("startupTimeoutMs", 30_000)
                 ),
