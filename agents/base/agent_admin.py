@@ -12,6 +12,7 @@ All AITP protocol logic lives in the aitp-py SDK.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Awaitable, Callable, Optional
 
 import aitp
@@ -740,7 +741,15 @@ def build_admin_router(
         peer pick up the same jti from a signed revocation list.
         """
         body = await request.json()
-        jti: str = body["jti"]
+        # Store only a canonical UUID. Since aitp-sdk 0.19 a deny-list entry
+        # that is not a UUID makes every verify call raise, so one bad
+        # revocation would refuse every TCT this agent sees; refuse it here
+        # instead. The lowercase form also keeps `_revoked_source_of`'s plain
+        # string lookup matching the jti in the token.
+        try:
+            jti = str(uuid.UUID(body["jti"]))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="jti must be a UUID") from None
         # Local, deliberately separate from anything the CP says. A snapshot
         # refresh replaces the CP-derived set wholesale; it must never clear
         # an operator's own revocation.
