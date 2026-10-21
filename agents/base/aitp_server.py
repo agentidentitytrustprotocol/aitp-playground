@@ -19,6 +19,7 @@ import aitp
 import uvicorn
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from admin_auth import AdminAuthMiddleware
 from bootstrap import get_manifest_json
 from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
@@ -34,8 +35,20 @@ logger = logging.getLogger(__name__)
 _MANIFEST_REMINT_COOLDOWN_SECS = 30
 
 
-def run_agent(app: Any, *, host: str, port: int, log_level: str = "warning") -> None:
+def run_agent(
+    app: Any,
+    *,
+    host: str,
+    port: int,
+    admin_token: Optional[str],
+    log_level: str = "warning",
+) -> None:
     """Run ``app`` under uvicorn with the socket already listening at startup.
+
+    ``app`` is served behind ``AdminAuthMiddleware``: every ``/admin`` request
+    must carry ``admin_token`` (the bootstrap's ``admin_token``; see
+    admin_auth.py). It is a required keyword so an entrypoint cannot forget
+    it, and ``None`` means every guarded ``/admin`` request is refused.
 
     uvicorn's ``Server.startup()`` awaits the ASGI lifespan — where
     ``ready_lifespan`` below prints ``AITP_AGENT_READY`` — *before* it binds
@@ -53,7 +66,9 @@ def run_agent(app: Any, *, host: str, port: int, log_level: str = "warning") -> 
     started consuming it yet. uvicorn calls ``sock.listen()`` again inside
     ``create_server()``; re-listening an already-listening socket is a no-op.
     """
-    config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
+    config = uvicorn.Config(
+        AdminAuthMiddleware(app, token=admin_token), host=host, port=port, log_level=log_level
+    )
     server = uvicorn.Server(config)
     sock = config.bind_socket()
     sock.listen(config.backlog)
@@ -532,8 +547,8 @@ class AitpServer:
             playground runner (AIDs of the agents it launched, read from each
             child's AITP_AGENT_READY line) and the hosted-agent API (an AID
             out of a did:web-resolved, verified Manifest). Like every
-            ``/admin`` route this is unauthenticated: the demo trusts whoever
-            can reach the agent's loopback admin port.
+            ``/admin`` route it needs the supervisor's admin token
+            (admin_auth.py, issue #95).
             """
             body = await request.json()
             aids = body.get("aids")

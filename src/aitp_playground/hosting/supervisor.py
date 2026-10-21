@@ -4,10 +4,38 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass
 from typing import Optional
 
+import httpx
+
 logger = logging.getLogger(__name__)
+
+#: Header an agent's AdminAuthMiddleware checks (agents/base/admin_auth.py).
+ADMIN_TOKEN_HEADER = "X-Aitp-Admin-Token"
+
+
+class AdminTokenAuth(httpx.Auth):
+    """Attach a launched agent's admin token to calls to its ``/admin`` routes.
+
+    Agents refuse ``/admin`` without it (issue #95). The token is added only
+    for loopback URLs whose port is a live agent's, so a client that also
+    talks to peers or the control plane never sends one off-box.
+    """
+
+    def __init__(self, tokens: Mapping[int, str]) -> None:
+        self._tokens = tokens
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        url = request.url
+        if url.host in ("localhost", "127.0.0.1") and (
+            url.path == "/admin" or url.path.startswith("/admin/")
+        ):
+            token = self._tokens.get(url.port) if url.port is not None else None
+            if token:
+                request.headers[ADMIN_TOKEN_HEADER] = token
+        yield request
 
 
 @dataclass
@@ -26,6 +54,10 @@ class AgentSupervisor:
     def __init__(self) -> None:
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._agents: dict[str, RunningAgent] = {}
+        # Admin tokens by port — kept off RunningAgent, which /agents
+        # serializes with asdict().
+        self._admin_tokens: dict[int, str] = {}
+        self.admin_auth = AdminTokenAuth(self._admin_tokens)
 
     @staticmethod
     def _key(run_id: str, agent_id: str) -> str:
@@ -38,9 +70,12 @@ class AgentSupervisor:
         agent_id: str,
         prepared,  # PreparedLaunch (avoid cyclic import)
         port: int,
+        admin_token: Optional[str] = None,
         startup_timeout_ms: int = 30_000,
     ) -> RunningAgent:
         key = self._key(run_id, agent_id)
+        if admin_token:
+            self._admin_tokens[port] = admin_token
         logger.info("Launching agent %s on port %d", agent_id, port)
         proc = subprocess.Popen(
             [prepared.command, *prepared.args],
@@ -112,6 +147,8 @@ class AgentSupervisor:
     def kill(self, run_id: str, agent_id: str) -> None:
         key = self._key(run_id, agent_id)
         proc = self._processes.pop(key, None)
+        if key in self._agents:
+            self._admin_tokens.pop(self._agents[key].port, None)
         if proc and proc.poll() is None:
             proc.terminate()
             try:

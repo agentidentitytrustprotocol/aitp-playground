@@ -160,4 +160,10 @@ async def research_deep(request: Request) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    run_agent(app, host="0.0.0.0", port=PORT, log_level="warning")
+    run_agent(
+        app,
+        host="0.0.0.0",
+        port=PORT,
+        admin_token=bootstrap.get("admin_token"),
+        log_level="warning",
+    )

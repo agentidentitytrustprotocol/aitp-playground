@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -89,6 +91,10 @@ class BootstrapBuilder:
                 "run_id": run_id,
             },
             "inputs": dict(inputs),
+            # Bearer for the agent's /admin routes (issue #95). Fresh per
+            # spawn; the supervisor sends it, the agent's AdminAuthMiddleware
+            # checks it. Pass it to supervisor.launch(admin_token=...).
+            "admin_token": secrets.token_urlsafe(32),
         }
         if cp_block:
             bootstrap["cp"] = cp_block
@@ -111,5 +117,9 @@ class BootstrapBuilder:
         tmpdir = Path(tempfile.gettempdir()) / "aitp-bootstrap"
         tmpdir.mkdir(parents=True, exist_ok=True)
         path = tmpdir / f"{bootstrap['run_id']}_{bootstrap['agent_id']}.json"
-        path.write_text(json.dumps(bootstrap, indent=2))
+        # 0600: the file carries the agent's seed and admin token.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(bootstrap, indent=2))
+        os.chmod(path, 0o600)  # O_CREAT's mode does not apply to an existing file
         return str(path)
