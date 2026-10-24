@@ -39,6 +39,9 @@ CP_URL = os.environ.get("CP_URL", "http://localhost:4000")
 # requires a Bearer token on non-public routes. /api/events/history is
 # non-public, so we pass the same key the playground uses via CP_API_KEY.
 CP_API_KEY = os.environ.get("CP_API_KEY", "")
+# The playground's own API key (docker-compose.test.yml sets it on both sides).
+PLAYGROUND_API_KEY = os.environ.get("PLAYGROUND_API_KEY", "")
+_PG_HEADERS = {"Authorization": f"Bearer {PLAYGROUND_API_KEY}"} if PLAYGROUND_API_KEY else {}
 # Engine fires cp.ingest_events as a background task on run.complete. The CP
 # ingest path is synchronous (write to audit_events) but the playground task
 # loop may not have flushed by the time GET /runs/{id} returns terminal.
@@ -94,7 +97,7 @@ SCENARIOS = [
 def client() -> httpx.Client:
     if not os.environ.get("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set — cannot exercise real LLM path")
-    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0) as c:
+    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0, headers=_PG_HEADERS) as c:
         # Pre-flight: the playground must be reachable and healthy.
         try:
             r = c.get("/healthz")

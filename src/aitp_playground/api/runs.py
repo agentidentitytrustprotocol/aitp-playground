@@ -19,7 +19,14 @@ from ..observability.narrator import narrate_events
 from ..runner.context import RunEvent
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
-from ._deps import get_cp_client, get_run_store, get_runner, get_supervisor
+from ._deps import (
+    enforce_spend_limits,
+    get_cp_client,
+    get_run_store,
+    get_runner,
+    get_supervisor,
+    require_api_key,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -74,7 +81,10 @@ class RunResponse(BaseModel):
     created_at: Optional[float] = None
 
 
-@router.post("", response_model=RunCreated, status_code=202)
+@router.post(
+    "", response_model=RunCreated, status_code=202,
+    dependencies=[Depends(enforce_spend_limits)],
+)
 async def create_run(
     background_tasks: BackgroundTasks,
     body: RunRequest,
@@ -115,7 +125,7 @@ async def _run_in_background(runner: ScenarioRunner, run_id: str, body: RunReque
         logger.exception("Background run %s crashed", run_id)
 
 
-@router.get("", response_model=RunList)
+@router.get("", response_model=RunList, dependencies=[Depends(require_api_key)])
 def list_runs(store: RunStore = Depends(get_run_store)) -> RunList:
     items: list[RunSummary] = []
     for rid in store.list_ids():
@@ -131,7 +141,7 @@ def list_runs(store: RunStore = Depends(get_run_store)) -> RunList:
     return RunList(runs=items)
 
 
-@router.get("/{run_id}", response_model=RunResponse)
+@router.get("/{run_id}", response_model=RunResponse, dependencies=[Depends(require_api_key)])
 def get_run(run_id: str, store: RunStore = Depends(get_run_store)) -> RunResponse:
     record = store.get(run_id)
     if record is None:
@@ -163,7 +173,7 @@ class CpSessionsResponse(BaseModel):
     count: int = 0
 
 
-@router.get("/{run_id}/cp-audit", response_model=CpAuditResponse)
+@router.get("/{run_id}/cp-audit", response_model=CpAuditResponse, dependencies=[Depends(require_api_key)])
 async def get_run_cp_audit(
     run_id: str,
     type: Optional[str] = None,
@@ -200,7 +210,7 @@ class CpDeliveriesResponse(BaseModel):
     count: int = 0
 
 
-@router.get("/{run_id}/cp-deliveries", response_model=CpDeliveriesResponse)
+@router.get("/{run_id}/cp-deliveries", response_model=CpDeliveriesResponse, dependencies=[Depends(require_api_key)])
 def get_run_cp_deliveries(
     run_id: str,
     event_type: Optional[str] = None,
@@ -237,7 +247,7 @@ def get_run_cp_deliveries(
     )
 
 
-@router.get("/{run_id}/cp-sessions", response_model=CpSessionsResponse)
+@router.get("/{run_id}/cp-sessions", response_model=CpSessionsResponse, dependencies=[Depends(require_api_key)])
 async def get_run_cp_sessions(
     run_id: str,
     status: Optional[str] = None,
@@ -260,7 +270,7 @@ async def get_run_cp_sessions(
     )
 
 
-@router.get("/{run_id}/narrate", response_class=PlainTextResponse)
+@router.get("/{run_id}/narrate", response_class=PlainTextResponse, dependencies=[Depends(require_api_key)])
 def get_run_narrate(
     run_id: str,
     store: RunStore = Depends(get_run_store),
@@ -284,7 +294,7 @@ def get_run_narrate(
     return PlainTextResponse("\n".join(lines) + "\n")
 
 
-@router.get("/{run_id}/status", response_model=RunStatus)
+@router.get("/{run_id}/status", response_model=RunStatus, dependencies=[Depends(require_api_key)])
 def get_run_status(run_id: str, store: RunStore = Depends(get_run_store)) -> RunStatus:
     record = store.get(run_id)
     if record is None:
@@ -300,7 +310,7 @@ def get_run_status(run_id: str, store: RunStore = Depends(get_run_store)) -> Run
 _TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 
 
-@router.post("/{run_id}/cancel", status_code=202)
+@router.post("/{run_id}/cancel", status_code=202, dependencies=[Depends(require_api_key)])
 def cancel_run(
     run_id: str,
     store: RunStore = Depends(get_run_store),
@@ -344,7 +354,7 @@ def cancel_run(
     return {"run_id": run_id, "status": "cancelled", "cancelled": True}
 
 
-@router.get("/{run_id}/events")
+@router.get("/{run_id}/events", dependencies=[Depends(require_api_key)])
 async def stream_run_events(
     run_id: str,
     store: RunStore = Depends(get_run_store),

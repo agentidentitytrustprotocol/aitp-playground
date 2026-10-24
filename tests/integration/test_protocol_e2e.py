@@ -33,6 +33,9 @@ pytestmark = pytest.mark.skipif(
 PLAYGROUND_URL = os.environ.get("PLAYGROUND_URL", "http://localhost:8000")
 CP_URL = os.environ.get("CP_URL", "http://localhost:4000")
 CP_API_KEY = os.environ.get("CP_API_KEY", "")
+# The playground's own API key (docker-compose.test.yml sets it on both sides).
+PLAYGROUND_API_KEY = os.environ.get("PLAYGROUND_API_KEY", "")
+_PG_HEADERS = {"Authorization": f"Bearer {PLAYGROUND_API_KEY}"} if PLAYGROUND_API_KEY else {}
 
 # Baked into the image next to the app (Dockerfile stage 2) so the pin the
 # container was built from travels with it. Falls back to the repo copy when
@@ -74,7 +77,7 @@ def test_sdk_version_matches_lock() -> None:
     )
     locked_version = pinned[0]["version"]
 
-    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0) as c:
+    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0, headers=_PG_HEADERS) as c:
         caps = c.get("/capabilities").raise_for_status().json()
 
     assert caps["sdk_available"] is True, "the container has no usable aitp SDK"
@@ -447,7 +450,7 @@ SCENARIOS: list[ProtocolCase] = [
 
 @pytest.fixture(scope="module")
 def client() -> httpx.Client:
-    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0) as c:
+    with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0, headers=_PG_HEADERS) as c:
         try:
             r = c.get("/healthz")
         except httpx.HTTPError as exc:

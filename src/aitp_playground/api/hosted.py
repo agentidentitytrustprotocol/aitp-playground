@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from ..hosting.hosted import HostedAgentManager
 from ..trust.resolver import resolve_did_web
-from ._deps import get_hosted_manager
+from ._deps import enforce_spend_limits, get_hosted_manager, require_api_key
 
 router = APIRouter(prefix="/hosted-agents", tags=["hosted-agents"])
 
@@ -60,7 +60,7 @@ def _is_loopback(url: str) -> bool:
     return host == "localhost" or host.startswith("127.")
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_api_key)])
 async def host_agent(
     body: HostRequest, mgr: HostedAgentManager = Depends(get_hosted_manager)
 ) -> dict[str, Any]:
@@ -82,12 +82,12 @@ async def host_agent(
     return asdict(hosted)
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_api_key)])
 def list_agents(mgr: HostedAgentManager = Depends(get_hosted_manager)) -> dict[str, Any]:
     return {"hosted": mgr.list()}
 
 
-@router.get("/{hosted_id}")
+@router.get("/{hosted_id}", dependencies=[Depends(require_api_key)])
 def get_agent(
     hosted_id: str, mgr: HostedAgentManager = Depends(get_hosted_manager)
 ) -> dict[str, Any]:
@@ -99,7 +99,7 @@ def get_agent(
     return asdict(hosted)
 
 
-@router.delete("/{hosted_id}")
+@router.delete("/{hosted_id}", dependencies=[Depends(require_api_key)])
 def stop_agent(
     hosted_id: str, mgr: HostedAgentManager = Depends(get_hosted_manager)
 ) -> dict[str, Any]:
@@ -157,7 +157,7 @@ class TrustPeerRequest(BaseModel):
     peer_did: str
 
 
-@router.post("/{hosted_id}/trust-peer")
+@router.post("/{hosted_id}/trust-peer", dependencies=[Depends(require_api_key)])
 async def trust_peer(
     hosted_id: str,
     body: TrustPeerRequest,
@@ -198,7 +198,7 @@ async def trust_peer(
     return {"peer_did": body.peer_did, "peer_aid": peer_aid, "trusted": True}
 
 
-@router.post("/{hosted_id}/resolve-and-handshake")
+@router.post("/{hosted_id}/resolve-and-handshake", dependencies=[Depends(require_api_key)])
 async def resolve_and_handshake(
     hosted_id: str,
     body: HandshakeRequest,
@@ -242,7 +242,7 @@ async def resolve_and_handshake(
     }
 
 
-@router.post("/{hosted_id}/invoke")
+@router.post("/{hosted_id}/invoke", dependencies=[Depends(enforce_spend_limits)])
 async def invoke(
     hosted_id: str,
     body: InvokeRequest,

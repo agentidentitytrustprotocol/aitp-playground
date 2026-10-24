@@ -10,6 +10,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH
+
 from aitp_playground.api._deps import get_hosted_manager
 from aitp_playground.api.hosted import _is_loopback, _origin_of, router as hosted_router
 from aitp_playground.config import Settings
@@ -132,7 +134,7 @@ def _hosted_app() -> FastAPI:
 def test_resolve_and_handshake_rejects_a_non_did_web_peer(monkeypatch) -> None:
     """Item 8: `body.peer_did.startswith("did:web:")` — a bare AID or any
     other identifier shape must not reach did:web resolution at all."""
-    client = TestClient(_hosted_app())
+    client = TestClient(_hosted_app(), headers=AUTH)
     resp = client.post(
         "/hosted-agents/h1/resolve-and-handshake",
         json={"peer_did": "aid:pubkey:not-a-did-web"},
@@ -153,7 +155,7 @@ def test_resolve_and_handshake_refuses_a_disguised_loopback_peer(monkeypatch) ->
 
     monkeypatch.setattr("aitp_playground.api.hosted.resolve_did_web", _fake_resolve)
 
-    client = TestClient(_hosted_app())
+    client = TestClient(_hosted_app(), headers=AUTH)
     resp = client.post(
         "/hosted-agents/h1/resolve-and-handshake",
         json={"peer_did": "did:web:localhost%3A9999"},
@@ -173,7 +175,7 @@ def test_resolve_and_handshake_allows_loopback_under_the_explicit_opt_out(monkey
 
     monkeypatch.setattr("aitp_playground.api.hosted.resolve_did_web", _fake_resolve)
 
-    client = TestClient(_hosted_app())
+    client = TestClient(_hosted_app(), headers=AUTH)
     resp = client.post(
         "/hosted-agents/h1/resolve-and-handshake",
         json={"peer_did": "did:web:localhost%3A9999"},
@@ -196,7 +198,7 @@ def test_resolve_and_handshake_rejects_a_did_web_origin_mismatch(monkeypatch) ->
 
     monkeypatch.setattr("aitp_playground.api.hosted.resolve_did_web", _fake_resolve)
 
-    client = TestClient(_hosted_app())
+    client = TestClient(_hosted_app(), headers=AUTH)
     resp = client.post(
         "/hosted-agents/h1/resolve-and-handshake",
         json={"peer_did": "did:web:org-c.aitp.test%3A9100"},

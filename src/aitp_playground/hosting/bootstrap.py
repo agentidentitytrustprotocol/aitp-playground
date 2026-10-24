@@ -14,8 +14,11 @@ from .identity import derive_seed_hex
 
 
 class BootstrapBuilder:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, telemetry_token: str | None = None) -> None:
         self.settings = settings
+        # Bearer agents send to POST /internal/telemetry. One per playground
+        # process; create_app() shares it with the route via app.state.
+        self.telemetry_token = telemetry_token or secrets.token_urlsafe(32)
 
     def build(
         self,
@@ -28,6 +31,7 @@ class BootstrapBuilder:
         inputs: dict[str, Any],
         oidc: Any = None,
         public_origin: str | None = None,
+        token_budget: int | None = None,
     ) -> dict[str, Any]:
         seed_hex = derive_seed_hex(run_id, agent_spec.id, org=agent_spec.org)
         # A federated/hosted agent advertises its *public* origin so a peer on
@@ -88,7 +92,17 @@ class BootstrapBuilder:
             "peers": peers,
             "playground": {
                 "telemetry_url": f"{self.settings.playground_base_url}/internal/telemetry",
+                "telemetry_token": self.telemetry_token,
                 "run_id": run_id,
+            },
+            # Spend guard enforced by agents/base/llm.py before every provider
+            # call. The runner passes this agent's share of RUN_TOKEN_BUDGET;
+            # a hosted agent (no run) gets the whole budget for its lifetime.
+            "llm": {
+                "token_budget": (
+                    token_budget if token_budget is not None else self.settings.run_token_budget
+                ),
+                "max_tokens_per_call": self.settings.llm_max_tokens_per_call,
             },
             "inputs": dict(inputs),
             # Bearer for the agent's /admin routes (issue #95). Fresh per

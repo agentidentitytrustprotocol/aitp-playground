@@ -13,7 +13,7 @@ from bootstrap import create_agent, get_manifest_json, load_bootstrap
 from llm import call_llm_or_502
 from telemetry import emit_event
 
-from .crew import build_crew  # type: ignore[import-not-found]
+from .crew import RESEARCH_LLM_CALLS, build_crew  # type: ignore[import-not-found]
 
 
 bootstrap = load_bootstrap()
@@ -74,7 +74,7 @@ async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, 
     if hasattr(crew, "kickoff_async"):
         result = await call_llm_or_502(
             crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
-            task="research", topic=topic,
+            task="research", topic=topic, llm_calls=RESEARCH_LLM_CALLS,
         )
     else:
         result = crew.kickoff()
@@ -93,7 +93,7 @@ async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[
     if hasattr(crew, "kickoff_async"):
         result = await call_llm_or_502(
             crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
-            task="research.deep", topic=topic,
+            task="research.deep", topic=topic, llm_calls=RESEARCH_LLM_CALLS,
         )
     else:
         result = crew.kickoff()

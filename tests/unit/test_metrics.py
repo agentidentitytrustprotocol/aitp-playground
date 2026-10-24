@@ -4,6 +4,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH
+
 from aitp_playground.main import create_app
 from aitp_playground.observability.metrics import (
     format_prometheus,
@@ -126,7 +128,7 @@ def test_format_prometheus_escapes_label_values() -> None:
 
 
 def test_metrics_endpoint_returns_text() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(), headers=AUTH)
     r = client.get("/metrics")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/plain")

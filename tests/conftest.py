@@ -15,3 +15,13 @@ for p in (SRC, AGENT_BASE):
 
 # Make sure tests use the scenarios shipped in this repo, not a cwd-dependent path.
 os.environ.setdefault("SCENARIOS_DIR", str(ROOT / "scenarios"))
+
+# Authenticated routes need a configured key (unset fails closed with 503).
+# The limits are opened wide so ordinary tests never trip them; the limit
+# tests build their own Settings with tight values.
+from tests._auth import TEST_API_KEY  # noqa: E402
+
+os.environ.setdefault("PLAYGROUND_API_KEY", TEST_API_KEY)
+os.environ.setdefault("RATE_LIMIT_BURST", "100000")
+os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
+os.environ.setdefault("MAX_RUNS_PER_HOUR", "100000")

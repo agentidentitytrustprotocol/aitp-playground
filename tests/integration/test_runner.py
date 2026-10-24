@@ -22,6 +22,8 @@ aitp = pytest.importorskip("aitp")
 
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH  # noqa: E402
+
 from aitp_playground.main import create_app
 
 
@@ -29,7 +31,7 @@ _TERMINAL = {"success", "failed", "cancelled"}
 
 
 def test_intra_org_research_and_write_end_to_end() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(), headers=AUTH)
     posted = client.post("/runs", json={
         "scenario_ref": "intra-org/research-and-write@1.0.0",
         "inputs": {"topic": "AITP self-test"},
@@ -78,7 +80,7 @@ def test_cancel_inflight_run_reaches_terminal_state() -> None:
     thread while this thread observes and cancels mid-flight."""
     import threading
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(), headers=AUTH)
     before = {r["run_id"] for r in client.get("/runs").json()["runs"]}
 
     poster = threading.Thread(
@@ -147,7 +149,7 @@ def test_cancel_inflight_run_reaches_terminal_state() -> None:
 def test_run_with_invalid_inputs_fails_fast_without_spawning() -> None:
     """Schema-invalid inputs must terminate the run before any agent
     subprocess is spawned."""
-    client = TestClient(create_app())
+    client = TestClient(create_app(), headers=AUTH)
     posted = client.post("/runs", json={
         "scenario_ref": "intra-org/research-and-write@1.0.0",
         "inputs": {"topic": 12345},  # schema requires a string

@@ -28,6 +28,12 @@ class ManifestValidation:
     errors: list[str] = field(default_factory=list)
 
 
+#: Service secrets an agent subprocess has no use for. Agents authenticate to
+#: the playground with their bootstrap's telemetry token, never the API key,
+#: so the key stays out of their environment.
+_WITHHELD_FROM_AGENTS = frozenset({"PLAYGROUND_API_KEY"})
+
+
 class AgentHostAdapter(ABC):
     framework: AgentFramework
 
@@ -58,7 +64,10 @@ class AgentHostAdapter(ABC):
     def _build_env(self, manifest: AgentManifest, bootstrap_file: str, port: int) -> dict[str, str]:
         host = manifest.spec.host
         env: dict[str, str] = {
-            **{k: v for k, v in os.environ.items() if isinstance(v, str)},
+            **{
+                k: v for k, v in os.environ.items()
+                if isinstance(v, str) and k not in _WITHHELD_FROM_AGENTS
+            },
             **{k: str(v) for k, v in (host.get("env") or {}).items()},
             "AITP_BOOTSTRAP_FILE": bootstrap_file,
             "AGENT_PORT": str(port),

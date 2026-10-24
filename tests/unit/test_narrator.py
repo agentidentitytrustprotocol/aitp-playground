@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH
+
 from aitp_playground.main import create_app
 from aitp_playground.observability.narrator import narrate_event, narrate_events
 
@@ -249,7 +251,7 @@ def test_self_execute_and_llm_lines() -> None:
 
 
 def test_narrate_endpoint_returns_text() -> None:
-    c = TestClient(create_app())
+    c = TestClient(create_app(), headers=AUTH)
     posted = c.post("/runs", json={
         "scenario_ref": "intra-org/trust-gate@1.0.0",
         "inputs": {"topic": "demo"},
@@ -263,6 +265,6 @@ def test_narrate_endpoint_returns_text() -> None:
 
 
 def test_narrate_unknown_run_returns_404() -> None:
-    c = TestClient(create_app())
+    c = TestClient(create_app(), headers=AUTH)
     r = c.get("/runs/does-not-exist/narrate")
     assert r.status_code == 404
