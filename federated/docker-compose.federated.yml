@@ -35,6 +35,9 @@ x-playground: &playground
     AITP_DIDWEB_INSECURE_HOSTS: ".aitp.test"
     AGENT_BASE_PORT: "8100"
     LOG_LEVEL: "info"
+    # Test-only Bearer key for each org's control API; the federated e2e test
+    # sends the same default. Override with PLAYGROUND_API_KEY on the host.
+    PLAYGROUND_API_KEY: "${PLAYGROUND_API_KEY:-federated-e2e-key-do-not-use-in-prod}"
 
 services:
   org-a:

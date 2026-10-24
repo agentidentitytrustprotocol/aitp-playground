@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH
+
 from aitp_playground.main import create_app
 
 
 def _client() -> TestClient:
-    return TestClient(create_app())
+    return TestClient(create_app(), headers=AUTH)
 
 
 def test_post_runs_returns_202_with_run_id() -> None:
@@ -89,7 +91,7 @@ def test_cp_audit_proxy_disabled_when_cp_unset(monkeypatch) -> None:
     monkeypatch.setenv("CP_API_KEY", "")
     from aitp_playground import config
     monkeypatch.setattr(config, "_settings", None)
-    c = TestClient(create_app())
+    c = TestClient(create_app(), headers=AUTH)
     posted = c.post("/runs", json={
         "scenario_ref": "intra-org/trust-gate@1.0.0",
         "inputs": {"topic": "demo"},
@@ -113,7 +115,7 @@ def test_cp_sessions_proxy_disabled_when_cp_unset(monkeypatch) -> None:
     monkeypatch.setenv("CP_API_KEY", "")
     from aitp_playground import config
     monkeypatch.setattr(config, "_settings", None)
-    c = TestClient(create_app())
+    c = TestClient(create_app(), headers=AUTH)
     posted = c.post("/runs", json={
         "scenario_ref": "intra-org/trust-gate@1.0.0",
         "inputs": {"topic": "demo"},

@@ -32,6 +32,8 @@ pytest.importorskip("aitp")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from tests._auth import AUTH
+
 from aitp_playground.main import create_app  # noqa: E402
 
 
@@ -63,7 +65,7 @@ def test_cross_domain_handshake_and_capability(monkeypatch) -> None:
     port_a = _free_port()  # researcher (org-A / initiator)
     port_b = _free_port()  # analyzer  (org-B / responder)
 
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), headers=AUTH) as client:
         analyzer = _host(client, "_shared/agents/analyzer", port_b)
         researcher = _host(client, "_shared/agents/researcher", port_a)
 

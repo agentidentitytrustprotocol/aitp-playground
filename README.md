@@ -153,19 +153,24 @@ otherwise).
 #    the comments in pyproject.toml.)
 uv sync                               # or: pip install -e .
 
-# 2. Run.
+# 2. Run. Every non-static route needs a bearer key; unset, they answer 503.
+export PLAYGROUND_API_KEY=$(openssl rand -hex 32)
 uv run uvicorn aitp_playground.main:app --reload --port 8000
 
 # 3. Trigger a scenario.
 curl -X POST http://localhost:8000/runs \
+  -H "Authorization: Bearer $PLAYGROUND_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"scenario_ref":"intra-org/research-and-write@1.0.0",
        "inputs":{"topic":"AI agent trust protocols"}}'
 
 # 4. Watch live events (SSE) or poll:
-curl -N http://localhost:8000/runs/<run_id>/events
-curl    http://localhost:8000/runs/<run_id> | jq .
+curl -N -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<run_id>/events
+curl    -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<run_id> | jq .
 ```
+
+Authentication, rate limits and the spend cap are described in
+[SECURITY.md](SECURITY.md).
 
 Agent extras (CrewAI / LangChain / LangGraph + the OpenAI/Anthropic
 clients) are optional; without them the agents fall back to

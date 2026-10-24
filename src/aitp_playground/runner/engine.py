@@ -159,6 +159,8 @@ class ScenarioRunner:
 
         bootstrap_files: dict[str, str] = {}
         admin_tokens: dict[str, str] = {}
+        # RUN_TOKEN_BUDGET is per run; each agent process enforces its share.
+        agent_token_budget = self.config.run_token_budget // max(1, len(scenario.spec.agents))
         for agent_spec in scenario.spec.agents:
             placeholder_peers = {
                 other.id: {
@@ -175,6 +177,7 @@ class ScenarioRunner:
                 peers=placeholder_peers,
                 inputs=inputs,
                 oidc=run_oidc,
+                token_budget=agent_token_budget,
             )
             bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
             admin_tokens[agent_spec.id] = bs["admin_token"]

@@ -47,13 +47,21 @@ cd "$SCRIPT_DIR/.."
 # ── transport ────────────────────────────────────────────────────────────────
 # pg_curl <curl-args...> — issue a curl against the playground, on the host if
 # PLAYGROUND_URL is set, otherwise inside the compose service container.
+# Every /runs route takes `Authorization: Bearer <PLAYGROUND_API_KEY>`. The
+# header is read from a file descriptor (curl -H @file) so the key never shows
+# up in a process listing. In host mode the key comes from this shell's
+# environment; in container mode, from the service container's own env.
 if [[ -n "${PLAYGROUND_URL:-}" ]]; then
   BASE="$PLAYGROUND_URL"
-  pg_curl() { curl -fsS "$@"; }
+  : "${PLAYGROUND_API_KEY:?set PLAYGROUND_API_KEY to the playground API key}"
+  pg_curl() { curl -fsS -H @<(printf 'Authorization: Bearer %s\n' "$PLAYGROUND_API_KEY") "$@"; }
   echo "→ talking to playground at ${BASE} (host)"
 else
   BASE="http://localhost:8000"
-  pg_curl() { docker compose -f "$COMPOSE_FILE" exec -T "$COMPOSE_SERVICE" curl -fsS "$@"; }
+  pg_curl() {
+    docker compose -f "$COMPOSE_FILE" exec -T "$COMPOSE_SERVICE" bash -c \
+      'curl -fsS -H @<(printf "Authorization: Bearer %s\n" "$PLAYGROUND_API_KEY") "$@"' pg_curl "$@"
+  }
   echo "→ talking to playground via 'docker compose -f ${COMPOSE_FILE} exec ${COMPOSE_SERVICE}'"
 fi
 

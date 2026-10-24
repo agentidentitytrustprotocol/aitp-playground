@@ -146,6 +146,13 @@ services:
       # better — a snapshot is self-certifying, so any key can sign one that
       # validates against its own declared issuer.
       CP_AID: "aid:pubkey:0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc"
+      # Test-only Bearer key for the playground's own API (the tests service
+      # sends the same value), and spend guards lifted so a full e2e sweep is
+      # not rate limited.
+      PLAYGROUND_API_KEY: "e2e-playground-key-do-not-use-in-prod-0123456789"
+      RATE_LIMIT_PER_MINUTE: "100000"
+      RATE_LIMIT_BURST: "100000"
+      MAX_RUNS_PER_HOUR: "100000"
     expose:
       - "8000"
     # No host port mapping. The tests container reaches the playground via
@@ -180,6 +187,8 @@ services:
       # Same key as `API_KEYS` on the CP. Tests send this as a Bearer token
       # when hitting non-public CP endpoints (e.g. /api/events/history).
       CP_API_KEY: "test-api-key-do-not-use-in-prod-0123456789abcdef"
+      # Same key as the playground service's PLAYGROUND_API_KEY.
+      PLAYGROUND_API_KEY: "e2e-playground-key-do-not-use-in-prod-0123456789"
       LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
     volumes:
       # Mount tests so iteration doesn't require rebuilding the image.

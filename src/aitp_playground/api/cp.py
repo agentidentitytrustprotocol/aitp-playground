@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..cp_client.client import CpClient
-from ._deps import get_cp_client
+from ._deps import get_cp_client, require_api_key
 
 router = APIRouter(prefix="/cp", tags=["control-plane"])
 
@@ -37,7 +37,7 @@ def _list(enabled: bool, items: list[dict[str, Any]]) -> CpListResponse:
     return CpListResponse(cp_enabled=enabled, items=items, count=len(items))
 
 
-@router.get("/tcts", response_model=CpListResponse)
+@router.get("/tcts", response_model=CpListResponse, dependencies=[Depends(require_api_key)])
 async def list_tcts(
     issuer: Optional[str] = None,
     subject: Optional[str] = None,
@@ -58,7 +58,7 @@ async def list_tcts(
     return _list(True, items)
 
 
-@router.get("/delegations", response_model=CpListResponse)
+@router.get("/delegations", response_model=CpListResponse, dependencies=[Depends(require_api_key)])
 async def list_delegations(
     root_jti: Optional[str] = None,
     parent_jti: Optional[str] = None,
@@ -78,7 +78,7 @@ async def list_delegations(
     return _list(True, items)
 
 
-@router.get("/sessions/{session_id}/replay", response_model=CpListResponse)
+@router.get("/sessions/{session_id}/replay", response_model=CpListResponse, dependencies=[Depends(require_api_key)])
 async def replay_session(
     session_id: str,
     since: Optional[str] = None,
@@ -93,7 +93,7 @@ async def replay_session(
     return _list(True, items)
 
 
-@router.get("/dashboard", response_model=CpObjectResponse)
+@router.get("/dashboard", response_model=CpObjectResponse, dependencies=[Depends(require_api_key)])
 async def dashboard_overview(
     window: str = "24h",
     cp: CpClient = Depends(get_cp_client),
@@ -104,7 +104,7 @@ async def dashboard_overview(
     return CpObjectResponse(cp_enabled=True, data=await cp.fetch_dashboard_overview(window))
 
 
-@router.get("/agents", response_model=CpListResponse)
+@router.get("/agents", response_model=CpListResponse, dependencies=[Depends(require_api_key)])
 async def dashboard_agents(cp: CpClient = Depends(get_cp_client)) -> CpListResponse:
     """Proxy ``GET /api/dashboard/agents`` — per-agent CP metrics."""
     if not cp.enabled:
@@ -112,7 +112,7 @@ async def dashboard_agents(cp: CpClient = Depends(get_cp_client)) -> CpListRespo
     return _list(True, await cp.fetch_dashboard_agents())
 
 
-@router.get("/trust-anchors", response_model=CpListResponse)
+@router.get("/trust-anchors", response_model=CpListResponse, dependencies=[Depends(require_api_key)])
 async def list_trust_anchors(
     namespace: Optional[str] = None,
     cp: CpClient = Depends(get_cp_client),
@@ -123,7 +123,7 @@ async def list_trust_anchors(
     return _list(True, await cp.list_trust_anchors(namespace=namespace))
 
 
-@router.get("/pinned-keys", response_model=CpListResponse)
+@router.get("/pinned-keys", response_model=CpListResponse, dependencies=[Depends(require_api_key)])
 async def list_pinned_keys(
     namespace: Optional[str] = None,
     cp: CpClient = Depends(get_cp_client),

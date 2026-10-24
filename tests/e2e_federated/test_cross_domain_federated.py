@@ -36,6 +36,9 @@ pytestmark = pytest.mark.skipif(
 ORG_A_URL = os.environ.get("ORG_A_URL", "http://localhost:18000")
 ORG_B_URL = os.environ.get("ORG_B_URL", "http://localhost:18001")
 AGENT_PORT = int(os.environ.get("FEDERATED_AGENT_PORT", "9100"))
+# Same default as federated/docker-compose.federated*.yml.
+PLAYGROUND_API_KEY = os.environ.get("PLAYGROUND_API_KEY", "federated-e2e-key-do-not-use-in-prod")
+_AUTH = {"Authorization": f"Bearer {PLAYGROUND_API_KEY}"}
 
 
 def _wait_healthy(url: str, timeout: float = 60.0) -> None:
@@ -59,7 +62,7 @@ def _host(url: str, ref: str) -> dict:
     r = httpx.post(
         f"{url}/hosted-agents",
         json={"ref": ref, "port": AGENT_PORT},
-        timeout=60.0,
+        headers=_AUTH, timeout=60.0,
     )
     assert r.status_code == 200, f"host {ref} on {url}: {r.status_code} {r.text}"
     return r.json()
@@ -76,14 +79,14 @@ def stack() -> dict:
     tp = httpx.post(
         f"{ORG_B_URL}/hosted-agents/{analyzer['hosted_id']}/trust-peer",
         json={"peer_did": researcher["did"]},
-        timeout=60.0,
+        headers=_AUTH, timeout=60.0,
     )
     assert tp.status_code == 200, f"trust-peer on org-B: {tp.status_code} {tp.text}"
     try:
         yield {"analyzer": analyzer, "researcher": researcher}
     finally:
-        httpx.delete(f"{ORG_B_URL}/hosted-agents/{analyzer['hosted_id']}", timeout=30.0)
-        httpx.delete(f"{ORG_A_URL}/hosted-agents/{researcher['hosted_id']}", timeout=30.0)
+        httpx.delete(f"{ORG_B_URL}/hosted-agents/{analyzer['hosted_id']}", headers=_AUTH, timeout=30.0)
+        httpx.delete(f"{ORG_A_URL}/hosted-agents/{researcher['hosted_id']}", headers=_AUTH, timeout=30.0)
 
 
 def test_analyzer_advertises_remote_origin(stack: dict) -> None:
@@ -100,7 +103,7 @@ def test_cross_domain_handshake(stack: dict) -> None:
     r = httpx.post(
         f"{ORG_A_URL}/hosted-agents/{researcher['hosted_id']}/resolve-and-handshake",
         json={"peer_did": analyzer["did"], "requested_grants": ["analyze.data"]},
-        timeout=60.0,
+        headers=_AUTH, timeout=60.0,
     )
     assert r.status_code == 200, f"handshake: {r.status_code} {r.text}"
     body = r.json()
@@ -119,7 +122,7 @@ def test_cross_domain_capability_call(stack: dict) -> None:
     hs = httpx.post(
         f"{ORG_A_URL}/hosted-agents/{researcher['hosted_id']}/resolve-and-handshake",
         json={"peer_did": analyzer["did"], "requested_grants": ["analyze.data"]},
-        timeout=60.0,
+        headers=_AUTH, timeout=60.0,
     ).json()
 
     r = httpx.post(
@@ -130,7 +133,7 @@ def test_cross_domain_capability_call(stack: dict) -> None:
             "capability": "analyze.data",
             "payload": {"text": "AITP enables cross-org agent trust."},
         },
-        timeout=120.0,
+        headers=_AUTH, timeout=120.0,
     )
     assert r.status_code == 200, f"invoke: {r.status_code} {r.text}"
     result = r.json()["result"]
@@ -145,7 +148,7 @@ def test_fail_closed_on_loopback_peer(stack: dict) -> None:
     r = httpx.post(
         f"{ORG_A_URL}/hosted-agents/{researcher['hosted_id']}/resolve-and-handshake",
         json={"peer_did": f"did:web:localhost%3A{AGENT_PORT}"},
-        timeout=60.0,
+        headers=_AUTH, timeout=60.0,
     )
     # Either the loopback guard (409) or a resolution/origin-mismatch error —
     # never a 200 "trust established".

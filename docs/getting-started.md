@@ -114,6 +114,11 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Override |
 | `RUN_HISTORY_DB` | _(empty)_ | When set, persist runs + events to this SQLite file so they survive a restart. Empty = in-memory only. |
+| `PLAYGROUND_API_KEY` | _(empty)_ | Bearer key(s) for every authenticated route (see the endpoint table). Comma-separated to overlap a rotation. **Empty fails closed:** those routes answer `503`. |
+| `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `10` / `5` | Token bucket on `POST /runs` and `POST /hosted-agents/{id}/invoke`, applied per client IP and per API key |
+| `MAX_RUNS_PER_HOUR` | `30` | Global cap on run creations plus hosted invokes in any rolling hour; the next one gets `429` before any agent starts |
+| `RUN_TOKEN_BUDGET` | `40000` | Output-token budget per run, split across the run's agents and enforced in each agent before every provider call (`429` once spent). A hosted agent gets the whole budget for its lifetime. |
+| `LLM_MAX_TOKENS_PER_CALL` | `1024` | `max_tokens` cap on every single provider call |
 | `LOG_LEVEL` | `INFO` | Standard logging level |
 
 Provider selection is process-wide, not per-scenario: `LLM_PROVIDER` picks
@@ -146,6 +151,7 @@ curl -s http://localhost:8000/healthz
 
 ```bash
 curl -s -X POST http://localhost:8000/runs \
+  -H "Authorization: Bearer $PLAYGROUND_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"scenario_ref":"intra-org/research-and-write@1.0.0",
        "inputs":{"topic":"AI agent identity"}}'
@@ -156,19 +162,27 @@ Watch it run:
 
 ```bash
 # Poll the final state:
-curl -s http://localhost:8000/runs/<uuid> | jq .
+curl -s -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<uuid> | jq .
 
 # Or stream events live (SSE):
-curl -N http://localhost:8000/runs/<uuid>/events
+curl -N -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<uuid>/events
 ```
 
 Cancel a stuck run:
 
 ```bash
-curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
+curl -s -X POST -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<uuid>/cancel
 ```
 
 ## Useful endpoints
+
+Only the static routes are public: `/healthz`, `/capabilities`, `/packs`,
+`/scenarios*`, the `/dashboard` HTML shell and the OpenAPI docs. Every other
+route needs `Authorization: Bearer $PLAYGROUND_API_KEY` (`401` without it,
+`503` when the service has no key configured). `POST /webhooks/cp/{run_id}`
+is verified by the CP's HMAC instead, and `POST /internal/telemetry` by a
+per-process token only the playground's own agents hold. See
+[SECURITY.md](../SECURITY.md).
 
 | Endpoint | What |
 | --- | --- |
@@ -186,11 +200,11 @@ curl -s -X POST http://localhost:8000/runs/<uuid>/cancel
 | `GET  /runs/{id}/cp-audit` | Audit events the CP recorded for this run ([control-plane.md](control-plane.md)) |
 | `GET  /runs/{id}/cp-sessions` | Handshake sessions the CP observed for this run |
 | `GET  /runs/{id}/cp-deliveries` | CP webhook deliveries this run has received (requires a prior `cp_subscribe_webhook` step) |
-| `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified) |
+| `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified; the signed `enqueuedAt` must be within 5 minutes, and a repeated `deliveryId` is not recorded twice) |
 | `POST /runs/{id}/cancel` | Mark cancelled, then kill agent subprocesses (this order closes the D-16 race: a concurrent dispatch failure that lands after the mark sees `status=cancelled` already, never a stale `running`) |
 | `GET  /agents` | List currently-running agent processes |
 | `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |
-| `GET  /dashboard` | Single-page trust console (HTML) |
+| `GET  /dashboard` | Single-page trust console (HTML). The shell is public; its data calls need the key, so it is a local-dev view |
 | `GET  /cp/*` | Read-only Control Plane observability projections ([control-plane.md](control-plane.md)) |
 | `POST /internal/telemetry` | Sink for agents — not for external use |
 

@@ -5,6 +5,11 @@ from typing import Any
 
 from llm import build_crewai_llm, select_provider  # type: ignore[import-not-found]
 
+#: CrewAI agent iterations per task; each is one provider call. One extra
+#: call is reserved for CrewAI's forced final answer.
+MAX_ITER = 3
+RESEARCH_LLM_CALLS = MAX_ITER + 1
+
 
 def _crewai_ready() -> bool:
     if select_provider() is None:
@@ -39,6 +44,9 @@ def build_crew(inputs: dict[str, Any]):
             llm=llm,
             verbose=False,
             allow_delegation=False,
+            # Bounded so the per-run token budget can reserve for it up front
+            # (main.py passes llm_calls=RESEARCH_LLM_CALLS).
+            max_iter=MAX_ITER,
         )
         if depth == "deep":
             task_desc = (

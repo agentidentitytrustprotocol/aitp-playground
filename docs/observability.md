@@ -121,7 +121,7 @@ swallowed rather than failing the run):
 ## Live stream (SSE)
 
 ```bash
-curl -N http://localhost:8000/runs/<id>/events
+curl -N -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<id>/events
 ```
 
 `GET /runs/{id}/events` is a Server-Sent Events stream. On connect it
@@ -136,7 +136,7 @@ that falls behind drops the oldest and can backfill via `GET /runs/{id}`.
 ## Narration
 
 ```bash
-curl http://localhost:8000/runs/<id>/narrate      # text/plain, one line per event
+curl -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/runs/<id>/narrate      # text/plain, one line per event
 ```
 
 `observability/narrator.py` is a **pure function** — given the event log it
@@ -158,7 +158,7 @@ never dominate.
 ## Metrics
 
 ```bash
-curl http://localhost:8000/metrics                # Prometheus text exposition (v0.0.4)
+curl -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:8000/metrics                # Prometheus text exposition (v0.0.4)
 ```
 
 `observability/metrics.py` is a tiny thread-safe registry (counters + one
@@ -179,7 +179,7 @@ so `/metrics` returns a stable, complete surface even before the first run.
 | `aitp_playground_step_outcomes_total` | counter | `outcome` = complete/denied/skipped | every workflow step |
 
 Output is deterministically ordered (by metric name then labels) with
-Prometheus-spec label escaping. No auth — it's a demo endpoint.
+Prometheus-spec label escaping. It needs the API key like every non-static route (Prometheus: `authorization: { credentials: ... }`).
 
 ## Dashboard
 

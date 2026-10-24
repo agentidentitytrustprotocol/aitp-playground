@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import hmac
 import json
+import time
+from datetime import datetime, timezone
 from hashlib import sha256
 
 import pytest
 from fastapi.testclient import TestClient
+
+from tests._auth import AUTH
 
 from aitp_playground.main import create_app
 
@@ -22,7 +26,7 @@ RUN_ID = "r-test-1"
 @pytest.fixture()
 def client() -> TestClient:
     app = create_app()
-    c = TestClient(app)
+    c = TestClient(app, headers=AUTH)
     # Seed a run + the webhook secret on it so the receiver has something
     # to HMAC against.
     app.state.run_store.upsert(RUN_ID, {
@@ -40,6 +44,10 @@ def client() -> TestClient:
         },
     })
     return c
+
+
+def _now_iso(offset_secs: float = 0.0) -> str:
+    return datetime.fromtimestamp(time.time() + offset_secs, tz=timezone.utc).isoformat()
 
 
 def _sig(body: bytes, secret: str = SECRET) -> str:
@@ -101,7 +109,7 @@ def test_good_signature_records_event_and_returns_200(client: TestClient) -> Non
         "deliveryId": "d-1",
         "eventType": "handshake.complete",
         "payload": {"type": "handshake.complete", "run_id": RUN_ID, "session_id": "s-1"},
-        "enqueuedAt": "2026-05-26T00:00:00Z",
+        "enqueuedAt": _now_iso(),
     }
     body = json.dumps(payload).encode("utf-8")
     r = client.post(
@@ -159,3 +167,62 @@ def test_cp_deliveries_endpoint_filters_and_strips_secret(client: TestClient) ->
 def test_cp_deliveries_for_unknown_run_returns_404(client: TestClient) -> None:
     r = client.get("/runs/no-such-run/cp-deliveries")
     assert r.status_code == 404
+
+
+def _deliver(client: TestClient, payload: dict) -> "object":
+    body = json.dumps(payload).encode("utf-8")
+    return client.post(
+        f"/webhooks/cp/{RUN_ID}",
+        content=body,
+        headers={"X-Aitp-Signature": _sig(body), "Content-Type": "application/json"},
+    )
+
+
+def test_stale_signed_timestamp_returns_401_and_is_not_recorded(client: TestClient) -> None:
+    """A correctly signed delivery older than the 5-minute window is a replay."""
+    r = _deliver(client, {
+        "deliveryId": "d-old", "eventType": "tct.revoked", "payload": {},
+        "enqueuedAt": _now_iso(-301),
+    })
+    assert r.status_code == 401
+    assert r.json()["detail"] == "stale delivery"
+    rec = client.app.state.run_store.get(RUN_ID)
+    assert not [e for e in rec["events"] if e["type"] == "cp.webhook.delivered"]
+
+
+def test_missing_signed_timestamp_returns_401(client: TestClient) -> None:
+    r = _deliver(client, {"deliveryId": "d-x", "eventType": "tct.revoked", "payload": {}})
+    assert r.status_code == 401
+
+
+def test_non_json_body_returns_401(client: TestClient) -> None:
+    body = b"not json"
+    r = client.post(
+        f"/webhooks/cp/{RUN_ID}", content=body, headers={"X-Aitp-Signature": _sig(body)},
+    )
+    assert r.status_code == 401
+
+
+def test_replayed_delivery_id_is_not_recorded_twice(client: TestClient) -> None:
+    payload = {
+        "deliveryId": "d-dup", "eventType": "tct.revoked", "payload": {},
+        "enqueuedAt": _now_iso(),
+    }
+    assert _deliver(client, payload).json() == {"ok": True}
+    assert _deliver(client, payload).json() == {"ok": True, "duplicate": True}
+    rec = client.app.state.run_store.get(RUN_ID)
+    assert len([e for e in rec["events"] if e.get("delivery_id") == "d-dup"]) == 1
+
+
+def test_webhook_route_needs_no_api_key(client: TestClient) -> None:
+    """CP holds only the per-webhook HMAC secret, never the API key."""
+    bare = TestClient(client.app)
+    body = json.dumps({
+        "deliveryId": "d-nokey", "eventType": "tct.revoked", "payload": {},
+        "enqueuedAt": _now_iso(),
+    }).encode("utf-8")
+    r = bare.post(
+        f"/webhooks/cp/{RUN_ID}", content=body,
+        headers={"X-Aitp-Signature": _sig(body), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200

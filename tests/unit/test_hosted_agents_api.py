@@ -24,6 +24,8 @@ import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH
+
 from aitp_playground.api import hosted as hosted_api_mod
 from aitp_playground.api._deps import get_hosted_manager
 from aitp_playground.hosting.supervisor import AdminTokenAuth
@@ -89,7 +91,7 @@ def _app(mgr: FakeHostedManager) -> FastAPI:
 
 def test_host_agent_returns_the_hosted_payload() -> None:
     mgr = FakeHostedManager()
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents", json={"ref": "_shared/agents/analyzer"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -103,7 +105,7 @@ def test_host_agent_returns_the_hosted_payload() -> None:
 
 def test_host_agent_value_error_maps_to_400() -> None:
     mgr = FakeHostedManager(host_error=ValueError("no public host configured"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents", json={"ref": "_shared/agents/analyzer"})
     assert resp.status_code == 400, resp.text
     assert "no public host configured" in resp.text
@@ -111,7 +113,7 @@ def test_host_agent_value_error_maps_to_400() -> None:
 
 def test_host_agent_unexpected_error_maps_to_502() -> None:
     mgr = FakeHostedManager(host_error=RuntimeError("adapter blew up"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents", json={"ref": "_shared/agents/analyzer"})
     assert resp.status_code == 502, resp.text
     assert "failed to host agent" in resp.text
@@ -127,7 +129,7 @@ def test_list_agents_returns_every_hosted_agent() -> None:
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
     mgr.seed(_hosted_agent("h2", port=9101))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.get("/hosted-agents")
     assert resp.status_code == 200, resp.text
     ids = {h["hosted_id"] for h in resp.json()["hosted"]}
@@ -137,14 +139,14 @@ def test_list_agents_returns_every_hosted_agent() -> None:
 def test_get_agent_returns_200_for_a_known_id() -> None:
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.get("/hosted-agents/h1")
     assert resp.status_code == 200, resp.text
     assert resp.json()["hosted_id"] == "h1"
 
 
 def test_get_agent_404_for_an_unknown_id() -> None:
-    client = TestClient(_app(FakeHostedManager()))
+    client = TestClient(_app(FakeHostedManager()), headers=AUTH)
     resp = client.get("/hosted-agents/does-not-exist")
     assert resp.status_code == 404, resp.text
     assert "does-not-exist" in resp.text
@@ -153,7 +155,7 @@ def test_get_agent_404_for_an_unknown_id() -> None:
 def test_stop_agent_200_when_found() -> None:
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.delete("/hosted-agents/h1")
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"stopped": "h1"}
@@ -161,7 +163,7 @@ def test_stop_agent_200_when_found() -> None:
 
 
 def test_stop_agent_404_when_not_found() -> None:
-    client = TestClient(_app(FakeHostedManager()))
+    client = TestClient(_app(FakeHostedManager()), headers=AUTH)
     resp = client.delete("/hosted-agents/does-not-exist")
     assert resp.status_code == 404, resp.text
 
@@ -217,7 +219,7 @@ def test_invoke_success_returns_the_peer_result(monkeypatch) -> None:
     _patch_httpx_transport(monkeypatch, handler)
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1", port=9100))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/invoke", json={
         "peer_port": 9200, "capability": "analyze.data", "payload": {"x": 1},
     })
@@ -226,7 +228,7 @@ def test_invoke_success_returns_the_peer_result(monkeypatch) -> None:
 
 
 def test_invoke_404_for_an_unknown_hosted_id() -> None:
-    client = TestClient(_app(FakeHostedManager()))
+    client = TestClient(_app(FakeHostedManager()), headers=AUTH)
     resp = client.post("/hosted-agents/does-not-exist/invoke", json={
         "peer_port": 9200, "capability": "analyze.data",
     })
@@ -240,7 +242,7 @@ def test_invoke_peer_http_error_maps_to_502(monkeypatch) -> None:
     _patch_httpx_transport(monkeypatch, handler)
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/invoke", json={
         "peer_port": 9200, "capability": "analyze.data",
     })
@@ -259,7 +261,7 @@ def test_invoke_connection_failure_maps_to_502(monkeypatch) -> None:
     )
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/invoke", json={
         "peer_port": 9200, "capability": "analyze.data",
     })
@@ -276,7 +278,7 @@ def test_invoke_connection_failure_maps_to_502(monkeypatch) -> None:
 
 
 def test_resolve_and_handshake_404_for_an_unknown_hosted_id() -> None:
-    client = TestClient(_app(FakeHostedManager()))
+    client = TestClient(_app(FakeHostedManager()), headers=AUTH)
     resp = client.post("/hosted-agents/does-not-exist/resolve-and-handshake", json={
         "peer_did": "did:web:org-c.aitp.test",
     })
@@ -301,7 +303,7 @@ def test_resolve_and_handshake_success_returns_established_trust(monkeypatch) ->
     _patch_httpx_transport(monkeypatch, handler)
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/resolve-and-handshake", json={
         "peer_did": "did:web:org-c.aitp.test",
         "requested_grants": ["analyze.data"],
@@ -325,7 +327,7 @@ def test_resolve_and_handshake_502_when_did_web_resolution_raises(monkeypatch) -
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/resolve-and-handshake", json={
         "peer_did": "did:web:org-c.aitp.test",
     })
@@ -346,7 +348,7 @@ def test_resolve_and_handshake_502_when_the_admin_dial_returns_an_http_error(mon
     _patch_httpx_transport(monkeypatch, handler)
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/resolve-and-handshake", json={
         "peer_did": "did:web:org-c.aitp.test",
     })
@@ -369,7 +371,7 @@ def test_resolve_and_handshake_502_when_the_admin_dial_raises(monkeypatch) -> No
     )
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
-    client = TestClient(_app(mgr))
+    client = TestClient(_app(mgr), headers=AUTH)
     resp = client.post("/hosted-agents/h1/resolve-and-handshake", json={
         "peer_did": "did:web:org-c.aitp.test",
     })
@@ -420,7 +422,7 @@ def test_trust_peer_pins_the_aid_of_the_verified_manifest(monkeypatch) -> None:
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
 
-    resp = TestClient(_app(mgr)).post(
+    resp = TestClient(_app(mgr), headers=AUTH).post(
         "/hosted-agents/h1/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
     )
 
@@ -442,7 +444,7 @@ def test_trust_peer_refuses_a_manifest_that_does_not_verify(monkeypatch) -> None
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
 
-    resp = TestClient(_app(mgr)).post(
+    resp = TestClient(_app(mgr), headers=AUTH).post(
         "/hosted-agents/h1/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
     )
 
@@ -452,7 +454,7 @@ def test_trust_peer_refuses_a_manifest_that_does_not_verify(monkeypatch) -> None
 
 
 def test_trust_peer_404_for_an_unknown_hosted_id() -> None:
-    resp = TestClient(_app(FakeHostedManager())).post(
+    resp = TestClient(_app(FakeHostedManager()), headers=AUTH).post(
         "/hosted-agents/nope/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
     )
     assert resp.status_code == 404, resp.text
@@ -474,7 +476,7 @@ def test_trust_peer_502_when_the_agent_refuses_the_push(monkeypatch) -> None:
     mgr = FakeHostedManager()
     mgr.seed(_hosted_agent("h1"))
 
-    resp = TestClient(_app(mgr)).post(
+    resp = TestClient(_app(mgr), headers=AUTH).post(
         "/hosted-agents/h1/trust-peer", json={"peer_did": "did:web:org-c.aitp.test"},
     )
     assert resp.status_code == 502, resp.text

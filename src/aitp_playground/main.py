@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,6 +25,7 @@ from .hosting.bootstrap import BootstrapBuilder
 from .hosting.hosted import HostedAgentManager
 from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
+from .limits import SpendLimits
 from .registry.service import RegistryService
 from .runner.engine import ScenarioRunner
 from .runner.store import build_run_store
@@ -40,11 +42,17 @@ def _configure_logging(settings: Settings) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     _configure_logging(settings)
+    if not settings.playground_api_key.strip():
+        logging.getLogger(__name__).warning(
+            "PLAYGROUND_API_KEY is not set: every authenticated route "
+            "(run create/read/stream, hosted agents, CP views) answers 503"
+        )
 
     registry = RegistryService(settings)
     port_alloc = PortAllocator(start=settings.agent_base_port)
     supervisor = AgentSupervisor()
-    bootstrap_builder = BootstrapBuilder(settings)
+    telemetry_token = secrets.token_urlsafe(32)
+    bootstrap_builder = BootstrapBuilder(settings, telemetry_token=telemetry_token)
     adapters = build_default_adapter_registry()
     cp = CpClient(settings)
     trust = TrustOrchestrator(cp, settings)
@@ -84,6 +92,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.supervisor = supervisor
     app.state.cp = cp
     app.state.hosted = hosted
+    app.state.spend_limits = SpendLimits(settings)
+    app.state.telemetry_token = telemetry_token
 
     install_handlers(app)
 

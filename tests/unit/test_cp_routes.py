@@ -10,6 +10,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests._auth import AUTH
+
 from aitp_playground.api import cp as cp_api
 from aitp_playground.config import Settings
 from aitp_playground.cp_client.client import CpClient
@@ -19,7 +21,7 @@ def _client_no_cp() -> TestClient:
     app = FastAPI()
     app.state.cp = CpClient(Settings(cp_base_url=""))  # disabled
     app.include_router(cp_api.router)
-    return TestClient(app)
+    return TestClient(app, headers=AUTH)
 
 
 def test_list_endpoints_degrade_to_empty() -> None:
@@ -63,7 +65,7 @@ def test_tcts_route_forwards_filters_to_client(monkeypatch) -> None:
     cp.fetch_tcts = _fake_fetch_tcts  # type: ignore[method-assign]
     app.state.cp = cp
     app.include_router(cp_api.router)
-    client = TestClient(app)
+    client = TestClient(app, headers=AUTH)
 
     resp = client.get("/cp/tcts", params={"capability": "write.content", "active": "true"})
     assert resp.status_code == 200

@@ -75,6 +75,32 @@ class Settings(BaseSettings):
     cp_timeout_ms: int = 5000
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    # ── API authentication and spend limits ──────────────────────────────
+    #
+    # Bearer key(s) every mutating route, and every route that exposes run
+    # data, requires (`api/_deps.py::require_api_key`). Comma-separated so a
+    # rotation can overlap: add the new key, move callers over, drop the old
+    # one. Empty means "not configured" and those routes fail closed with 503
+    # rather than open — a missing secret must never read as "no auth".
+    playground_api_key: str = ""
+    # Token bucket on run creation and hosted-agent invoke, applied twice:
+    # once per client IP and once per API key. `rate_limit_burst` requests
+    # may go at once; the bucket refills at `rate_limit_per_minute`.
+    rate_limit_per_minute: int = 10
+    rate_limit_burst: int = 5
+    # Global ceiling on LLM-spending operations (run creations plus
+    # hosted-agent invokes) in any rolling hour, across every caller. The
+    # (N+1)th is refused with 429 before any agent or provider is touched.
+    max_runs_per_hour: int = 30
+    # Output-token budget for one run, split evenly across the run's agents
+    # and enforced inside each agent before every provider call
+    # (`agents/base/llm.py`). A hosted agent gets the whole budget for its
+    # lifetime. `llm_max_tokens_per_call` caps each single provider call.
+    run_token_budget: int = 40000
+    llm_max_tokens_per_call: int = 1024
+    # NOTE: the rate limit, the hourly cap and the token budget all live in
+    # process memory. They hold only while the service runs as ONE replica;
+    # N replicas multiply every limit by N. See SECURITY.md.
     log_level: str = "INFO"
     # When set, persist run records + events to this SQLite file so they
     # survive a service restart. Empty (the default) keeps the in-memory

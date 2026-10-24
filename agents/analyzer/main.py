@@ -72,7 +72,7 @@ async def do_analyze(payload: Any, commissioned_by: str = "self") -> dict[str, A
     )
     result = await call_llm_or_502(
         run_analyzer(input_text), emit_event=emit_event,
-        bootstrap=bootstrap, task="analyze",
+        bootstrap=bootstrap, task="analyze", llm_calls=2,  # summary + risks (graph.py)
     )
     await emit_event("llm.complete", bootstrap, task="analyze")
     return {**result, "agent": bootstrap["agent_id"]}
