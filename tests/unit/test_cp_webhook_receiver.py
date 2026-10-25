@@ -1,7 +1,8 @@
 """Tests for the CP webhook receiver (POST /webhooks/cp/{run_id}).
 
-Covers HMAC verification, append to the run event log, and the
-companion GET /runs/{id}/cp-deliveries query endpoint.
+Covers HMAC verification (body and signed timestamp), the replay window on
+`X-Aitp-Timestamp`, append to the run event log, and the companion
+GET /runs/{id}/cp-deliveries query endpoint.
 """
 from __future__ import annotations
 
@@ -52,6 +53,17 @@ def _now_iso(offset_secs: float = 0.0) -> str:
 
 def _sig(body: bytes, secret: str = SECRET) -> str:
     return "sha256=" + hmac.new(secret.encode("utf-8"), body, sha256).hexdigest()
+
+
+def _headers(body: bytes, ts: int | str | None = None, **extra: str) -> dict[str, str]:
+    """Every header CP sends on one attempt, signed now unless `ts` says otherwise."""
+    ts = str(int(time.time()) if ts is None else ts)
+    return {
+        "X-Aitp-Signature": _sig(body),
+        "X-Aitp-Timestamp": ts,
+        "X-Aitp-Timestamp-Signature": _sig(ts.encode() + b"." + body),
+        **extra,
+    }
 
 
 def test_unknown_run_returns_404(client: TestClient) -> None:
@@ -115,12 +127,13 @@ def test_good_signature_records_event_and_returns_200(client: TestClient) -> Non
     r = client.post(
         f"/webhooks/cp/{RUN_ID}",
         content=body,
-        headers={
-            "X-Aitp-Signature": _sig(body),
-            "X-Aitp-Event": "handshake.complete",
-            "X-Aitp-Delivery": "d-1",
-            "Content-Type": "application/json",
-        },
+        headers=_headers(
+            body, **{
+                "X-Aitp-Event": "handshake.complete",
+                "X-Aitp-Delivery": "d-1",
+                "Content-Type": "application/json",
+            },
+        ),
     )
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True}
@@ -169,37 +182,90 @@ def test_cp_deliveries_for_unknown_run_returns_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
-def _deliver(client: TestClient, payload: dict) -> "object":
+def _deliver(client: TestClient, payload: dict, ts: int | str | None = None) -> "object":
     body = json.dumps(payload).encode("utf-8")
     return client.post(
         f"/webhooks/cp/{RUN_ID}",
         content=body,
-        headers={"X-Aitp-Signature": _sig(body), "Content-Type": "application/json"},
+        headers=_headers(body, ts, **{"Content-Type": "application/json"}),
     )
 
 
-def test_stale_signed_timestamp_returns_401_and_is_not_recorded(client: TestClient) -> None:
-    """A correctly signed delivery older than the 5-minute window is a replay."""
+def _delivered(client: TestClient) -> list[dict]:
+    rec = client.app.state.run_store.get(RUN_ID)
+    return [e for e in rec["events"] if e["type"] == "cp.webhook.delivered"]
+
+
+def test_timestamp_signature_matches_the_cp_test_vector() -> None:
+    """The CP's published vector, so both sides sign the same bytes."""
+    digest = hmac.new(b"topsecret", b'1700000000.{"a":1}', sha256).hexdigest()
+    assert digest == "6a939b0c71853d606167625a15168ee9188c6a511c773ef4f42d307f3849e50f"
+
+
+def test_a_late_retry_with_an_old_enqueued_at_is_accepted(client: TestClient) -> None:
+    """A 4th attempt lands ~10.5 min after enqueue. Its signed timestamp is
+    fresh, so the old `enqueuedAt` it carries does not matter."""
+    r = _deliver(client, {
+        "deliveryId": "d-late", "eventType": "tct.revoked", "payload": {},
+        "enqueuedAt": _now_iso(-11 * 60),
+    })
+    assert r.status_code == 200, r.text
+    assert [e["delivery_id"] for e in _delivered(client)] == ["d-late"]
+
+
+@pytest.mark.parametrize("skew", [-301, 301])
+def test_a_signed_timestamp_outside_five_minutes_is_rejected(client: TestClient, skew: int) -> None:
+    """A captured delivery replayed later: correctly signed, but stale."""
     r = _deliver(client, {
         "deliveryId": "d-old", "eventType": "tct.revoked", "payload": {},
-        "enqueuedAt": _now_iso(-301),
-    })
+        "enqueuedAt": _now_iso(),
+    }, ts=int(time.time()) + skew)
     assert r.status_code == 401
     assert r.json()["detail"] == "stale delivery"
-    rec = client.app.state.run_store.get(RUN_ID)
-    assert not [e for e in rec["events"] if e["type"] == "cp.webhook.delivered"]
+    assert not _delivered(client)
 
 
-def test_missing_signed_timestamp_returns_401(client: TestClient) -> None:
-    r = _deliver(client, {"deliveryId": "d-x", "eventType": "tct.revoked", "payload": {}})
+def test_a_body_signature_alone_is_rejected(client: TestClient) -> None:
+    body = json.dumps({"deliveryId": "d-x", "enqueuedAt": _now_iso()}).encode()
+    r = client.post(f"/webhooks/cp/{RUN_ID}", content=body, headers={"X-Aitp-Signature": _sig(body)})
     assert r.status_code == 401
+    assert not _delivered(client)
+
+
+def test_a_missing_timestamp_signature_is_rejected(client: TestClient) -> None:
+    body = b'{"deliveryId":"d-x"}'
+    headers = _headers(body)
+    del headers["X-Aitp-Timestamp-Signature"]
+    r = client.post(f"/webhooks/cp/{RUN_ID}", content=body, headers=headers)
+    assert r.status_code == 401
+    assert r.json()["detail"] == "missing X-Aitp-Timestamp-Signature"
+
+
+def test_a_timestamp_signature_over_another_timestamp_is_rejected(client: TestClient) -> None:
+    """Re-stamping a captured delivery without the secret."""
+    body = b'{"deliveryId":"d-x"}'
+    headers = _headers(body, ts=int(time.time()) - 600)
+    headers["X-Aitp-Timestamp"] = str(int(time.time()))
+    r = client.post(f"/webhooks/cp/{RUN_ID}", content=body, headers=headers)
+    assert r.status_code == 401
+    assert r.json()["detail"] == "bad timestamp signature"
+
+
+@pytest.mark.parametrize("ts", ["1700000000.5", "-1", "+1700000000", "1e9", "", " 1700000000"])
+def test_a_timestamp_that_is_not_bare_digits_is_rejected(client: TestClient, ts: str) -> None:
+    """A dotted value would make the `<ts>.<body>` split ambiguous."""
+    body = b'{"deliveryId":"d-x"}'
+    headers = _headers(body)
+    headers["X-Aitp-Timestamp"] = ts
+    headers["X-Aitp-Timestamp-Signature"] = _sig(ts.encode() + b"." + body)
+    r = client.post(f"/webhooks/cp/{RUN_ID}", content=body, headers=headers)
+    assert r.status_code == 401
+    assert r.json()["detail"] == "missing or invalid X-Aitp-Timestamp"
 
 
 def test_non_json_body_returns_401(client: TestClient) -> None:
     body = b"not json"
-    r = client.post(
-        f"/webhooks/cp/{RUN_ID}", content=body, headers={"X-Aitp-Signature": _sig(body)},
-    )
+    r = client.post(f"/webhooks/cp/{RUN_ID}", content=body, headers=_headers(body))
     assert r.status_code == 401
 
 
@@ -223,6 +289,6 @@ def test_webhook_route_needs_no_api_key(client: TestClient) -> None:
     }).encode("utf-8")
     r = bare.post(
         f"/webhooks/cp/{RUN_ID}", content=body,
-        headers={"X-Aitp-Signature": _sig(body), "Content-Type": "application/json"},
+        headers=_headers(body, **{"Content-Type": "application/json"}),
     )
     assert r.status_code == 200

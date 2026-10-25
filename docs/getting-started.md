@@ -200,7 +200,7 @@ per-process token only the playground's own agents hold. See
 | `GET  /runs/{id}/cp-audit` | Audit events the CP recorded for this run ([control-plane.md](control-plane.md)) |
 | `GET  /runs/{id}/cp-sessions` | Handshake sessions the CP observed for this run |
 | `GET  /runs/{id}/cp-deliveries` | CP webhook deliveries this run has received (requires a prior `cp_subscribe_webhook` step) |
-| `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified; the signed `enqueuedAt` must be within 5 minutes, and a repeated `deliveryId` is not recorded twice) |
+| `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified, including the signed `X-Aitp-Timestamp`, which must be within 5 minutes; a repeated `deliveryId` is not recorded twice) |
 | `POST /runs/{id}/cancel` | Mark cancelled, then kill agent subprocesses (this order closes the D-16 race: a concurrent dispatch failure that lands after the mark sees `status=cancelled` already, never a stale `running`) |
 | `GET  /agents` | List currently-running agent processes |
 | `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |

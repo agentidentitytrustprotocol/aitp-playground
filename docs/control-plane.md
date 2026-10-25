@@ -147,11 +147,20 @@ playground. The flow:
    header, retries, circuit breaker) is the CP's contract: see
    [api.md § Webhooks](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md#webhooks) and
    [events.md](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/events.md).
-4. The receiver (`api/webhooks.py`) reads `X-Aitp-Signature` (`sha256=<hex>`),
-   `X-Aitp-Event` and `X-Aitp-Delivery`, and verifies the HMAC-SHA256 signature
-   against the stored secret (constant-time compare). Valid deliveries
-   append a `cp.webhook.delivered` event to the run log; missing/invalid
-   signatures return `401`, unknown runs `404`.
+4. The receiver (`api/webhooks.py`) checks two HMAC-SHA256 signatures
+   against the stored secret, both with a constant-time compare:
+   - `X-Aitp-Signature` (`sha256=<hex>`), computed over the body;
+   - `X-Aitp-Timestamp-Signature`, computed over `"<X-Aitp-Timestamp>.<body>"`.
+
+   `X-Aitp-Timestamp` is Unix seconds, written as bare digits, and is set on
+   every attempt. It must be within 5 minutes of now. The body's
+   `enqueuedAt` is ignored for this check, so a late retry is still accepted.
+
+   Valid deliveries append a `cp.webhook.delivered` event to the run log,
+   and a repeated `deliveryId` is recorded only once. The receiver returns
+   `401` for a missing or invalid signature or timestamp, a stale timestamp,
+   or a body that carries only the body signature. Unknown runs return
+   `404`.
 
 Inspect what arrived with `GET /runs/{id}/cp-deliveries` (the run's
 webhook config, secret stripped, plus the delivered events).

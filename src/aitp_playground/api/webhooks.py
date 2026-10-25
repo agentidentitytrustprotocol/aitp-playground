@@ -12,13 +12,17 @@ Unverified deliveries return 401 and are NOT appended — they don't
 become observable run history. CP retries on non-2xx, so transient
 verification failures are safe.
 
-Replay protection: CP sends no separate timestamp header, but the signed
-body carries ``enqueuedAt`` (ISO-8601, fixed at enqueue time) and
-``deliveryId``. A delivery whose signed ``enqueuedAt`` is more than
-``REPLAY_WINDOW_SECS`` from now is refused with 401, and a ``deliveryId``
-already recorded on the run is acknowledged without being appended again.
-CP's default retry schedule (attempts at +0s, +30s, +2.5m) fits inside the
-window; a later retry is refused like any other stale delivery.
+Replay protection: every delivery attempt also carries ``X-Aitp-Timestamp``
+(Unix seconds, set per attempt) and ``X-Aitp-Timestamp-Signature``, an
+HMAC-SHA256 over ``"<timestamp>.<raw body>"`` with the same secret. Both are
+required. The timestamp must be bare digits, since a dotted value would make the
+``.`` split ambiguous. A delivery whose signed timestamp is more than
+``REPLAY_WINDOW_SECS`` from now is refused with 401. The body's ``enqueuedAt`` is
+not used for the window: it is fixed at enqueue time, so a late retry
+legitimately carries an old one. A body signature alone is never enough, because
+it is identical on every retry and would leave replay unbounded. A
+``deliveryId`` already recorded on the run is acknowledged without being
+appended again.
 
 This route takes no API key: CP holds only the per-webhook HMAC secret.
 """
@@ -27,8 +31,8 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import re
 import time
-from datetime import datetime
 from hashlib import sha256
 from typing import Any
 
@@ -40,8 +44,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
-#: How far a signed ``enqueuedAt`` may sit from now, either way.
+#: How far a signed ``X-Aitp-Timestamp`` may sit from now, either way.
 REPLAY_WINDOW_SECS = 300
+
+#: Unix seconds as bare ASCII digits. A sign, a dot or an exponent is refused.
+_TIMESTAMP_RE = re.compile(r"[0-9]{1,20}")
 
 
 def _store(request: Request) -> RunStore:
@@ -65,13 +72,8 @@ def _parse_signature_header(value: str | None) -> str | None:
     return value.strip() or None
 
 
-def _enqueued_at(body: object) -> float | None:
-    if not isinstance(body, dict) or not isinstance(body.get("enqueuedAt"), str):
-        return None
-    try:
-        return datetime.fromisoformat(body["enqueuedAt"].replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
+def _hmac_hex(secret: str, data: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), data, sha256).hexdigest()
 
 
 @router.post("/cp/{run_id}")
@@ -81,6 +83,10 @@ async def receive_cp_webhook(
     x_aitp_signature: str | None = Header(default=None, alias="X-Aitp-Signature"),
     x_aitp_event: str | None = Header(default=None, alias="X-Aitp-Event"),
     x_aitp_delivery: str | None = Header(default=None, alias="X-Aitp-Delivery"),
+    x_aitp_timestamp: str | None = Header(default=None, alias="X-Aitp-Timestamp"),
+    x_aitp_timestamp_signature: str | None = Header(
+        default=None, alias="X-Aitp-Timestamp-Signature",
+    ),
 ) -> dict[str, Any]:
     store = _store(request)
     record = store.get(run_id)
@@ -97,23 +103,29 @@ async def receive_cp_webhook(
     sig = _parse_signature_header(x_aitp_signature)
     if sig is None:
         raise HTTPException(status_code=401, detail="missing X-Aitp-Signature")
-    expected = hmac.new(secret.encode("utf-8"), raw, sha256).hexdigest()
-    if not _constant_time_eq(sig, expected):
+    if not _constant_time_eq(sig, _hmac_hex(secret, raw)):
         raise HTTPException(status_code=401, detail="bad signature")
 
-    # Only a verified body is parsed. CP always sends its JSON delivery
-    # envelope; anything else cannot carry a signed timestamp, so it is
-    # refused rather than recorded.
+    if x_aitp_timestamp is None or not _TIMESTAMP_RE.fullmatch(x_aitp_timestamp):
+        raise HTTPException(status_code=401, detail="missing or invalid X-Aitp-Timestamp")
+    ts_sig = _parse_signature_header(x_aitp_timestamp_signature)
+    if ts_sig is None:
+        raise HTTPException(status_code=401, detail="missing X-Aitp-Timestamp-Signature")
+    signed = x_aitp_timestamp.encode("ascii") + b"." + raw
+    if not _constant_time_eq(ts_sig, _hmac_hex(secret, signed)):
+        raise HTTPException(status_code=401, detail="bad timestamp signature")
+    now = time.time()
+    if abs(now - int(x_aitp_timestamp)) > REPLAY_WINDOW_SECS:
+        raise HTTPException(status_code=401, detail="stale delivery")
+
+    # Only a verified, fresh body is parsed. CP always sends its JSON
+    # delivery envelope; anything else is refused rather than recorded.
     try:
         body_obj = json.loads(raw.decode("utf-8")) if raw else {}
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(status_code=401, detail="delivery body is not JSON") from None
-    enqueued = _enqueued_at(body_obj)
-    if enqueued is None:
-        raise HTTPException(status_code=401, detail="missing or invalid enqueuedAt")
-    now = time.time()
-    if abs(now - enqueued) > REPLAY_WINDOW_SECS:
-        raise HTTPException(status_code=401, detail="stale delivery")
+    if not isinstance(body_obj, dict):
+        raise HTTPException(status_code=401, detail="delivery body is not a JSON object")
 
     delivery_id = body_obj.get("deliveryId") or x_aitp_delivery
     if delivery_id and any(
