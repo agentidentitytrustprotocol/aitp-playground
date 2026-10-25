@@ -1,4 +1,4 @@
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: ScenarioPack
 metadata:
   slug: cross-cloud

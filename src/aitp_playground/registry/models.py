@@ -1,9 +1,29 @@
 """Pydantic models for scenario packs and agent manifests."""
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+# The only accepted ``apiVersion`` for every registry document. Strict
+# cutover: the retired ``aitp.dev/v1`` is rejected, not migrated.
+API_VERSION = "agentidentitytrustprotocol.io/playground/v1"
+_RETIRED_API_VERSIONS = frozenset({"aitp.dev/v1"})
+
+
+def _check_api_version(value: str) -> str:
+    if value == API_VERSION:
+        return value
+    if value in _RETIRED_API_VERSIONS:
+        raise ValueError(
+            f"apiVersion {value!r} is retired; use {API_VERSION!r}"
+        )
+    raise ValueError(
+        f"unsupported apiVersion {value!r}; expected {API_VERSION!r}"
+    )
+
+
+ApiVersion = Annotated[str, AfterValidator(_check_api_version)]
 
 
 class PackMeta(BaseModel):
@@ -16,7 +36,7 @@ class PackMeta(BaseModel):
 class Pack(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    api_version: str = Field(alias="apiVersion")
+    api_version: ApiVersion = Field(alias="apiVersion")
     kind: Literal["ScenarioPack"]
     metadata: PackMeta
 
@@ -196,7 +216,7 @@ class ScenarioMeta(BaseModel):
 class ScenarioVersion(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    api_version: str = Field(alias="apiVersion")
+    api_version: ApiVersion = Field(alias="apiVersion")
     kind: Literal["ScenarioVersion"]
     metadata: ScenarioMeta
     spec: ScenarioSpec
@@ -237,7 +257,7 @@ class ScenarioTemplateSpec(BaseModel):
 class ScenarioTemplate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    api_version: str = Field(alias="apiVersion")
+    api_version: ApiVersion = Field(alias="apiVersion")
     kind: Literal["ScenarioTemplate"]
     metadata: ScenarioTemplateMeta
     spec: ScenarioTemplateSpec = ScenarioTemplateSpec()
@@ -277,7 +297,7 @@ class AgentManifestMeta(BaseModel):
 class AgentManifest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    api_version: str = Field(alias="apiVersion")
+    api_version: ApiVersion = Field(alias="apiVersion")
     kind: Literal["AgentManifest"]
     metadata: AgentManifestMeta
     spec: AgentManifestSpec

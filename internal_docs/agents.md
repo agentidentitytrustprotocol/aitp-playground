@@ -281,7 +281,7 @@ Goal: a new `summarizer` agent.
 2. Add a manifest at `scenarios/_shared/agents/summarizer.yaml`:
 
    ```yaml
-   apiVersion: aitp.dev/v1
+   apiVersion: agentidentitytrustprotocol.io/playground/v1
    kind: AgentManifest
    metadata:
      id: summarizer

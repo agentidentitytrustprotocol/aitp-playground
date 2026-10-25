@@ -315,7 +315,7 @@ def _agent_manifest(agent_id: str, caps: list[str], identity_type: str = "pinned
         aitp_block["oidc_issuer"] = "http://issuer.local"
         aitp_block["oidc_subject"] = agent_id
     return AgentManifest.model_validate({
-        "apiVersion": "aitp.dev/v1",
+        "apiVersion": "agentidentitytrustprotocol.io/playground/v1",
         "kind": "AgentManifest",
         "metadata": {"id": agent_id, "name": agent_id, "framework": "custom"},
         "spec": {
@@ -350,7 +350,7 @@ def make_env(
         )
         agent_specs.append({"id": aid, "ref": ref, "port_offset": idx})
     scenario = ScenarioVersion.model_validate({
-        "apiVersion": "aitp.dev/v1",
+        "apiVersion": "agentidentitytrustprotocol.io/playground/v1",
         "kind": "ScenarioVersion",
         "metadata": {
             "pack": "test", "scenario": "demo", "version": "1.0.0", "name": "Demo",

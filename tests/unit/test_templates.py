@@ -105,7 +105,7 @@ def test_apply_template_is_idempotent_on_name() -> None:
 def test_template_with_no_overrides_leaves_base_unchanged() -> None:
     base = _svc().get_scenario(REF)
     tpl = ScenarioTemplate(
-        apiVersion="aitp.dev/v1",
+        apiVersion="agentidentitytrustprotocol.io/playground/v1",
         kind="ScenarioTemplate",
         metadata=ScenarioTemplateMeta(name="noop", summary=None),
         spec=ScenarioTemplateSpec(),
@@ -132,14 +132,14 @@ def test_loader_skips_files_without_kind_scenario_template(
     sv_dir = pack / "sc" / "1.0.0"
     sv_dir.mkdir(parents=True)
     (pack / "pack.yaml").write_text(textwrap.dedent("""
-        apiVersion: aitp.dev/v1
+        apiVersion: agentidentitytrustprotocol.io/playground/v1
         kind: ScenarioPack
         metadata:
           slug: demo-pack
           name: Demo Pack
     """).strip())
     (sv_dir / "scenario.yaml").write_text(textwrap.dedent("""
-        apiVersion: aitp.dev/v1
+        apiVersion: agentidentitytrustprotocol.io/playground/v1
         kind: ScenarioVersion
         metadata:
           pack: demo-pack
@@ -161,7 +161,7 @@ def test_loader_skips_files_without_kind_scenario_template(
     # Stray file (no kind: ScenarioTemplate) — must be skipped, not raised.
     (tpl_dir / "stray.yaml").write_text("topic: foo\nstyle: bar\n")
     (tpl_dir / "ok.yaml").write_text(textwrap.dedent("""
-        apiVersion: aitp.dev/v1
+        apiVersion: agentidentitytrustprotocol.io/playground/v1
         kind: ScenarioTemplate
         metadata:
           name: ok

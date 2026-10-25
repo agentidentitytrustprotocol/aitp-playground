@@ -124,7 +124,7 @@ def _parse_scenario_ref(ref: str) -> tuple[str, str, str]:
 
 
 _SCENARIO_TEMPLATE = """\
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: ScenarioVersion
 metadata:
   pack: {pack}
@@ -177,7 +177,7 @@ spec:
 
 
 _PACK_TEMPLATE = """\
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: ScenarioPack
 metadata:
   slug: {pack}
