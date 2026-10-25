@@ -100,13 +100,17 @@ dependencies = [
   #     explicitly. `build_manifest` takes `revocation_list_uri` (advertised
   #     as `rfc-aitp-0008.revocation_list_uri`) and `REVOCATION_LIST_PATH` is
   #     exported. Still `aitp/0.3`; the floor moves with the `<0.20` bound.
+  #   0.21.0 — downstream PoP (RFC-AITP-0005 §6, §10.5): `new_pop_challenge`,
+  #     `sign_pop_response` and `verify_tct(..., pop=(challenge, response))`,
+  #     which pins the audience to the PoP-proven `sub` and raises if
+  #     `expected_audience` is also passed. Capability calls now require it.
   #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md;
   #   0.20 is in ../aitp-rs/CHANGELOG.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.20.0,<0.21",
+  "aitp-sdk>=0.21.0,<0.22",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",
