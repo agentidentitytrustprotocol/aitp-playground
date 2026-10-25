@@ -231,10 +231,10 @@ From `build_admin_router`:
   redeem endpoint, store the returned TCT in `held_tcts`.
 - `POST /admin/revoke-tct` — add a jti to this agent's **local**
   revocations. Never cleared by a control-plane refresh.
-- `POST /admin/refresh-revocations` — fetch the CP's signed revocation
-  snapshot, verify it against the pinned `CP_AID`, and put it into force
-  (replacing any previous snapshot). Discarded wholesale if it does not
-  verify.
+- `POST /admin/refresh-revocations` — pull this agent's entries from the
+  CP, re-sign its own revocation list, verify it against its own AID, and
+  put it into force (replacing the previous list's entries). Discarded
+  wholesale if it does not verify. Served by `AitpServer`.
 - `GET  /admin/held-tct` — return the TCT this agent currently holds
   from a peer, keyed by peer port.
 - `POST /admin/renew-tct` — request a fresh TCT (new jti, same subject

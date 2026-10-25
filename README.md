@@ -62,6 +62,28 @@ older wheel the advanced scenarios report "feature not available" instead of
 crashing. Check `GET /capabilities` to see what your wheel exposes (feature
 flags: [aitp-py README](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/README.md#cargo-features)).
 
+### Revocation
+
+Revoking a TCT in the Control Plane console reaches the agent that verifies
+it within one `REVOCATION_POLL_SECS` interval. Each agent verifies the TCTs
+it issued, so each one:
+
+1. pulls its own entries from the CP (`GET /api/revocations?iss=<own AID>`);
+2. signs them into its own revocation list, served at
+   `/.well-known/aitp-revocation-list` and advertised in its Manifest as
+   `rfc-aitp-0008.revocation_list_uri`;
+3. verifies that list against its own AID (`aitp.verify_revocation_list`) and
+   enforces it, together with its local revocations, on every capability
+   call, redemption and handshake (`revocation="fail_closed"`).
+
+If the CP is stopped, the last list stays served and enforced until its
+signed `expires_at` (`REVOCATION_LIST_TTL_SECS`). It is never replaced by an
+empty list: past expiry the route answers 503 and a `fail_closed` agent
+refuses calls. A restart re-signs with the same key. `fail_open` is not
+used anywhere. Details:
+[aitp-integration.md](docs/aitp-integration.md#revocation-list-ingest-verifier-side);
+acceptance test: `tests/integration/test_revocation_two_agents.py`.
+
 ## Documentation
 
 The reader-facing docs are under [`docs/`](docs/) (also published to the

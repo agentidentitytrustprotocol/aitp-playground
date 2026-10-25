@@ -61,7 +61,7 @@ def issuer():
 
 
 def _verify(issuer, claims: dict):
-    return issuer.verify_tct(_mint(claims), GRANT, claims["aud"])
+    return issuer.verify_tct(_mint(claims), GRANT, claims["aud"], revoked_jtis=set())
 
 
 def test_independently_minted_tct_verifies(issuer):

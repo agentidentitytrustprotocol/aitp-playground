@@ -85,8 +85,8 @@ def test_tct_renewal_round_trip() -> None:
     hello = sh.build_hello(i_m, ["demo.y"])
     ack, sid = si.process_hello(hello)
     commit = sh.process_hello_ack(ack, sid)
-    commit_ack, _ = si.process_commit(commit)
-    held_tct = json.loads(sh.complete(commit_ack))["tct"]
+    commit_ack, _ = si.process_commit(commit, revoked_jtis=set())
+    held_tct = json.loads(sh.complete(commit_ack, revoked_jtis=set()))["tct"]
     orig = _claims(held_tct)
 
     request_payload = holder.build_renewal_request(held_tct)
@@ -121,16 +121,16 @@ def test_tct_cache_hit_miss_len_delta() -> None:
     hello = sh.build_hello(i_m, ["demo.y"])
     ack, sid = si.process_hello(hello)
     commit = sh.process_hello_ack(ack, sid)
-    commit_ack, _ = si.process_commit(commit)
-    held_tct = json.loads(sh.complete(commit_ack))["tct"]
+    commit_ack, _ = si.process_commit(commit, revoked_jtis=set())
+    held_tct = json.loads(sh.complete(commit_ack, revoked_jtis=set()))["tct"]
     claims = _claims(held_tct)
     audience = claims.get("aud") or claims.get("sub")
 
     store = aitp.TctStore(256)
     assert store.len() == 0
-    id1 = issuer.verify_tct_cached(held_tct, "demo.y", store, expected_audience=audience)
+    id1 = issuer.verify_tct_cached(held_tct, "demo.y", store, expected_audience=audience, revoked_jtis=set())
     assert store.len() == 1  # miss: a new entry was inserted
-    id2 = issuer.verify_tct_cached(held_tct, "demo.y", store, expected_audience=audience)
+    id2 = issuer.verify_tct_cached(held_tct, "demo.y", store, expected_audience=audience, revoked_jtis=set())
     assert store.len() == 1  # hit: no new entry
     assert id1.peer_aid == id2.peer_aid
     assert id1.jti == id2.jti
@@ -148,8 +148,8 @@ def _participant_handshake(participant, coordinator, coord_manifest):
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
-    commit_ack, _ = rsess.process_commit(commit)
-    return json.loads(sess.complete(commit_ack))["tct"]
+    commit_ack, _ = rsess.process_commit(commit, revoked_jtis=set())
+    return json.loads(sess.complete(commit_ack, revoked_jtis=set()))["tct"]
 
 
 @pytest.mark.skipif(not _HAS_BUNDLE, reason="aitp built without experimental-bundle")
@@ -263,11 +263,11 @@ def test_oidc_handshake_p256_initiator() -> None:
     hello = sa.build_hello(b_m, ["demo.y"], oidc_mint_jwt=a_mint)
     ack, sid = sb.process_hello(hello)
     commit = sa.process_hello_ack(ack, sid)
-    commit_ack, b_completed = sb.process_commit(commit)
-    a_held = json.loads(sa.complete(commit_ack))["tct"]
+    commit_ack, b_completed = sb.process_commit(commit, revoked_jtis=set())
+    a_held = json.loads(sa.complete(commit_ack, revoked_jtis=set()))["tct"]
     b_held = json.loads(b_completed)["tct"]
-    assert a.verify_tct(a_held, "demo.y").peer_aid == b.aid
-    assert b.verify_tct(b_held, "demo.x").peer_aid == a.aid
+    assert a.verify_tct(a_held, "demo.y", revoked_jtis=set()).peer_aid == b.aid
+    assert b.verify_tct(b_held, "demo.x", revoked_jtis=set()).peer_aid == a.aid
 
 
 @pytest.mark.skipif(not _HAS_OIDC, reason="aitp built without OIDC JwksProvider")
@@ -307,9 +307,9 @@ def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
     hello = sa.build_hello(b_m, ["demo.y"], oidc_mint_jwt=a_mint)
     ack, sid = sb.process_hello(hello)
     commit = sa.process_hello_ack(ack, sid)
-    commit_ack, b_completed = sb.process_commit(commit)
-    a_held = json.loads(sa.complete(commit_ack))["tct"]
+    commit_ack, b_completed = sb.process_commit(commit, revoked_jtis=set())
+    a_held = json.loads(sa.complete(commit_ack, revoked_jtis=set()))["tct"]
     b_held = json.loads(b_completed)["tct"]
 
-    assert a.verify_tct(a_held, "demo.y").peer_aid == b.aid
-    assert b.verify_tct(b_held, "demo.x").peer_aid == a.aid
+    assert a.verify_tct(a_held, "demo.y", revoked_jtis=set()).peer_aid == b.aid
+    assert b.verify_tct(b_held, "demo.x", revoked_jtis=set()).peer_aid == a.aid

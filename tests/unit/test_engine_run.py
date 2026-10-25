@@ -853,7 +853,7 @@ async def test_revoke_tct_local_only(agent_http) -> None:
     assert env.cp.revocations == []
 
 
-async def test_revoke_tct_via_cp_publishes_and_refreshes_audience(agent_http) -> None:
+async def test_revoke_tct_via_cp_publishes_and_refreshes_the_issuer(agent_http) -> None:
     env = make_env(
         agents={"alice": ["cap.a"], "bob": ["cap.b"]},
         cp=FakeCp(enabled=True),
@@ -865,12 +865,16 @@ async def test_revoke_tct_via_cp_publishes_and_refreshes_audience(agent_http) ->
     out = result.outputs["rev"]
     assert out["revoked_jti"] == "jti-9500"
     assert out["published_to_cp"] is True
-    assert out["audience_revoked_count"] == 2
+    assert out["issuer_revoked_count"] == 2
     assert env.cp.revocations == [("jti-9500", "compromised")]
     assert "revocation.published" in _event_types(result)
-    # The audience (alice, port 9500) is told to refresh from the CP.
-    refresh = agent_http.body_of("/admin/refresh-revocations")
-    assert refresh["cp_base_url"] == "http://cp.test"
+    # The issuer (bob, port 9501) verifies this TCT, so bob is the one told to
+    # refresh: its own list is the only one that can name the jti.
+    refreshes = [
+        r.url.port for r in agent_http.requests
+        if r.url.path == "/admin/refresh-revocations"
+    ]
+    assert refreshes == [9501]
     # The entry is attributed to bob, and bob re-signs its own list at once.
     assert env.cp.revocation_issuers == [env.supervisor.agents["bob"].aid]
     publishes = [
@@ -885,7 +889,7 @@ async def test_revoke_tct_cp_only_skips_the_issuer_and_refreshes_named_agents(
     agent_http,
 ) -> None:
     """`local_revoke: false`: the CP entry is the only source, and the agents
-    in `refresh_agents` (not the audience) are the ones that pull it."""
+    in `refresh_agents` are the ones that pull their lists."""
     env = make_env(
         agents={"alice": ["cap.a"], "bob": ["cap.b"]},
         cp=FakeCp(enabled=True),
@@ -905,7 +909,7 @@ async def test_revoke_tct_cp_only_skips_the_issuer_and_refreshes_named_agents(
     out = result.outputs["rev"]
     assert out["local_revoke"] is False
     assert out["refreshed"] == {"bob": 2}
-    assert out["audience_revoked_count"] == 0
+    assert out["issuer_revoked_count"] == 2
 
 
 async def test_revoke_tct_cp_only_without_a_cp_is_skipped(agent_http) -> None:
@@ -936,7 +940,7 @@ async def test_revoke_tct_local_revoke_false_needs_via_cp(agent_http) -> None:
 async def test_redeem_with_expect_status_records_a_refusal(agent_http) -> None:
     """Probe mode: the grantor's 403 is the expected outcome, not a crash."""
     agent_http.overrides["/admin/redeem-delegation"] = lambda _r: httpx.Response(
-        403, json={"detail": "delegation rejected: x (source revoked (cp-snapshot))"},
+        403, json={"detail": "delegation rejected: x (source revoked (issuer-list))"},
     )
     env = make_env(
         agents={"alice": ["cap.a"], "bob": ["cap.b"], "carol": ["cap.c"]},
@@ -952,7 +956,7 @@ async def test_redeem_with_expect_status_records_a_refusal(agent_http) -> None:
     out = result.outputs["redeem"]
     assert out["status_code"] == 403
     assert out["rejected"] is True and out["matched"] is True
-    assert "cp-snapshot" in out["body"]["detail"]
+    assert "issuer-list" in out["body"]["detail"]
 
 
 async def test_redeem_with_expect_status_flags_an_unexpected_success(agent_http) -> None:

@@ -105,8 +105,8 @@ def _delegation_for(server, manifest_json: str):
     hello = sess.build_hello(manifest_json, ["demo.write"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
-    commit_ack, _ = rsess.process_commit(commit)
-    completed = json.loads(sess.complete(commit_ack))
+    commit_ack, _ = rsess.process_commit(commit, revoked_jtis=set())
+    completed = json.loads(sess.complete(commit_ack, revoked_jtis=set()))
 
     token = b.build_delegation(completed["grant_voucher"], c.aid, ["demo.write"])
     return token, manifests["B"]
@@ -155,13 +155,9 @@ def test_revoking_the_source_tct_refuses_to_mint_a_new_tct() -> None:
     assert "revoked" in resp.text.lower()
 
 
-def test_a_cp_snapshot_entry_is_enough_to_refuse() -> None:
-    """The federation case: the grantor never revoked this locally.
-
-    On the capability path a CP-derived entry can only change the wording of
-    a 403 the issuer check would have produced anyway. Here it is load-bearing
-    on its own.
-    """
+def test_an_issuer_list_entry_is_enough_to_refuse() -> None:
+    """The grantor never revoked this locally: only its own signed list,
+    built from the CP's entries for it, names the source TCT."""
     state = RevocationState()
     server, manifest = _server(state)
     token, issuer = _delegation_for(server, manifest)
@@ -175,8 +171,8 @@ def test_a_cp_snapshot_entry_is_enough_to_refuse() -> None:
 
     resp = _redeem(client, token, issuer)
     assert resp.status_code == 403
-    # The refusal names its source: a CP entry, not our own revocation.
-    assert "source revoked (cp-snapshot)" in resp.text, resp.text
+    # The refusal names its source: our signed list, not a local revocation.
+    assert "source revoked (issuer-list)" in resp.text, resp.text
     assert _src_jti(token) in resp.text
 
 
@@ -351,8 +347,8 @@ def test_capability_tct_issuer_mismatch_is_refused_before_signature_verification
     hello = sess.build_hello(other_manifest, ["demo.write"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
-    commit_ack, _ = rsess.process_commit(commit)
-    foreign_tct = json.loads(sess.complete(commit_ack))["tct"]
+    commit_ack, _ = rsess.process_commit(commit, revoked_jtis=set())
+    foreign_tct = json.loads(sess.complete(commit_ack, revoked_jtis=set()))["tct"]
 
     with pytest.raises(Exception) as excinfo:
         server.verify_capability_tct(foreign_tct, "demo.write")

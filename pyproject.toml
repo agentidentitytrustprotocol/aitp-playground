@@ -93,12 +93,20 @@ dependencies = [
   #     stores the canonical form. Also fixes the Python binding never
   #     matching an uppercase or braced deny-list entry. The floor moves
   #     with the bounded range: the `<0.19` upper bound made this deliberate.
-  #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md.
+  #   0.20.0 — revocation is fail_closed: `verify_tct(_cached)`,
+  #     `verify_delegation(_multihop)`, `process_commit` and `complete` reject
+  #     every TCT when no `revoked_jtis` is supplied, so each call site passes
+  #     the agent's effective deny-set and `revocation="fail_closed"`
+  #     explicitly. `build_manifest` takes `revocation_list_uri` (advertised
+  #     as `rfc-aitp-0008.revocation_list_uri`) and `REVOCATION_LIST_PATH` is
+  #     exported. Still `aitp/0.3`; the floor moves with the `<0.20` bound.
+  #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md;
+  #   0.20 is in ../aitp-rs/CHANGELOG.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.19.0,<0.20",
+  "aitp-sdk>=0.20.0,<0.21",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",

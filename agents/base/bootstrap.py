@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 import aitp
 
@@ -23,6 +24,16 @@ def create_agent(bootstrap: dict[str, Any]) -> "aitp.AitpAgent":
     return aitp.AitpAgent.from_seed(bytes.fromhex(seed_hex), suite=suite)
 
 
+def revocation_list_uri(handshake_endpoint: str) -> str:
+    """This agent's list URL: the handshake endpoint's origin plus the SDK path.
+
+    The origin, not the endpoint's directory: the list is served at the root
+    (`aitp.REVOCATION_LIST_PATH`), the same place aitp-rs serves `ListRevoked`.
+    """
+    parts = urlsplit(handshake_endpoint)
+    return f"{parts.scheme}://{parts.netloc}{aitp.REVOCATION_LIST_PATH}"
+
+
 def get_manifest_json(agent: "aitp.AitpAgent", bootstrap: dict[str, Any]) -> str:
     cfg = bootstrap["aitp"]
     kwargs: dict[str, Any] = {
@@ -30,6 +41,10 @@ def get_manifest_json(agent: "aitp.AitpAgent", bootstrap: dict[str, Any]) -> str
         "handshake_endpoint": cfg["handshake_endpoint"],
         "offered_caps": list(cfg["offered_caps"]),
         "ttl_secs": int(cfg.get("ttl_secs", 3600)),
+        # RFC-AITP-0008 §1.4: every agent that issues TCTs advertises where its
+        # signed revocation list is served. Without it a fail_closed verifier
+        # that discovers lists through the Manifest rejects our TCTs.
+        "revocation_list_uri": revocation_list_uri(cfg["handshake_endpoint"]),
     }
     identity_type = cfg.get("identity_type", "pinned_key")
     if identity_type == "oidc":

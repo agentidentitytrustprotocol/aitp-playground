@@ -39,11 +39,10 @@ import httpx
 
 EventEmitter = Callable[..., Awaitable[None]]
 
-#: Where aitp-rs's `HandshakeServer` serves `ListRevoked` (`REVOCATION_LIST_PATH`
-#: in aitp-transport-http). The same path here means the Manifest advertisement
-#: can point at it unchanged once aitp-py's `build_manifest` takes
-#: `revocation_list_uri`.
-REVOCATION_LIST_PATH = "/.well-known/aitp-revocation-list"
+#: Where aitp-rs's `HandshakeServer` serves `ListRevoked`, exported by the
+#: binding since aitp-sdk 0.20. The Manifest's
+#: `rfc-aitp-0008.revocation_list_uri` points at the agent's origin plus this.
+REVOCATION_LIST_PATH: str = aitp.REVOCATION_LIST_PATH
 
 #: Retry-After on our 503, matching the control plane's own.
 RETRY_AFTER_SECS = 30

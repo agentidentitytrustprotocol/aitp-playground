@@ -10,25 +10,18 @@ metadata:
     Researcher establishes trust with writer; writer issues a TCT and the
     researcher's first call succeeds. Researcher then revokes the writer's
     TCT and the engine *also* posts the jti to the CP's
-    /api/revocation/entries. The writer pulls the updated revocation list
-    from /.well-known/aitp-revocation-list into its local deny-set.
+    /api/revocation/entries. The researcher (the issuer, and the only agent
+    that verifies this TCT) pulls its entries back from the CP, signs them
+    into its own list at /.well-known/aitp-revocation-list (advertised in its
+    Manifest), verifies that list against its own AID and applies it.
 
     Read the final probe carefully — it proves less than it looks like it
-    does. `blocked_call` is writer -> researcher, so its 403 comes from the
-    *researcher's* local deny-set (set directly by /admin/revoke-tct), and it
-    would fire identically with the whole CP path broken. The writer's
-    CP-derived deny-set is never consulted on that call: /admin/invoke
-    attaches the held TCT unconditionally, and a deny-set is only read by the
-    peer serving a capability. So what the CP half demonstrates is that the
-    revocation *data* reaches an unrelated peer — visible as
-    `audience_revoked_count` and the `revocation.list_fetched` event — not
-    that it changes an enforcement outcome anywhere in this run.
-
-    The fetched snapshot IS signature-verified before any entry is applied
-    (`aitp.verify_revocation_list` against the pinned CP_AID; an unverifiable
-    snapshot is discarded, never merged). What this scenario still does not
-    show is a step driving a call *into* the writer to make its refreshed
-    deny-set decide something.
+    does. `blocked_call` is writer -> researcher, and the researcher also
+    revoked locally, so its 403 names `local` and would fire identically with
+    the CP path broken. What the CP half demonstrates is that the entry makes
+    the round trip into the issuer's signed, served list — visible as
+    `issuer_revoked_count` and the `revocation.list_fetched` event.
+    `revocation-cp-only` is the scenario where the CP entry alone decides.
   tags: [revocation, rfc-0008, control-plane, federation, intra-org]
 
 spec:
@@ -77,14 +70,9 @@ spec:
         description: >
           Researcher revokes writer's TCT locally AND publishes the jti to
           the CP's /api/revocation/entries. The engine then asks the
-          writer (the audience) to refresh its view from
-          /.well-known/aitp-revocation-list, so the writer fails-closed
-          on this jti even though the issuer never called it back.
-
-          The CP signs that snapshot and the writer verifies it against
-          the AID pinned in CP_AID before applying any entry, so this is
-          authenticated propagation. With no CP_AID pinned the snapshot is
-          discarded rather than trusted — the fail-closed posture.
+          researcher to refresh: it re-pulls its entries, re-signs its own
+          list and verifies it against its own AID before applying any
+          entry. The CP signs nothing; an unverifiable list is discarded.
 
       - id: blocked_call
         type: capability_probe
