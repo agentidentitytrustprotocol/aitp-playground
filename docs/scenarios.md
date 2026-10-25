@@ -56,10 +56,15 @@ Loader rules (`registry/loader.py`):
 relative to the including file. Use it to keep big scenarios readable
 or to share input snippets.
 
+Every registry document (pack, scenario, template, agent manifest) must
+declare `apiVersion: agentidentitytrustprotocol.io/playground/v1`. Any
+other value fails validation; the retired `aitp.dev/v1` fails with an
+error that names the replacement.
+
 ## Pack file
 
 ```yaml
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: ScenarioPack
 metadata:
   slug: intra-org           # used in scenario refs as the prefix
@@ -74,7 +79,7 @@ A manifest is reusable across scenarios. It declares the framework, how
 to launch the worker, and what AITP capabilities the agent offers.
 
 ```yaml
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: AgentManifest
 metadata:
   id: researcher
@@ -126,7 +131,7 @@ Key behaviors:
 ## Scenario file
 
 ```yaml
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: ScenarioVersion
 metadata:
   pack: intra-org
@@ -289,7 +294,7 @@ participants and inputs but diverge on trust posture or workflow shape.
 
 ```yaml
 # scenarios/intra-org/research-and-write/1.0.0/templates/trust-strict.yaml
-apiVersion: aitp.dev/v1
+apiVersion: agentidentitytrustprotocol.io/playground/v1
 kind: ScenarioTemplate
 metadata:
   name: trust-strict
@@ -382,7 +387,7 @@ review what it wrote.
 3. Write the YAML:
 
    ```yaml
-   apiVersion: aitp.dev/v1
+   apiVersion: agentidentitytrustprotocol.io/playground/v1
    kind: ScenarioVersion
    metadata:
      pack: intra-org
