@@ -338,13 +338,18 @@ scope the TCT.
 ## TCTs and capability authorization
 
 Under protocol `aitp/0.3` the `X-AITP-TCT` header carries an opaque
-**compact-JWS token**. When a peer call hits `/capabilities/<name>`, the
-worker calls `server.verify_capability_tct(tct_token, "<name>")`, which
+**compact-JWS token**. It is not a bearer token: the TCT comes back to the
+agent that issued it, which is the "issuer as resource server" case of
+[RFC-AITP-0005 §10.5](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0005-tct.md),
+and the caller must also prove it holds the key of the TCT's `sub` with
+downstream proof of possession (§6). When a peer call hits
+`/capabilities/<name>`, the worker calls
+`server.verify_capability_tct(tct_token, "<name>", pop_response=...)`, which
 in essence does:
 
 ```python
 # agents/base/aitp_server.py (condensed)
-def verify_capability_tct(self, tct_token, required_grant):
+def verify_capability_tct(self, tct_token, required_grant, pop_response=""):
     if not tct_token: raise 403 "missing X-AITP-TCT"
     claims = decode_claims(tct_token)        # unverified claims, for precise 403s
     jti = claims.get("jti", "")
@@ -352,17 +357,22 @@ def verify_capability_tct(self, tct_token, required_grant):
         source = "local" if self.revocation.is_locally_revoked(jti) else "issuer-list"
         raise 403 f"tct revoked ({source}): jti={jti}"
     self._enforce_revocation_freshness()     # 403 unless fail_mode == "soft_fail"
-    if claims.get("iss") and claims["iss"] != self.agent.aid:
+    if claims.get("iss") != self.agent.aid:
         raise 403 "tct issuer mismatch"      # e.g. issued pre-key-rotation
-    declared_audience = claims.get("aud") or claims.get("sub")
+    if not pop_response:                     # §6.1: challenge, single-use, 60 s
+        challenge = self.pop_challenges.issue(
+            lambda ttl: self.agent.new_pop_challenge(tct_token, ttl))
+        raise 401 POP_RESPONSE_INVALID, header x-aitp-pop-challenge=b64url(challenge)
+    challenge = self.pop_challenges.consume(response)   # 403 POP_CHALLENGE_INVALID
     return self.agent.verify_tct(            # or verify_tct_cached(...) with a TctStore
         tct_token, required_grant,
-        expected_audience=declared_audience,
+        pop=(challenge, response),           # audience pinned to the proven sub
         revoked_jtis=self.revocation.effective_jtis,
+        revocation="fail_closed",
     )
 ```
 
-Four checks before/inside the SDK call:
+The checks, in order:
 
 1. **Local revocation short-circuit** (playground choice). The spec
    ([RFC-AITP-0008 §3.3, revocation lookup ordering](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md))
@@ -384,21 +394,36 @@ Four checks before/inside the SDK call:
    last verified deny-set and logs. This is only about the *absence* of a
    fresh snapshot — an unverifiable one was already discarded at ingest and
    no mode here can resurrect it.
-3. **Issuer-AID guard.** TCTs this resource server issued must declare
-   *its* AID as `iss`. After a key rotation the AID changes, so TCTs
-   minted under the old key fail here before the signature path runs.
-4. **SDK `verify_tct`, presented-TCT mode.** The playground passes the
-   TCT's own declared `aud` (defaulting to `sub`) as `expected_audience` —
-   the resource-server check for a TCT a peer presented in `X-AITP-TCT`.
-   The signature check against the issuer key derived from `iss` is the
-   security gate. The two verification models (holder-receipt vs
-   presented-TCT) and what the audience asserts are documented in
-   [sdk-python.md § TCT verification](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#tct-verification-rfc-aitp-0005-72)
-   and [RFC-AITP-0005](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0005-tct.md).
-   When the wheel exposes `aitp.TctStore`, the same call routes through
-   `verify_tct_cached` so repeated verifications hit the cache.
+3. **Issuer-AID guard** (§10.5 item 1). TCTs this resource server issued
+   must declare *its* AID as `iss`. After a key rotation the AID changes, so
+   TCTs minted under the old key fail here before the signature path runs.
+4. **Downstream PoP challenge** (§6.1, §6.3). A call with no
+   `x-aitp-pop-response` gets a **401** whose `x-aitp-pop-challenge` header
+   is the base64url (unpadded) JSON of a fresh SDK challenge bound to the
+   TCT's `jti`, with a 60 s `expires_at`. The SDK keeps no nonce cache, so
+   `agents/base/pop_challenges.py` holds outstanding challenges by nonce:
+   the first answer naming a nonce consumes it, valid or not, and an
+   unknown, reused or expired nonce is **403 `POP_CHALLENGE_INVALID`**
+   (RFC-AITP-0001 §5.5). The store is capped at 100 000 outstanding
+   challenges and answers 429 when full, like the handshake replay set.
+   Steps 1–3 run first, so a revoked or foreign TCT never opens a challenge.
+5. **SDK `verify_tct(..., pop=(challenge, response))`.** The SDK checks the
+   TCT's signature against `iss`, every §6.2 step (jti match, nonce echo,
+   expiry, and the signature over the nonce against `sub`'s key), pins the
+   audience to the proven `sub`, then the deny-set and the grant. There is
+   no `expected_audience`: the audience comes from the proof, never from the
+   token's own claims, and the SDK refuses both together. A response signed
+   by any key other than `sub`'s is **403 `POP_RESPONSE_INVALID`**. When the
+   wheel exposes `aitp.TctStore`, the same call routes through
+   `verify_tct_cached`, which re-checks the PoP on every call. See
+   [sdk-python.md § TCT verification](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#tct-verification-rfc-aitp-0005-72).
 
-Any failure produces a 403. The two parse failures (missing token,
+**Posture: PoP is enforced for every grant.** This is the default the §6.2
+conformance note asks implementations to document. There is no fallback to
+the bare header: with no channel binding between the agents, §10.5 requires
+the issuer to reject a TCT presented without PoP.
+
+Every other failure is a 403. The two parse failures (missing token,
 malformed token) are reported distinctly so debugging is easier.
 
 ## Held TCTs
@@ -412,10 +437,13 @@ the SDK returns next to each TCT (`{"tct", "grant_voucher"}`) — it is what
 requests in this process see the same set.
 
 `/admin/invoke` looks up `held_tcts[peer_port]` and attaches it as
-`X-AITP-TCT` on the request to `/capabilities/<name>`. If the held
-TCT was revoked or expired, the peer's `verify_tct` will 403; the
-admin router wraps that into `{error:true, status_code: 403, body}`
-so probe steps can observe it without crashing the run.
+`X-AITP-TCT` on the request to `/capabilities/<name>`. The peer answers
+that first call with a 401 and a PoP challenge; `/admin/invoke` signs it
+with `agent.sign_pop_response` and resends the same body once, with the
+answer in `x-aitp-pop-response`. If the held TCT was revoked or expired,
+the peer 403s before issuing any challenge; the admin router wraps any
+non-2xx into `{error:true, status_code, body}` so probe steps can observe
+it without crashing the run.
 
 ### Trust store
 

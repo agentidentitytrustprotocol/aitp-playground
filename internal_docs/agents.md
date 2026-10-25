@@ -170,8 +170,12 @@ app.include_router(build_admin_router(
 # 6) The capability endpoint. Verify the TCT, then run the same handler.
 @app.post("/capabilities/research.query")
 async def research_query(request: Request):
-    tct_json = request.headers.get("x-aitp-tct", "")
-    identity = server.verify_capability_tct(tct_json, "research.query")
+    # TCT plus downstream PoP: without x-aitp-pop-response this raises a
+    # 401 carrying a challenge (RFC-AITP-0005 §10.5).
+    identity = server.verify_capability_tct(
+        request.headers.get("x-aitp-tct", ""), "research.query",
+        pop_response=request.headers.get("x-aitp-pop-response", ""),
+    )
     body = await request.body()
     payload = json.loads(body) if body else None
     return await do_research(payload, commissioned_by=identity.peer_aid)

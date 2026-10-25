@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import types
 import uuid
 from pathlib import Path
@@ -43,6 +44,7 @@ import aitp  # noqa: E402
 import agent_admin  # noqa: E402
 from agent_admin import build_admin_router  # noqa: E402
 from aitp_server import AitpServer  # noqa: E402
+from pop_challenges import decode_header, encode_header  # noqa: E402
 from revocation_state import RevocationState  # noqa: E402
 
 
@@ -312,6 +314,79 @@ def test_invoke_capability_reports_a_peer_rejection_as_data_not_a_crash(
         "status_code": 403,
         "body": {"detail": "tct rejected: revoked"},
     }
+
+
+def _mock_peer(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    def factory(*_a: Any, **_k: Any) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(
+        agent_admin, "httpx",
+        types.SimpleNamespace(AsyncClient=factory, HTTPError=httpx.HTTPError),
+    )
+
+
+def _pop_challenge() -> str:
+    return json.dumps({
+        "tct_jti": str(uuid.uuid4()),
+        "nonce": encode_header("0123456789abcdef"),  # 16 bytes, base64url
+        "expires_at": int(time.time()) + 60,
+    })
+
+
+def test_invoke_answers_a_pop_challenge_and_resends_the_same_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RFC-AITP-0005 §10.5: a 401 carrying `x-aitp-pop-challenge` is answered
+    once with our signature over it, on the same body and TCT."""
+    challenge = _pop_challenge()
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if "x-aitp-pop-response" not in request.headers:
+            return httpx.Response(
+                401, json={"detail": {"code": "POP_RESPONSE_INVALID"}},
+                headers={"x-aitp-pop-challenge": encode_header(challenge)},
+            )
+        return httpx.Response(200, json={"findings": "ok"})
+
+    _mock_peer(monkeypatch, handler)
+    agent, client, _held = _initiator(held_tcts={9999: "held-token"})
+    resp = client.post(
+        "/admin/invoke",
+        json={"peer_port": 9999, "capability": "demo.write", "payload": {"topic": "aitp"}},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"findings": "ok"}
+    assert len(calls) == 2
+    retry = calls[1]
+    assert retry.headers["x-aitp-tct"] == "held-token"
+    assert json.loads(retry.content) == {"topic": "aitp"}
+    answer = json.loads(decode_header(retry.headers["x-aitp-pop-response"]))
+    assert answer["nonce_echo"] == json.loads(challenge)["nonce"]
+    assert answer["tct_jti"] == json.loads(challenge)["tct_jti"]
+
+
+def test_invoke_reports_a_second_pop_refusal_as_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One answer per call: a peer that keeps challenging is not retried."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            401, json={"detail": "again"},
+            headers={"x-aitp-pop-challenge": encode_header(_pop_challenge())},
+        )
+
+    _mock_peer(monkeypatch, handler)
+    _agent, client, _held = _initiator(held_tcts={9999: "held-token"})
+    resp = client.post("/admin/invoke", json={"peer_port": 9999, "capability": "demo.write"})
+
+    assert resp.status_code == 200
+    assert resp.json()["status_code"] == 401
+    assert len(calls) == 2
 
 
 # ── /admin/renew-tct ───────────────────────────────────────────────────────

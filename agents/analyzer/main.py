@@ -92,8 +92,10 @@ app.include_router(build_admin_router(
 
 @app.post("/capabilities/analyze.data")
 async def analyze_data(request: Request) -> dict[str, Any]:
-    tct_json = request.headers.get("x-aitp-tct", "")
-    identity = server.verify_capability_tct(tct_json, "analyze.data")
+    identity = server.verify_capability_tct(
+        request.headers.get("x-aitp-tct", ""), "analyze.data",
+        pop_response=request.headers.get("x-aitp-pop-response", ""),
+    )
     body = await request.body()
     payload: Any
     if body:

@@ -26,6 +26,7 @@ from revocation_publish import REVOCATION_LIST_PATH, RETRY_AFTER_SECS, IssuerRev
 from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
 from oidc import OidcContext, peer_aid_from_hello_envelope
+from pop_challenges import CHALLENGE_HEADER, PopChallenges, PopRejected, decode_header, encode_header
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
 
@@ -184,6 +185,8 @@ class AitpServer:
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
         # RFC-AITP-0001 §5.5 on the hello and commit routes, ahead of the SDK.
         self.replay_guard = ReplayGuard()
+        # Downstream PoP challenges outstanding on capability calls (§10.5).
+        self.pop_challenges = PopChallenges()
         # Pinned-key trust store for the responder side (aitp-sdk >= 0.14
         # rejects every pinned_key peer whose AID is not in it). Populated
         # only by whoever launched or hosts this agent, via
@@ -882,28 +885,40 @@ class AitpServer:
             )
         return None
 
-    def verify_capability_tct(self, tct_token: str, required_grant: str) -> "aitp.TctIdentity":
-        """Verify the X-AITP-TCT header on an incoming capability call.
+    def verify_capability_tct(
+        self, tct_token: str, required_grant: str, pop_response: str = "",
+    ) -> "aitp.TctIdentity":
+        """Verify a capability call: the X-AITP-TCT header and the caller's
+        proof that it holds the key the TCT was issued to.
 
-        Under v0.2 the header carries an opaque compact-JWS TCT token.
+        The TCT comes back to the agent that issued it, so this is RFC-AITP-0005
+        §10.5 ("Issuer as resource server"). The header alone is not enough:
+        anyone holding the string could present it. The caller proves
+        possession of `sub`'s key with downstream PoP (§6.1, §6.2), carried in
+        headers (§6.3):
 
-        Two-stage verification:
-          1. Local revocation short-circuit on the TCT's ``jti`` (read from
-             the unverified claims for a precise 403; the SDK re-checks
-             the same set below, so this is
-             fail-closed either way).
-          2. SDK ``verify_tct`` in presented-TCT mode, after checking
-             ``iss`` is us. ``expected_audience`` is the token's own
-             ``aud`` (RFC-AITP-0005 §5.1: ``aud`` == ``sub``). The signature
-             proves we issued the token, so reading its claims is sound.
+          1. A call without `x-aitp-pop-response` gets a 401 whose
+             `x-aitp-pop-challenge` header carries a fresh challenge for this
+             TCT's `jti` (SDK `new_pop_challenge`).
+          2. The caller retries with `x-aitp-pop-response`, the SDK's
+             `sign_pop_response` over that challenge. The challenge is consumed
+             by that first answer, valid or not (RFC-AITP-0001 §5.5).
+          3. SDK `verify_tct(..., pop=(challenge, response))` checks the TCT
+             and every §6.2 step together and pins the audience to the proven
+             `sub`. There is no `expected_audience`: the SDK refuses both.
 
-        What this does not prove is that the caller is ``sub``: the header
-        is a bearer token, and anyone holding the string can present it.
-        RFC-AITP-0005 §6 closes that with downstream PoP, which waits on
-        the SDK exposing the PoP helpers (#105).
+        Posture: PoP is enforced for every grant, with no fallback. §10.5
+        makes that a MUST for a TCT presented back to its issuer, since there
+        is no channel binding here. (This is the §6.2 conformance note's
+        "enforce-for-all" posture; see docs/aitp-integration.md.)
 
-        Any failure produces a 403. Missing/malformed tokens are reported
-        distinctly so debugging is easier."""
+        Before any challenge is issued, the cheap refusals run on the
+        unverified claims, each a 403: a revoked `jti` (named precisely here;
+        the SDK re-checks the same deny-set, so this is fail-closed either
+        way), a stale revocation posture, and an `iss` that is not us. A
+        PoP failure is a 403 with `POP_RESPONSE_INVALID` or
+        `POP_CHALLENGE_INVALID`; anything else the SDK refuses is a 403
+        "tct rejected"."""
         if not tct_token:
             raise HTTPException(status_code=403, detail="missing X-AITP-TCT")
         try:
@@ -926,19 +941,39 @@ class AitpServer:
         # the first would send an operator hunting a CP outage that is not
         # there.
         self._enforce_revocation_freshness()
-        # Issuer-AID check: TCTs we issued must declare us as the issuer.
-        # After a key rotation our AID changes, so any TCT issued by the
-        # pre-rotation key fails this guard before the signature path runs.
-        # The check is defensive even outside the rotation flow — a peer
-        # presenting a TCT signed by some other resource server has no
-        # business calling our capability endpoints.
+        # Issuer-AID check (§10.5 item 1): TCTs we issued must declare us as
+        # the issuer. After a key rotation our AID changes, so any TCT issued
+        # by the pre-rotation key fails this guard before the signature path
+        # runs, and a TCT some other peer issued has no business here.
         declared_issuer = claims.get("iss")
-        if declared_issuer and declared_issuer != self.agent.aid:
+        if declared_issuer != self.agent.aid:
             raise HTTPException(
                 status_code=403,
                 detail=f"tct issuer mismatch: {declared_issuer} != {self.agent.aid}",
             )
-        declared_audience = claims.get("aud") or claims.get("sub")
+        try:
+            if not pop_response:
+                challenge = self.pop_challenges.issue(
+                    lambda ttl: self.agent.new_pop_challenge(tct_token, ttl),
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail=_pop_error(
+                        "POP_RESPONSE_INVALID",
+                        f"proof of possession required: answer {CHALLENGE_HEADER}",
+                    ),
+                    headers={CHALLENGE_HEADER: encode_header(challenge)},
+                )
+            try:
+                response_json = decode_header(pop_response)
+            except ValueError as exc:
+                raise PopRejected("POP_RESPONSE_INVALID", f"pop response {exc}") from exc
+            pop = (self.pop_challenges.consume(response_json), response_json)
+        except PopRejected as exc:
+            detail: Any = _pop_error(exc.code, str(exc)) if exc.code else str(exc)
+            raise HTTPException(status_code=exc.status, detail=detail) from exc
+        except (RuntimeError, ValueError) as exc:  # new_pop_challenge refused the token
+            raise HTTPException(status_code=403, detail=f"tct rejected: {exc}") from exc
         try:
             if self._tct_store is not None:
                 before = self._tct_store.len()
@@ -946,8 +981,9 @@ class AitpServer:
                     tct_token,
                     required_grant,
                     self._tct_store,
-                    expected_audience=declared_audience,
                     revoked_jtis=self.revocation.effective_jtis,
+                    revocation="fail_closed",
+                    pop=pop,
                 )
                 # len-delta hit/miss heuristic: a miss inserts a new entry,
                 # a hit reuses an existing one. Exact while size < max_entries
@@ -959,8 +995,16 @@ class AitpServer:
                 return identity
             return self.agent.verify_tct(
                 tct_token, required_grant,
-                expected_audience=declared_audience,
                 revoked_jtis=self.revocation.effective_jtis,
+                revocation="fail_closed",
+                pop=pop,
             )
         except (RuntimeError, ValueError) as exc:
+            code = getattr(exc, "code", None)
+            if code in ("POP_RESPONSE_INVALID", "POP_CHALLENGE_INVALID"):
+                raise HTTPException(status_code=403, detail=_pop_error(code, str(exc))) from exc
             raise HTTPException(status_code=403, detail=f"tct rejected: {exc}") from exc
+
+
+def _pop_error(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}

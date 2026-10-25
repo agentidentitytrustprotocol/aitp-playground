@@ -129,7 +129,10 @@ def _agent_b() -> tuple[AitpServer, FastAPI]:
 
     @app.post(f"/capabilities/{GRANT}")
     async def capability(request: Request) -> dict[str, Any]:
-        identity = server.verify_capability_tct(request.headers.get("x-aitp-tct", ""), GRANT)
+        identity = server.verify_capability_tct(
+            request.headers.get("x-aitp-tct", ""), GRANT,
+            pop_response=request.headers.get("x-aitp-pop-response", ""),
+        )
         return {"ok": True, "grants": list(identity.grants)}
 
     return server, app

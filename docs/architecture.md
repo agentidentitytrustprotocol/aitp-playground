@@ -265,7 +265,13 @@ runner
               POST /capabilities/<name> (on target)
                  headers: X-AITP-TCT: <held compact-JWS TCT token>
                  └─ target.AitpServer.verify_capability_tct(...)
-                       └─ agent.verify_tct(...)  ✓ or 403
+                       └─ 401 + x-aitp-pop-challenge (or 403 if revoked/foreign)
+              caller: agent.sign_pop_response(challenge)
+              POST /capabilities/<name> again
+                 headers: X-AITP-TCT, x-aitp-pop-response
+                 └─ target.AitpServer.verify_capability_tct(...)
+                       └─ consume the nonce (403 POP_CHALLENGE_INVALID if unknown/used/expired)
+                       └─ agent.verify_tct(..., pop=(challenge, response))  ✓ or 403
                  └─ capability handler runs
                        └─ result returned as JSON
         └─ /admin/invoke wraps non-2xx into {error:true, status_code, body}

@@ -88,8 +88,10 @@ app.include_router(build_admin_router(
 
 @app.post("/capabilities/write.content")
 async def write_content(request: Request) -> dict[str, Any]:
-    tct_json = request.headers.get("x-aitp-tct", "")
-    identity = server.verify_capability_tct(tct_json, "write.content")
+    identity = server.verify_capability_tct(
+        request.headers.get("x-aitp-tct", ""), "write.content",
+        pop_response=request.headers.get("x-aitp-pop-response", ""),
+    )
     body = await request.body()
     payload: Any
     if body:
