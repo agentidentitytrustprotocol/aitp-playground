@@ -55,7 +55,7 @@ straight:
 2. **Agent workers** (`agents/base/agent_admin.py`) — an agent talks to
    the CP *directly* for self-enrollment (`enroll_with_cp`) and to pull
    the revocation list (`refresh-revocations`) — verified before use, see
-   [aitp-integration.md § Revocation snapshot ingest](aitp-integration.md#revocation-snapshot-ingest). The playground
+   [aitp-integration.md § Revocation list ingest](aitp-integration.md#revocation-list-ingest-verifier-side). The playground
    never enrolls on an agent's behalf; it pokes the agent's `/admin`
    route and the agent makes the call itself (the same boundary rule as
    the AITP protocol — see [aitp-integration.md](aitp-integration.md)).
@@ -127,8 +127,8 @@ disabled. Full field reference is in [scenarios.md](scenarios.md#workflow-steps)
 | Step type | What it does | Demo scenario |
 | --- | --- | --- |
 | `enroll_with_cp` | Agent self-enrolls ([CP registry API](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md#registry)): `POST /api/registry/enroll` to mint a one-time bearer token, then `POST /api/registry/agents` with that token and the **identical manifest bytes** — the CP binds the token to a hash of the exact `/enroll` body (so re-serializing the manifest between the two calls is rejected `401 TOKEN_INVALID`). | `intra-org/external-enrollment` |
-| `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries`, then the audience pulls the updated list from `/.well-known/aitp-revocation-list`. The CP signs that snapshot and the audience agent **verifies** it against the AID pinned in `CP_AID` before applying any entry — an unverifiable snapshot is discarded, never merged; with no `CP_AID` nothing propagates (fail-closed). The compose stack pins it from the CP's deterministic seed. Where that verification lives in the code: [aitp-integration.md § Revocation snapshot ingest](aitp-integration.md#revocation-snapshot-ingest); the rule itself is [RFC-AITP-0008 §1.5](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md). | `intra-org/revocation-via-cp` |
-| `revoke_tct` (`via_cp: true`, `local_revoke: false`) | `POST /api/revocation/entries` **only** — no local revoke — then the agents in `refresh_agents` pull and verify the snapshot. The grantor's next redemption rooted in that jti is refused with `source revoked (cp-snapshot)`: the CP entry alone decides it. Skips without a CP. | `intra-org/revocation-cp-only` |
+| `revoke_tct` (`via_cp: true`) | Local revoke **plus** `POST /api/revocation/entries` under the issuer's AID, then the issuer pulls its entries (`GET /api/revocations?iss=`), signs them into its own list at `/.well-known/aitp-revocation-list` and **verifies** that list against its own AID before applying any entry — an unverifiable list is discarded, never merged. The CP signs nothing. Where that lives in the code: [aitp-integration.md § Revocation list ingest](aitp-integration.md#revocation-list-ingest-verifier-side); the rule itself is [RFC-AITP-0008 §1.5](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md). | `intra-org/revocation-via-cp` |
+| `revoke_tct` (`via_cp: true`, `local_revoke: false`) | `POST /api/revocation/entries` **only** — no local revoke — then the agents in `refresh_agents` (default: the issuer) pull, sign and verify their own lists. The grantor's next redemption rooted in that jti is refused with `source revoked (issuer-list)`: the CP entry alone decides it. Skips without a CP. | `intra-org/revocation-cp-only` |
 | `cp_subscribe_webhook` | `POST /api/webhooks` pointing at this run's `/webhooks/cp/{run_id}` receiver; stores the returned secret on the run record for HMAC verification. | `intra-org/webhook-subscription` |
 | `cp_provision_trust_anchor` | `upsert_pinned_key` + optional `upsert_trust_anchor` (OIDC issuer) for an agent under a namespace, then reads them back. | `intra-org/cp-trust-anchor-provisioning` |
 | `cp_delegation_tree` | Flushes the run's events to the CP (awaiting the ingest, so the projection is populated mid-run), then walks a delegator's chain via `GET /api/delegations` (CP's recursive `root_jti` query) to show the chain as the CP observed it. | `intra-org/cp-delegation-tree` |
@@ -216,9 +216,9 @@ out to webhooks, is the CP's
 - The playground **never** signs revocation lists, mints CP bearer tokens,
   or canonicalizes CP payloads — agents and the CP own that. The
   playground only orchestrates *when* those calls happen.
-- **Snapshot trust lives in `agents/`, and only there** — the single
+- **Revocation-list trust lives in `agents/`, and only there** — the single
   decision point is `refresh_revocations()`; details in
-  [aitp-integration.md § Revocation snapshot ingest](aitp-integration.md#revocation-snapshot-ingest).
+  [aitp-integration.md § Revocation list ingest](aitp-integration.md#revocation-list-ingest-verifier-side).
   `CpClient` deliberately has **no** revocation-fetch method — a second
   ingest path for the same artifact is what produced the signature-blind
   divergence this boundary now prevents.

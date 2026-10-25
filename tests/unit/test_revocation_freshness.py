@@ -287,11 +287,9 @@ def test_the_can_verify_inference_is_exercised_not_just_overridden() -> None:
         )
 
     assert _build({}).can_verify_revocation is False, "no CP"
-    assert _build({"base_url": "http://cp"}).can_verify_revocation is False, "no pin"
-    assert (
-        _build({"base_url": "http://cp", "aid": "aid:pubkey:" + "A" * 43}).can_verify_revocation
-        is True
-    ), "CP + pin should enable verification"
+    # Since CP1.1 the list is the agent's own, verified against its own AID:
+    # a CP is all it takes, and there is no issuer AID to pin.
+    assert _build({"base_url": "http://cp"}).can_verify_revocation is True, "CP"
     # The SDK's capability is deliberately NOT part of this: an old wheel must
     # leave a pinned deployment DEGRADED, never silently unchecked.
 
@@ -321,11 +319,11 @@ def test_local_revocations_enforce_in_every_posture(fail_mode: str, age: int) ->
 def test_a_cp_without_a_pinned_aid_is_unchecked_not_degraded() -> None:
     """The regression a federated e2e test caught, and the reason it matters.
 
-    An agent with a CP URL but no pinned issuer cannot verify anything — so it
-    is *unconfigured*, not *degraded*. Treating it as degraded made
-    `fail_closed` reject every capability call on any deployment that had not
-    yet set the new `CP_AID` variable, which is all of them at the moment the
-    feature ships. Secure-by-default has to survive the upgrade that
+    An agent that cannot verify anything is *unconfigured*, not *degraded*.
+    Treating it as degraded made `fail_closed` reject every capability call on
+    any deployment that had not yet set the then-new `CP_AID` variable (since
+    retired: an agent now verifies its own list), which was all of them at the
+    moment the feature shipped. Secure-by-default has to survive the upgrade that
     introduces it, or the first person to hit it turns the mode off.
     """
     state = RevocationState()

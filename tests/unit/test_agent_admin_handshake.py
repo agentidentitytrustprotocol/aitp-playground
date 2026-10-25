@@ -388,8 +388,8 @@ def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatc
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
-    commit_ack, _ = rsess.process_commit(commit)
-    participant_tct = json.loads(sess.complete(commit_ack))["tct"]
+    commit_ack, _ = rsess.process_commit(commit, revoked_jtis=set())
+    participant_tct = json.loads(sess.complete(commit_ack, revoked_jtis=set()))["tct"]
 
     coord_router = build_admin_router(
         agent=coordinator,

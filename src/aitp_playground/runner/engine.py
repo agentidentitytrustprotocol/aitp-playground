@@ -555,14 +555,15 @@ class ScenarioRunner:
                     r.raise_for_status()
 
             published_to_cp = False
-            audience_refreshed = 0
+            issuer_refreshed = 0
             refreshed: dict[str, int] = {}
             if step.via_cp:
-                # End-to-end revocation: publish the jti to the CP, then
-                # pull the updated revocation list into the audience's
-                # local deny-set so the audience also fails closed. The
-                # issuer rejects on its local list; the audience rejection
-                # is the federation story.
+                # End-to-end revocation: record the jti at the CP under its
+                # issuer, then have the issuer pull, re-sign and apply its own
+                # list (RFC-AITP-0008 §1.5: a list is valid only from the
+                # issuer of the tokens it names). The issuer is the agent that
+                # verifies this TCT when the holder presents it, so its
+                # refreshed list is what decides the outcome.
                 published_to_cp = await self.cp.publish_revocation(
                     jti, reason=step.reason or f"step {step.id}",
                     iss=running[step.issuer].aid,
@@ -580,16 +581,11 @@ class ScenarioRunner:
                     step_id=step.id, jti=jti,
                     result={"to_cp": published_to_cp, "reason": step.reason},
                 ))
-                refresh_body = {
-                    "cp_base_url": self.config.cp_base_url,
-                    "cp_api_key": self.config.cp_api_key,
-                }
-                for agent_id in step.refresh_agents or [step.audience]:
+                for agent_id in step.refresh_agents or [step.issuer]:
                     async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
                         rr = await client.post(
                             f"http://localhost:{running[agent_id].port}"
                             "/admin/refresh-revocations",
-                            json=refresh_body,
                         )
                     # Graceful: if an agent can't reach CP, the step still
                     # records what happened — the test harness will see a
@@ -597,13 +593,13 @@ class ScenarioRunner:
                     refreshed[agent_id] = (
                         int(rr.json().get("revoked_count", 0)) if rr.is_success else 0
                     )
-                audience_refreshed = refreshed.get(step.audience, 0)
+                issuer_refreshed = refreshed.get(step.issuer, 0)
 
             result_payload: dict[str, Any] = {"revoked_jti": jti}
             if step.via_cp:
                 result_payload.update({
                     "published_to_cp": published_to_cp,
-                    "audience_revoked_count": audience_refreshed,
+                    "issuer_revoked_count": issuer_refreshed,
                     "local_revoke": local_revoke,
                     "refreshed": refreshed,
                     "issuer_list": issuer_list,

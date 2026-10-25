@@ -100,10 +100,9 @@ def ready_lifespan(*, aid: str, port: int, server: "Optional[AitpServer]" = None
         # however tight, closes that window. The refresh has to be complete
         # before we claim to be ready, which is also why it cannot go over
         # HTTP to ourselves: nothing is listening yet.
-        # The same goes for this agent's own signed list: a peer verifying a
-        # TCT we issue straight after the handshake must find a list to fetch.
+        # The refresh also signs this agent's own list, so a peer verifying a
+        # TCT we issue straight after the handshake finds a list to fetch.
         if server is not None:
-            await server.publish_revocations_now(quiet=False)
             await server.refresh_revocations_now(quiet=False)
         sys.stdout.write(f"AITP_AGENT_READY aid={aid} port={port}\n")
         sys.stdout.flush()
@@ -167,45 +166,19 @@ class AitpServer:
             _cp.get("max_staleness_secs", 300)
         )
         self.revocation_poll_secs: int = int(_cp.get("poll_secs", 60))
-        #: Whether the operator has ASKED for verification: a control plane and
-        #: a pinned issuer AID. Deliberately not "and the SDK can do it" —
-        #: see below.
+        #: Whether this agent has a revocation record to keep current: a
+        #: control plane relaying its entries. The list it applies is its own,
+        #: signed with its own key and verified against its own AID, so there
+        #: is no issuer to pin (the CP signs nothing since CP1.1).
         #:
-        #: Distinct from "the last fetch worked". Without this distinction an
-        #: agent that merely has no pinned AID looks identical to one whose CP
-        #: went down, and `fail_closed` rejects every call on a deployment that
-        #: has simply not been configured yet — broken-by-default on the very
-        #: upgrade that introduces the setting.
-        self.can_verify_revocation: bool = bool(self.cp_configured and _cp.get("aid"))
+        #: Distinct from "the last pull worked": with a CP configured, an agent
+        #: that has no list in force is degraded, not unchecked.
+        self.can_verify_revocation: bool = self.cp_configured
         if not self.cp_configured:
             logger.info(
                 "revocation: no control plane configured — enforcing local "
-                "revocations only. This is the unchecked posture; a peer's "
-                "revocations published via a CP will not be seen."
-            )
-        elif not _cp.get("aid"):
-            logger.warning(
-                "revocation: CP configured but no CP_AID pinned — snapshots "
-                "cannot be verified, so this agent enforces LOCAL revocations "
-                "only. Set CP_AID to the control plane's AID to turn on "
-                "snapshot verification and fail_mode=%s.",
-                self.revocation_fail_mode,
-            )
-        elif not hasattr(aitp, "verify_revocation_list"):
-            # A pin IS set, so verification was explicitly asked for, and the
-            # wheel cannot deliver it. That is DEGRADED, not unchecked: an old
-            # SDK must not silently downgrade a deployment that opted in.
-            # Treating a capability probe as consent is precisely the unchecked
-            # posture this work exists to remove — every snapshot will be
-            # discarded with cause=sdk_cannot_verify, and under the default
-            # fail_closed that is a loud failure rather than a quiet one.
-            logger.error(
-                "revocation: CP_AID is pinned but the installed aitp-sdk "
-                "cannot verify snapshots (needs >=0.6.0). Every snapshot will "
-                "be discarded and this agent runs DEGRADED (fail_mode=%s). "
-                "Upgrade the SDK or unset CP_AID to fall back to local-only "
-                "revocation deliberately.",
-                self.revocation_fail_mode,
+                "revocations only and serving an empty signed list. This is "
+                "the unchecked posture."
             )
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
         # Pinned-key trust store for the responder side (aitp-sdk >= 0.14
@@ -292,8 +265,7 @@ class AitpServer:
             await asyncio.sleep(self.revocation_poll_secs)
             ticks += 1
             try:
-                await self.publish_revocations_now(quiet=True)
-                ok = await self.refresh_revocations_now(quiet=True)
+                ok = bool((await self.refresh_revocations_now(quiet=True)).get("verified"))
             except asyncio.CancelledError:
                 raise
 
@@ -319,25 +291,24 @@ class AitpServer:
             logger.exception("revocation list publish raised")
             return {"published": False, "cause": "internal_error"}
 
-    async def refresh_revocations_now(self, *, quiet: bool) -> bool:
+    async def refresh_revocations_now(self, *, quiet: bool) -> dict[str, Any]:
         """One refresh through the shared ingest path. No HTTP hop.
 
-        Returns whether a snapshot is now verified and in force — which is
-        what the poll loop reports state changes on.
+        Re-pulls and re-signs this agent's own list, then puts it into force.
+        The result's `verified` says whether a list is now verified and
+        applied — which is what the poll loop reports state changes on.
         """
-        if not self.cp_configured:
-            return False
         try:
-            result = await refresh_revocations(
+            return await refresh_revocations(
                 revocation=self.revocation,
+                issued=self.issued_revocations,
                 bootstrap=self.bootstrap,
                 emit=emit_event,
                 quiet=quiet,
             )
         except Exception:  # noqa: BLE001 — a refresh must never kill the agent
             logger.exception("revocation refresh raised")
-            return False
-        return bool(result.get("verified"))
+            return {"revoked_count": len(self.revocation), "error": "internal_error"}
 
     def _emit_soon(self, event_type: str, **fields: Any) -> None:
         """Fire a telemetry event from a sync path.
@@ -536,8 +507,22 @@ class AitpServer:
 
         @router.post("/admin/publish-revocations")
         async def publish_revocations() -> dict[str, Any]:
-            """Re-sign this agent's list now instead of at the next poll."""
-            return await self.publish_revocations_now(quiet=False)
+            """Re-pull, re-sign and apply this agent's list now, not at the next poll."""
+            return await self.refresh_revocations_now(quiet=False)
+
+        @router.post("/admin/refresh-revocations")
+        async def refresh_revocations_route(request: Request) -> dict[str, Any]:
+            """Pull, re-sign, verify and apply this agent's own revocation list.
+
+            A thin wrapper over `revocation_refresh.refresh_revocations`, the
+            one ingest path shared with the start-up refresh and the poll.
+            Body (optional): ``quiet`` suppresses `revocation.list_fetched`;
+            `revocation.verify_failed` is never suppressed (`DECISIONS.md`
+            D-14). The CP URL and key come from the bootstrap only: the list
+            is this agent's own, so a caller has nothing to point it at.
+            """
+            body = await request.json() if await request.body() else {}
+            return await self.refresh_revocations_now(quiet=bool(body.get("quiet")))
 
         @router.post("/admin/rotate-keys")
         async def rotate_keys(request: Request) -> Response:
@@ -575,6 +560,7 @@ class AitpServer:
             self._sessions.clear()
             # The old list names the old issuer; sign one for the new AID.
             await self.publish_revocations_now(quiet=True)
+            await self.refresh_revocations_now(quiet=True)
 
             await emit_event(
                 "identity.key.rotated", self.bootstrap,
@@ -790,7 +776,17 @@ class AitpServer:
                 )
             commit_json = (await request.body()).decode()
             try:
-                ack_json, completed_json = responder.process_commit(commit_json)
+                # The TCT checked here is the one the initiator minted for us in
+                # this very handshake, so its jti is fresh and no issuer's list
+                # can name it yet. Our own deny-set is passed rather than an
+                # empty one so an operator's local revocation still applies;
+                # fail_closed is spelled out because it is the policy, not an
+                # SDK default we happen to inherit.
+                ack_json, completed_json = responder.process_commit(
+                    commit_json,
+                    revoked_jtis=self.revocation.effective_jtis,
+                    revocation="fail_closed",
+                )
             except Exception as exc:  # noqa: BLE001
                 await emit_event(
                     "handshake.failed", self.bootstrap,
@@ -845,7 +841,7 @@ class AitpServer:
 
     def _revoked_source_of(self, delegation_token: str) -> Optional[tuple[str, str]]:
         """``(source, src_jti)`` if the delegation's source TCT is in our
-        deny-set — ``source`` is ``"local"`` or ``"cp-snapshot"`` — else
+        deny-set — ``source`` is ``"local"`` or ``"issuer-list"`` — else
         ``None``.
 
         Reads the voucher's ``src_jti`` from *unverified* claims, purely for
@@ -859,7 +855,7 @@ class AitpServer:
             return None
         if not src_jti or not self.revocation.is_revoked(src_jti):
             return None
-        source = "local" if self.revocation.is_locally_revoked(src_jti) else "cp-snapshot"
+        source = "local" if self.revocation.is_locally_revoked(src_jti) else "issuer-list"
         return source, src_jti
 
     def verify_capability_tct(self, tct_token: str, required_grant: str) -> "aitp.TctIdentity":
@@ -894,7 +890,7 @@ class AitpServer:
             # someone revoked this" are different facts for whoever reads the
             # 403, and collapsing them makes a CP-propagation bug look like a
             # local one.
-            source = "local" if self.revocation.is_locally_revoked(jti) else "cp-snapshot"
+            source = "local" if self.revocation.is_locally_revoked(jti) else "issuer-list"
             raise HTTPException(
                 status_code=403, detail=f"tct revoked ({source}): jti={jti}"
             )

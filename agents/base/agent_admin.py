@@ -20,7 +20,6 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
-from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
@@ -279,7 +278,23 @@ def build_admin_router(
 
         # complete() returns
         # ``{"tct": "<compact JWS>", "grant_voucher": "<compact JWS>"|null}``.
-        completed = json.loads(session.complete(r2.text))
+        # The TCT checked is the one the peer minted for us in this handshake:
+        # its jti is fresh, so no issuer's list can name it yet. Our own
+        # deny-set still applies an operator's local revocation; fail_closed
+        # is the stated policy (aitp-sdk >= 0.20), never fail_open.
+        try:
+            completed = json.loads(session.complete(
+                r2.text,
+                revoked_jtis=revocation.effective_jtis,
+                revocation="fail_closed",
+            ))
+        except RuntimeError as exc:
+            await emit_event(
+                "handshake.failed", bootstrap, role="initiator", error=str(exc),
+            )
+            raise HTTPException(
+                status_code=403, detail=f"handshake rejected: {exc}",
+            ) from exc
         tct_token = completed["tct"]
         claims = decode_claims(tct_token)
         peer_port = _port_from_url(peer_manifest["handshake_endpoint"])
@@ -889,37 +904,6 @@ def build_admin_router(
             "registered_at": registered.get("registeredAt"),
             "token_expires_in": enroll_resp.get("expiresIn"),
         }
-
-    @router.post("/refresh-revocations")
-    async def refresh_revocations_route(request: Request) -> dict[str, Any]:
-        """Fetch, verify, and apply the Control Plane's revocation snapshot.
-
-        A thin wrapper over `revocation_refresh.refresh_revocations`, which is
-        the one ingest path — shared with the agent's start-up refresh and its
-        background poll so no second copy of fetch/verify/apply can drift.
-
-        Body (all optional):
-          - cp_base_url / cp_api_key: overrides; default to
-            ``bootstrap['cp']``, set by the supervisor at spawn time.
-          - quiet: suppress `revocation.list_fetched` / `revocation.refresh_failed`
-            (used by the poll loop). Does NOT suppress `revocation.verify_failed`
-            — a caller passing ``quiet: true`` still gets that event on a
-            discarded snapshot; see `DECISIONS.md` D-14.
-
-        The pinned issuer AID is deliberately NOT overridable — see the module
-        docstring for why a caller-chosen issuer would make verification a
-        formality.
-        """
-        body = await request.json() if await request.body() else {}
-        return await refresh_revocations(
-            revocation=revocation,
-            bootstrap=bootstrap,
-            emit=emit_event,
-            cp_base_url=body.get("cp_base_url"),
-            cp_api_key=body.get("cp_api_key"),
-            quiet=bool(body.get("quiet")),
-        )
-
 
     @router.post("/self-execute")
     async def self_execute(request: Request) -> Any:

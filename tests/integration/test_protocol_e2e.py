@@ -101,15 +101,6 @@ class ProtocolCase:
     xfail: str | None = None
 
 
-# CP1.1 (aitp-control-plane #161) removed the CP-signed aggregate list these
-# scenarios pull. They come back once agents fetch each issuer's own list,
-# which needs aitp-sdk 0.20 (the verifier side of PG1.1).
-_VIA_CP_PENDING = (
-    "CP1.1 removed the CP-signed list; the per-issuer verifier side of "
-    "PG1.1 (#103) waits on aitp-sdk 0.20"
-)
-
-
 def _start_run(client: httpx.Client, case: ProtocolCase) -> str:
     r = client.post("/runs", json={"scenario_ref": case.ref, "inputs": case.inputs})
     assert r.status_code == 202, f"POST /runs failed: {r.status_code} {r.text}"
@@ -237,8 +228,9 @@ def _check_revocation_via_cp(body: dict) -> None:
     assert revoke.get("published_to_cp") is True, (
         f"revocation-via-cp: jti was not published to the CP: {revoke!r}"
     )
-    assert revoke.get("audience_revoked_count", 0) >= 1, (
-        f"revocation-via-cp: audience did not pull the jti from CP: {revoke!r}"
+    assert revoke.get("issuer_revoked_count", 0) >= 1, (
+        f"revocation-via-cp: the issuer did not pull the jti into its own "
+        f"signed list: {revoke!r}"
     )
 
     blocked = _step(body, "blocked_call")
@@ -259,7 +251,7 @@ def _check_revocation_via_cp(body: dict) -> None:
 
 def _check_revocation_cp_only(body: dict) -> None:
     """A CP entry alone refuses a redemption. The grantor never revoked the
-    source TCT locally, so the 403 must name `cp-snapshot` — a `local` here
+    source TCT locally, so the 403 must name `issuer-list` — a `local` here
     would mean the CP path proved nothing."""
     control = _step(body, "redeem_control")
     assert control.get("status_code") == 200 and control.get("matched") is True, (
@@ -272,7 +264,7 @@ def _check_revocation_cp_only(body: dict) -> None:
     )
     assert revoke.get("local_revoke") is False, revoke
     assert revoke.get("refreshed", {}).get("writer", 0) >= 1, (
-        f"revocation-cp-only: the grantor did not pull the CP snapshot: {revoke!r}"
+        f"revocation-cp-only: the grantor did not pull its list from the CP: {revoke!r}"
     )
 
     refused = _step(body, "redeem_refused")
@@ -280,7 +272,7 @@ def _check_revocation_cp_only(body: dict) -> None:
         f"revocation-cp-only: expected the redemption refused, got {refused!r}"
     )
     detail = str((refused.get("body") or {}).get("detail", ""))
-    assert "source revoked (cp-snapshot)" in detail, detail
+    assert "source revoked (issuer-list)" in detail, detail
     assert "(local)" not in detail, detail
     assert revoke["revoked_jti"] in detail, detail
 
@@ -431,13 +423,11 @@ SCENARIOS: list[ProtocolCase] = [
         ref="intra-org/revocation-via-cp@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_revocation_via_cp,
-        xfail=_VIA_CP_PENDING,
     ),
     ProtocolCase(
         ref="intra-org/revocation-cp-only@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_revocation_cp_only,
-        xfail=_VIA_CP_PENDING,
     ),
     ProtocolCase(
         ref="intra-org/delegation-multihop@1.0.0",

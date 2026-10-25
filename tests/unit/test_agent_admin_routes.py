@@ -135,8 +135,8 @@ def _participant_handshake(participant, coordinator, coord_manifest) -> str:
     hello = sess.build_hello(coord_manifest, ["session.member"])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
-    commit_ack, _ = rsess.process_commit(commit)
-    return json.loads(sess.complete(commit_ack))["tct"]
+    commit_ack, _ = rsess.process_commit(commit, revoked_jtis=set())
+    return json.loads(sess.complete(commit_ack, revoked_jtis=set()))["tct"]
 
 
 def _bundle_parties():
@@ -233,7 +233,7 @@ def test_a_grantor_refusing_a_redemption_is_relayed_as_its_403(monkeypatch) -> N
     grantor_manifest = grantor.build_manifest(
         "g", "http://g/aitp/handshake/hello", ["x"],
     )
-    reason = "delegation rejected: … (source revoked (cp-snapshot): src_jti=j)"
+    reason = "delegation rejected: … (source revoked (issuer-list): src_jti=j)"
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":

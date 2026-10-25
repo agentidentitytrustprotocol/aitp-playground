@@ -139,25 +139,40 @@ whole, and the last list stays in force. With no control plane configured
 there is no revocation record anywhere, so the agent serves an empty signed
 list. Every agent therefore has one.
 
-Two pieces are still pending. The Manifest does not yet advertise the list
-under `rfc-aitp-0008.revocation_list_uri`, because aitp-py's `build_manifest`
-has no parameter for it (expected in 0.20.0). Verifiers also do not yet fetch
-peer lists: the ingest below still reads the control plane's old aggregate
-list, which CP1.1 removed. Both land with the aitp-sdk 0.20 adoption.
+The Manifest advertises the list as `rfc-aitp-0008.revocation_list_uri`
+(`build_manifest(revocation_list_uri=...)`, aitp-sdk 0.20), pointing at
+`<agent origin>/.well-known/aitp-revocation-list`, so a peer can find and
+verify it against the agent's AID without asking anyone else.
 
-### Revocation snapshot ingest
+### Revocation list ingest (verifier side)
 
-**The revocation snapshot has one ingest, and it verifies.** The snapshot
-served at `/.well-known/aitp-revocation-list` is fetched and checked in exactly
-one place — `refresh_revocations()` in `agents/base/revocation_refresh.py`.
-Three callers reach it: the `/admin/refresh-revocations` route, the start-up
-refresh, and the background poll — the latter two in-process by design, never
-looping back over HTTP. It calls `aitp.verify_revocation_list`
-against the AID pinned in `CP_AID` before reading a single entry; a snapshot
-that fails to verify is **discarded**, and the previously verified one stays
-current (RFC-AITP-0008 §1.5). Absent a pin there is no expected issuer to check
-against, so the snapshot is discarded too — the fail-closed direction. The
-deny-set is no longer only as trustworthy as the transport that delivered it.
+**An agent enforces its own list, and only after verifying it.** An agent
+verifies the TCTs it issued: a capability call presents a TCT this agent
+minted at the handshake, and a delegation's source TCT was minted by the
+redeemer. So the deny-set it enforces is its local revocations plus the list
+it signs and serves above. That ingest lives in exactly one place,
+`refresh_revocations()` in `agents/base/revocation_refresh.py`: pull and
+re-sign (`IssuerRevocationList.refresh`), then `aitp.verify_revocation_list`
+against the agent's own AID before reading a single entry, then
+`RevocationState.apply_snapshot`. A list that fails to verify is
+**discarded** and the previously applied one stays in force
+(RFC-AITP-0008 §1.5). There is no CP key to pin: the CP signs nothing since
+CP1.1, so `CP_AID` is gone.
+
+Three callers reach it: `/admin/refresh-revocations`, the start-up refresh
+(before `AITP_AGENT_READY`) and the background poll, the latter two
+in-process. If the CP is down, the last applied list stays in force until its
+signed `expires_at`; past that, nothing is in force and the posture is
+degraded, so `fail_closed` refuses calls rather than treat "no list" as
+"nothing revoked".
+
+Every SDK verification call passes the effective deny-set explicitly with
+`revocation="fail_closed"`: `verify_tct(_cached)`, `verify_delegation`, and
+the handshake's `process_commit` (responder) and `complete` (initiator).
+Since aitp-sdk 0.20 a call without `revoked_jtis` raises rather than
+skipping the check. A TCT handed over in a handshake was minted moments
+earlier by the peer, so no issuer list can name it yet; the local set still
+applies.
 
 `RevocationState` (`agents/base/revocation_state.py`) only *holds* that
 decision; it verifies nothing itself, deliberately, so it cannot become a
@@ -334,7 +349,7 @@ def verify_capability_tct(self, tct_token, required_grant):
     claims = decode_claims(tct_token)        # unverified claims, for precise 403s
     jti = claims.get("jti", "")
     if jti and self.revocation.is_revoked(jti):
-        source = "local" if self.revocation.is_locally_revoked(jti) else "cp-snapshot"
+        source = "local" if self.revocation.is_locally_revoked(jti) else "issuer-list"
         raise 403 f"tct revoked ({source}): jti={jti}"
     self._enforce_revocation_freshness()     # 403 unless fail_mode == "soft_fail"
     if claims.get("iss") and claims["iss"] != self.agent.aid:
@@ -355,11 +370,12 @@ Four checks before/inside the SDK call:
    jti can't probe the deny set. The demo checks first — every jti in our
    deny set was observed via a prior handshake, so the early-out is safe
    and gives a precise 403. It's fail-closed either way: the same
-   union — `revocation.effective_jtis`, local revocations ∪ the verified
-   CP snapshot — is also passed into the SDK as `revoked_jtis`, which
+   union — `revocation.effective_jtis`, local revocations ∪ the agent's own
+   verified list — is also passed into the SDK as `revoked_jtis`, which
    re-checks it after signature verification. The 403 names its source
-   (`local` vs `cp-snapshot`), because "we revoked this" and "the control
-   plane says someone revoked this" send an operator to different places.
+   (`local` vs `issuer-list`), because "we revoked this here" and "the
+   console revoked this through the control plane" send an operator to
+   different places.
    (See [Revocation](#revocation-rfc-aitp-0008) below.)
 2. **Revocation-freshness guard.** Checked *after* the deny-set, so a
    genuine revocation keeps its own reason. If revocation verification is
@@ -492,7 +508,7 @@ sequences the calls):
 
 ## Revocation (RFC-AITP-0008)
 
-Revocation starts local to the issuer, and a signed snapshot can add to it:
+Revocation starts local to the issuer, and its own signed list can add to it:
 
 1. The runner's `revoke_tct` step finds the jti of the TCT `issuer`
    granted to `audience` by walking the event log
@@ -500,8 +516,8 @@ Revocation starts local to the issuer, and a signed snapshot can add to it:
    `/admin/revoke-tct`.
 2. The issuer records it as a **local** revocation on the shared
    `RevocationState` that `AitpServer` enforces against. Local revocations
-   are held apart from the CP-derived snapshot and are never cleared by a
-   refresh — a CP snapshot cannot un-revoke what an operator revoked here.
+   are held apart from the list-derived entries and are never cleared by a
+   refresh — a CP answer cannot un-revoke what an operator revoked here.
 3. Subsequent capability calls that present that jti hit the local
    revocation short-circuit and 403.
 
@@ -509,12 +525,13 @@ By default no revocation list is published over the wire — local deny-set
 fail-closed is all the base demo needs
 ([RFC-AITP-0008](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/RFC-AITP-0008-revocation.md)
 defines the signed-list distribution model). The `revoke_tct` step's
-`via_cp: true` mode exercises the **data** path — publish to the Control Plane
-and have an unrelated peer pull `/.well-known/aitp-revocation-list` into its
-deny-set. The snapshot's signature *is* checked before any entry is applied. What the
-scenario still does not show, as its own summary says, is a step driving a call
-whose outcome depends on the CP-derived deny-set — the final 403 comes from the
-issuer's *local* set. See
+`via_cp: true` mode exercises the CP path — record the entry at the Control
+Plane under its issuer, then have the issuer pull it into its own signed list
+at `/.well-known/aitp-revocation-list` and apply it after verification.
+`intra-org/revocation-cp-only` shows that entry alone refusing a redemption
+(`source revoked (issuer-list)`); `tests/integration/test_revocation_two_agents.py`
+shows it rejecting a capability call within one poll interval and surviving
+a CP outage until the list expires. See
 [control-plane.md](control-plane.md#cp-backed-workflow-steps).
 
 ## Draft and extension surfaces

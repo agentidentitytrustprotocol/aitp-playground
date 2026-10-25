@@ -33,19 +33,6 @@ class Settings(BaseSettings):
     # See DECISIONS.md D-19.
     cp_base_url: str = ""
     cp_api_key: str = ""
-    # The control plane's AID, pinned. Verifying a revocation snapshot without
-    # a pinned expected issuer is close to worthless — the snapshot is
-    # self-certifying, so ANY key can sign a well-formed one and it will
-    # verify against its own declared issuer. The pin is the difference
-    # between checking a signature and checking the *right* signature.
-    #
-    # Empty means "do not verify", which is the pre-0.6.0 posture and is
-    # logged loudly at startup rather than assumed. In the compose stack the
-    # CP's identity is deterministic (CP_AID_SEED_HEX), so this can be a known
-    # constant; in a real deployment it comes from the CP's published manifest
-    # at bootstrap, pinned once — discovery *without* pinning would reintroduce
-    # the hole in a new shape.
-    cp_aid: str = ""
     # ── Axis B: what to do about the ABSENCE of a fresh snapshot ─────────
     #
     # Kept strictly separate from Axis A (an unverifiable snapshot is always
@@ -61,12 +48,11 @@ class Settings(BaseSettings):
     # `fail_open` explicitly; secure-by-default means revocation enforcement
     # does not silently degrade."
     revocation_fail_mode: str = "fail_closed"
-    # RFC-AITP-0008 §3's example value. The timing envelope it has to cover:
-    # the CP re-signs at most every 60s, so a served snapshot can already be
-    # ~60s old on arrival; the poll cadence below adds up to another 60s;
-    # container clock skew is small but nonzero. 300s clears 60+60+skew with
-    # better than 2x margin, and the CP's signed expires_at defaults to 3600s,
-    # so expiry is never the binding constraint in the demo.
+    # RFC-AITP-0008 §3's example value, measured from the `published_at` of
+    # the agent's own list, i.e. its last successful pull from the CP. The
+    # poll below re-signs every 60s, so 300s tolerates four missed pulls
+    # before the agent stops trusting its view; the signed expires_at
+    # (revocation_list_ttl_secs) bounds how long the list is SERVED.
     revocation_max_staleness_secs: int = 300
     # RFC-AITP-0008 §1.4: a consuming peer SHOULD poll. Without a cadence a
     # staleness deadline is either meaningless (nothing refreshes) or a time

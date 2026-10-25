@@ -144,10 +144,10 @@ def test_mint_jwt_for_produces_a_jwt_a_real_handshake_actually_accepts() -> None
     hello = sess.build_hello(b_manifest, ["demo.y"], oidc_mint_jwt=mint_cb)
     ack, session_id = responder.process_hello(hello)
     commit = sess.process_hello_ack(ack, session_id)
-    commit_ack, _completed_b = responder.process_commit(commit)
-    a_held = json.loads(sess.complete(commit_ack))["tct"]
+    commit_ack, _completed_b = responder.process_commit(commit, revoked_jtis=set())
+    a_held = json.loads(sess.complete(commit_ack, revoked_jtis=set()))["tct"]
 
-    assert a.verify_tct(a_held, "demo.y").peer_aid == b.aid, (
+    assert a.verify_tct(a_held, "demo.y", revoked_jtis=set()).peer_aid == b.aid, (
         "a handshake authenticated with mint_jwt_for's JWT did not yield a "
         "usable TCT — the cnf.jkt binding or claim shape must be wrong"
     )

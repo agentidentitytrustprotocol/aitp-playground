@@ -34,8 +34,8 @@ def _handshake(initiator, responder, responder_manifest, grants):
     rsess = responder.new_responder(pinned_keys=[initiator.aid])
     ack, sid = rsess.process_hello(hello)
     commit = sess.process_hello_ack(ack, sid)
-    commit_ack, _ = rsess.process_commit(commit)
-    return json.loads(sess.complete(commit_ack))
+    commit_ack, _ = rsess.process_commit(commit, revoked_jtis=set())
+    return json.loads(sess.complete(commit_ack, revoked_jtis=set()))
 
 
 def test_delegation_round_trip() -> None:
@@ -62,7 +62,7 @@ def test_delegation_round_trip() -> None:
 
     # A verifies (under B's Manifest: B signed the token) and mints a fresh
     # TCT for C.
-    verified = aitp.verify_delegation(delegation, A.aid, [manifest_B])
+    verified = aitp.verify_delegation(delegation, A.aid, [manifest_B], revoked_jtis=set())
     assert verified.delegator == A.aid
     assert verified.delegatee == C.aid
     assert verified.grants == ["write.content"]
@@ -73,7 +73,7 @@ def test_delegation_round_trip() -> None:
 
     # C self-verifies the fresh TCT; the verified identity exposes the
     # issuer (A) and the delegated grants.
-    identity = C.verify_tct(fresh_tct, "write.content")
+    identity = C.verify_tct(fresh_tct, "write.content", revoked_jtis=set())
     assert identity.peer_aid == A.aid
     assert identity.grants == ["write.content"]
 
@@ -113,7 +113,7 @@ def test_verify_delegation_wrong_verifier_rejected() -> None:
     delegation = B.build_delegation(voucher_b, C.aid, ["x"], 600)
     # D (not A) tries to verify — fails.
     with pytest.raises(RuntimeError):
-        aitp.verify_delegation(delegation, D.aid, [manifest_B])
+        aitp.verify_delegation(delegation, D.aid, [manifest_B], revoked_jtis=set())
 
 
 def test_verify_delegation_without_the_delegator_manifest_is_rejected() -> None:
@@ -130,4 +130,4 @@ def test_verify_delegation_without_the_delegator_manifest_is_rejected() -> None:
     voucher_b = _handshake(B, A, manifest_A, ["x"])["grant_voucher"]
     delegation = B.build_delegation(voucher_b, C.aid, ["x"], 600)
     with pytest.raises(RuntimeError):
-        aitp.verify_delegation(delegation, A.aid, [manifest_C])
+        aitp.verify_delegation(delegation, A.aid, [manifest_C], revoked_jtis=set())

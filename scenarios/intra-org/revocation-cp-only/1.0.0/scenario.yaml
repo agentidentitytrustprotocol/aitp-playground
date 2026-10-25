@@ -13,16 +13,16 @@ metadata:
     sub-researcher twice. The first delegation redeems at the writer (the
     control: without it, a blanket-reject bug would pass). The source TCT's
     jti is then published to the CP's /api/revocation/entries ONLY: the
-    writer never revokes it locally. The writer pulls the CP's signed
-    /.well-known/aitp-revocation-list, verifies it against the pinned
-    CP_AID, and the second redemption is refused with a 403 whose reason
-    names the source as `cp-snapshot`, not `local`.
+    writer never revokes it locally. The writer pulls its own entries from
+    the CP, signs them into its own revocation list, verifies that list
+    against its own AID, and the second redemption is refused with a 403
+    whose reason names the source as `issuer-list`, not `local`.
 
     Redemption is where this is load-bearing: it mints a fresh TCT for a
     third party, so a revoked grant must stop minting (RFC-AITP-0006 §4
     step 7). On the capability path a CP entry only changes a 403's wording.
 
-    Needs a CP and CP_AID. Without a CP the revoke step records
+    Needs a CP. Without a CP the revoke step records
     `step.skipped` and the final redemption's expectation fails to match
     (`matched: false`) — visibly, not silently. Prod-safe: every agent, TCT
     and jti here is minted by this run and lives only for it; no LLM calls.
@@ -97,7 +97,7 @@ spec:
         reason: "cp-only-revocation-demo"
         description: >
           Publish the source TCT's jti to the CP and nowhere else. The writer
-          (the grantor, who will be asked to redeem) refreshes its snapshot.
+          (the grantor, who will be asked to redeem) refreshes its own list.
 
       - id: redeem_refused
         type: redeem_delegation
@@ -106,5 +106,5 @@ spec:
         via_delegation: delegate_after
         expect_status: 403
         description: >
-          The writer refuses: its only knowledge of the revocation is the
-          verified CP snapshot, and the 403 says so (`cp-snapshot`).
+          The writer refuses: its only knowledge of the revocation is its
+          own verified list, and the 403 says so (`issuer-list`).
