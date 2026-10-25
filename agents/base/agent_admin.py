@@ -20,6 +20,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
+from pop_challenges import CHALLENGE_HEADER, RESPONSE_HEADER, decode_header, encode_header
 from revocation_state import RevocationState
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
@@ -350,15 +351,25 @@ def build_admin_router(
         else:
             content = "" if payload is None else str(payload)
 
+        url = f"{peer_base_url}/capabilities/{capability}"
+        headers = {"Content-Type": "application/json", "X-AITP-TCT": tct_json}
         async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(
-                f"{peer_base_url}/capabilities/{capability}",
-                content=content,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-AITP-TCT": tct_json,
-                },
-            )
+            r = await client.post(url, content=content, headers=headers)
+            # The issuer asks us to prove we hold the TCT's `sub` key
+            # (RFC-AITP-0005 §6.1, §10.5): answer its challenge once and
+            # resend the same call. A second 401 is returned as a rejection.
+            challenge_header = r.headers.get(CHALLENGE_HEADER)
+            if r.status_code == 401 and challenge_header:
+                try:
+                    response_json = agent.sign_pop_response(decode_header(challenge_header))
+                except (RuntimeError, ValueError) as exc:
+                    return {
+                        "error": True, "status_code": 401,
+                        "body": {"detail": f"cannot answer PoP challenge: {exc}"},
+                    }
+                r = await client.post(url, content=content, headers={
+                    **headers, RESPONSE_HEADER: encode_header(response_json),
+                })
         try:
             inner_body: Any = r.json()
         except Exception:  # noqa: BLE001

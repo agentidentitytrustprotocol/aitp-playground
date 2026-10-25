@@ -127,8 +127,10 @@ app.include_router(build_admin_router(
 
 @app.post("/capabilities/research.query")
 async def research_query(request: Request) -> dict[str, Any]:
-    tct_json = request.headers.get("x-aitp-tct", "")
-    identity = server.verify_capability_tct(tct_json, "research.query")
+    identity = server.verify_capability_tct(
+        request.headers.get("x-aitp-tct", ""), "research.query",
+        pop_response=request.headers.get("x-aitp-pop-response", ""),
+    )
     body_bytes = await request.body()
     payload: Any
     if body_bytes:
@@ -144,8 +146,10 @@ async def research_query(request: Request) -> dict[str, Any]:
 
 @app.post("/capabilities/research.deep")
 async def research_deep(request: Request) -> dict[str, Any]:
-    tct_json = request.headers.get("x-aitp-tct", "")
-    identity = server.verify_capability_tct(tct_json, "research.deep")
+    identity = server.verify_capability_tct(
+        request.headers.get("x-aitp-tct", ""), "research.deep",
+        pop_response=request.headers.get("x-aitp-pop-response", ""),
+    )
     body_bytes = await request.body()
     payload: Any
     if body_bytes:
