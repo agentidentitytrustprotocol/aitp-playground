@@ -31,9 +31,14 @@ spec:
     - id: researcher
       ref: _shared/agents/researcher-oidc
       port_offset: 0
+      # RFC-AITP-0004 §5.1 step 8: a mixed oidc <-> pinned_key pair must
+      # accept both types on both sides, or the handshake is refused with
+      # INCOMPATIBLE_IDENTITY_TYPE.
+      accepted_identity_types: [pinned_key, oidc]
     - id: writer
       ref: _shared/agents/writer
       port_offset: 1
+      accepted_identity_types: [pinned_key, oidc]
 
   trust:
     boundary: intra_org

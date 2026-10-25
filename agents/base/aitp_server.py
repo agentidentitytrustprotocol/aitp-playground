@@ -654,9 +654,10 @@ class AitpServer:
                     hello_json, oidc_mint_jwt=mint_cb,
                 )
             except Exception as exc:  # noqa: BLE001
-                await emit_event("handshake.failed", self.bootstrap, error=str(exc))
+                code = getattr(exc, "code", None)
+                await emit_event("handshake.failed", self.bootstrap, code=code, error=str(exc))
                 return Response(
-                    json.dumps({"error": str(exc)}),
+                    json.dumps(_handshake_error(exc)),
                     status_code=400,
                     media_type="application/json",
                 )
@@ -800,10 +801,10 @@ class AitpServer:
             except Exception as exc:  # noqa: BLE001
                 await emit_event(
                     "handshake.failed", self.bootstrap,
-                    session_id=session_id, error=str(exc),
+                    session_id=session_id, code=getattr(exc, "code", None), error=str(exc),
                 )
                 return Response(
-                    json.dumps({"error": str(exc)}),
+                    json.dumps(_handshake_error(exc)),
                     status_code=400,
                     media_type="application/json",
                 )
@@ -1004,6 +1005,13 @@ class AitpServer:
             if code in ("POP_RESPONSE_INVALID", "POP_CHALLENGE_INVALID"):
                 raise HTTPException(status_code=403, detail=_pop_error(code, str(exc))) from exc
             raise HTTPException(status_code=403, detail=f"tct rejected: {exc}") from exc
+
+
+def _handshake_error(exc: Exception) -> dict[str, str]:
+    """The 400 body for an SDK handshake refusal, with the AITP error code
+    when the SDK set one (aitp-sdk >= 0.22)."""
+    code = getattr(exc, "code", None)
+    return {"error": str(exc)} if code is None else {"error": str(exc), "code": code}
 
 
 def _pop_error(code: str, message: str) -> dict[str, str]:

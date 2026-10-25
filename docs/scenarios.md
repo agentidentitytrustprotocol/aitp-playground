@@ -104,6 +104,7 @@ spec:
     #   oidc_issuer: https://idp.example/    # OIDC issuer URL
     #   oidc_subject: researcher             # subject claim
     signing_suite: ed25519      # ed25519 (default) | p256
+    accepted_identity_types: [pinned_key]  # default: [own identity_type]
     ttl_secs: 3600
   did_web: false
 ```
@@ -113,6 +114,14 @@ makes the agent mint ID tokens via the per-run mock issuer at handshake
 time — see `intra-org/oidc-identity` and
 [aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces).
 `signing_suite: p256` selects the ECDSA suite instead of Ed25519.
+
+`accepted_identity_types` lists the peer identity types the agent's manifest
+accepts (RFC-AITP-0004 §5.1 step 8). A peer of any other type is refused with
+`INCOMPATIBLE_IDENTITY_TYPE`, at whichever end checks first: the responder on
+HELLO, the initiator on HELLO_ACK. Unset means only the agent's own type, so
+a mixed `oidc` ↔ `pinned_key` pair must list `[pinned_key, oidc]` on **both**
+agents. Prefer the scenario's per-agent override (below) to widening a
+shared agent manifest.
 
 Key behaviors:
 - `entrypoint.type=python_module` becomes `python3 -m researcher.main`;
@@ -159,6 +168,7 @@ spec:
       cloud: aws-us-east          # informational; never used by the runner
       did_web_host: localhost:8101 # set this to expose did:web for this agent
       signing_suite: p256         # optional per-agent override of the manifest's suite
+      accepted_identity_types: [pinned_key, oidc]  # optional override; mixed pairs need it on both sides
 
   trust:
     boundary: intra_org           # intra_org | cross_org | cross_cloud
