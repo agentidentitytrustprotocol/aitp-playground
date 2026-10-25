@@ -41,6 +41,9 @@ class Pack(BaseModel):
     metadata: PackMeta
 
 
+IdentityType = Literal["pinned_key", "oidc"]
+
+
 class AgentSpec(BaseModel):
     id: str
     ref: str
@@ -53,6 +56,10 @@ class AgentSpec(BaseModel):
     # (Ed25519 by default; ``"p256"`` for the ECDSA suite). When unset
     # the manifest's ``spec.aitp.signing_suite`` wins.
     signing_suite: Optional[Literal["ed25519", "p256"]] = None
+    # Overrides the manifest's ``spec.aitp.accepted_identity_types`` for this
+    # scenario, so a mixed pair can widen a shared agent without changing
+    # every other scenario that uses it.
+    accepted_identity_types: Optional[list[IdentityType]] = None
 
 
 class TrustSpec(BaseModel):
@@ -266,7 +273,12 @@ class ScenarioTemplate(BaseModel):
 class AitpAgentSpec(BaseModel):
     offered_caps: list[str]
     display_name: str
-    identity_type: Literal["pinned_key", "oidc"] = "pinned_key"
+    identity_type: IdentityType = "pinned_key"
+    # RFC-AITP-0004 §5.1 step 8: the peer identity types this agent accepts.
+    # Unset means only its own ``identity_type``, so a mixed oidc <-> pinned_key
+    # pair must list both, on both sides. Per-scenario
+    # ``AgentSpec.accepted_identity_types`` overrides this.
+    accepted_identity_types: Optional[list[IdentityType]] = None
     # When identity_type == "oidc" the manifest is built with
     # IdentityHintKind::Oidc; the bootstrap JSON carries ``issuer`` /
     # ``subject`` so the agent can mint ID tokens via the in-process
