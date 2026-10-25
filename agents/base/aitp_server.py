@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from admin_auth import AdminAuthMiddleware
 from bootstrap import get_manifest_json
+from handshake_replay import HandshakeRejected, ReplayGuard
 from revocation_publish import REVOCATION_LIST_PATH, RETRY_AFTER_SECS, IssuerRevocationList
 from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
@@ -181,6 +182,8 @@ class AitpServer:
                 "the unchecked posture."
             )
         self._sessions: dict[str, Any] = {}  # session_id -> ResponderSession
+        # RFC-AITP-0001 §5.5 on the hello and commit routes, ahead of the SDK.
+        self.replay_guard = ReplayGuard()
         # Pinned-key trust store for the responder side (aitp-sdk >= 0.14
         # rejects every pinned_key peer whose AID is not in it). Populated
         # only by whoever launched or hosts this agent, via
@@ -631,6 +634,8 @@ class AitpServer:
         @router.post("/aitp/handshake/hello")
         async def hello(request: Request) -> Response:
             hello_json = (await request.body()).decode()
+            if (refused := await self._screen_envelope(hello_json)) is not None:
+                return refused
             responder = self._new_responder()
             # If this agent is OIDC-typed, mint its JWT bound to the
             # initiator's AID extracted from the hello envelope so the
@@ -767,6 +772,9 @@ class AitpServer:
         @router.post("/aitp/handshake/commit")
         async def commit(request: Request) -> Response:
             session_id = request.headers.get("x-aitp-session-id", "")
+            commit_json = (await request.body()).decode()
+            if (refused := await self._screen_envelope(commit_json, session_id=session_id)) is not None:
+                return refused
             responder = self._sessions.pop(session_id, None)
             if responder is None:
                 return Response(
@@ -774,7 +782,6 @@ class AitpServer:
                     status_code=404,
                     media_type="application/json",
                 )
-            commit_json = (await request.body()).decode()
             try:
                 # The TCT checked here is the one the initiator minted for us in
                 # this very handshake, so its jti is fresh and no issuer's list
@@ -858,6 +865,23 @@ class AitpServer:
         source = "local" if self.revocation.is_locally_revoked(src_jti) else "issuer-list"
         return source, src_jti
 
+    async def _screen_envelope(self, envelope_json: str, **fields: Any) -> Optional[Response]:
+        """Run the replay guard on a handshake envelope. Returns the refusal
+        to send, or None to let the SDK process it."""
+        try:
+            self.replay_guard.check(envelope_json)
+        except HandshakeRejected as exc:
+            await emit_event(
+                "handshake.failed", self.bootstrap, code=exc.code, error=str(exc), **fields,
+            )
+            body = {"error": str(exc)} if exc.code is None else {"error": str(exc), "code": exc.code}
+            return Response(
+                json.dumps(body),
+                status_code=exc.status,
+                media_type="application/json",
+            )
+        return None
+
     def verify_capability_tct(self, tct_token: str, required_grant: str) -> "aitp.TctIdentity":
         """Verify the X-AITP-TCT header on an incoming capability call.
 
@@ -865,16 +889,18 @@ class AitpServer:
 
         Two-stage verification:
           1. Local revocation short-circuit on the TCT's ``jti`` (read from
-             the unverified claims for a precise 403; the SDK also re-checks
-             the SDK also re-checks the same set below, so this is
+             the unverified claims for a precise 403; the SDK re-checks
+             the same set below, so this is
              fail-closed either way).
-          2. SDK ``verify_tct`` in presented-TCT mode: we pass the TCT's
-             own declared ``aud`` as ``expected_audience``. In v0.1/v0.2
-             (RFC-AITP-0005) ``aud`` defaults to ``sub``, so this asserts
-             "the TCT identifies this holder" — the holder's identity
-             claim. The signature check (against the issuer's pubkey
-             derived from ``iss``) is the security gate: it proves WE
-             (this resource server) actually issued the TCT.
+          2. SDK ``verify_tct`` in presented-TCT mode, after checking
+             ``iss`` is us. ``expected_audience`` is the token's own
+             ``aud`` (RFC-AITP-0005 §5.1: ``aud`` == ``sub``). The signature
+             proves we issued the token, so reading its claims is sound.
+
+        What this does not prove is that the caller is ``sub``: the header
+        is a bearer token, and anyone holding the string can present it.
+        RFC-AITP-0005 §6 closes that with downstream PoP, which waits on
+        the SDK exposing the PoP helpers (#105).
 
         Any failure produces a 403. Missing/malformed tokens are reported
         distinctly so debugging is easier."""

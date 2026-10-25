@@ -553,16 +553,14 @@ successor release's wheel, before merging, not after. If it doesn't, that is a g
 cross-repo interop break, not a local bug — file it upstream rather than widening
 `TCT_CLAIMS_MEMBERS` locally or downstream.
 
-## P17 — The handshake routes add no RFC-AITP-0009 §3.1 replay or timestamp check
-**From:** `plans/aitp-rs-0.17-adoption.md` open question 4 · **Blocks:** nothing ·
-**Cost:** a captured HELLO can be replayed to `/aitp/handshake/hello` inside its
-validity window. It only buys the attacker a responder session they cannot complete
-without the initiator's key, but the MUST is unmet.
+## ~~P17 — The handshake routes add no RFC-AITP-0009 §3.1 replay or timestamp check~~ — **CLOSED 2026-10-24**
+**From:** `plans/aitp-rs-0.17-adoption.md` open question 4 · **Closed by:** PGP.1 (#105)
 
-The binding's `process_hello` / `process_commit` check neither `message_id` reuse
-nor timestamp skew, and the playground routes call them directly. The fix belongs
-in the SDK, or at least in one shared helper. Per spec §5.4.3 any dedup set must
-key on `message_id`, never on the envelope bytes. Out of scope for the 0.17 bump.
+`agents/base/handshake_replay.py` runs on `/aitp/handshake/hello` and `/commit` before
+the SDK sees the envelope: the `message_id` deny list (keyed on the id, never the
+bytes), then the ±300 s window. The §3.1 per-source rate limit between them is still
+absent; the deny list is capped and refuses with 429 when full rather than forget an
+id still inside the window.
 
 ## ~~P18 — The SDK `TctStore` caches by a hash of the raw compact-JWS bytes (spec §5.4.3)~~ — **CLOSED 2026-10-20, compliant**
 **From:** the aitp/0.3 adoption review (PR #94) · **Closed by:** aitp-rs's RFC-AITP-0001

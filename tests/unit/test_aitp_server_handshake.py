@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +88,12 @@ def _initiator_hello(server: AitpServer, *, grants: list[str] | None = None):
 
 # ── /aitp/handshake/hello (HELLO_ACK responder) ──────────────────────────
 
+
+
+def _fresh_non_commit() -> str:
+    """Not a commit, but fresh enough to pass the replay guard, which runs
+    before the session lookup and the SDK (RFC-AITP-0009 §3.1)."""
+    return json.dumps({"message_id": str(uuid.uuid4()), "timestamp": int(time.time())})
 
 def test_hello_route_success_creates_a_session_and_emits_started(
     monkeypatch: pytest.MonkeyPatch,
@@ -177,7 +185,7 @@ def test_commit_route_with_an_unknown_session_is_404(
 
     resp = _client(server).post(
         "/aitp/handshake/commit",
-        content="{}",
+        content=_fresh_non_commit(),
         headers={"X-Aitp-Session-Id": "does-not-exist"},
     )
 
@@ -205,7 +213,7 @@ def test_commit_route_with_a_malformed_body_is_rejected_and_consumes_the_session
 
     bad_resp = client.post(
         "/aitp/handshake/commit",
-        content="not a real commit envelope",
+        content=_fresh_non_commit(),
         headers={"X-Aitp-Session-Id": session_id},
     )
     assert bad_resp.status_code == 400, bad_resp.text
@@ -217,7 +225,7 @@ def test_commit_route_with_a_malformed_body_is_rejected_and_consumes_the_session
 
     retry = client.post(
         "/aitp/handshake/commit",
-        content="not a real commit envelope",
+        content=_fresh_non_commit(),
         headers={"X-Aitp-Session-Id": session_id},
     )
     assert retry.status_code == 404, "the session must have been consumed by the first attempt"
@@ -258,7 +266,7 @@ def test_rotate_keys_replaces_identity_and_drops_pending_sessions(
     # a responder built from the now-replaced agent/key.
     commit_after_rotation = client.post(
         "/aitp/handshake/commit",
-        content="{}",
+        content=_fresh_non_commit(),
         headers={"X-Aitp-Session-Id": session_id},
     )
     assert commit_after_rotation.status_code == 404
