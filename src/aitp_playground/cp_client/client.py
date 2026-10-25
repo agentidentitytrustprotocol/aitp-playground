@@ -193,6 +193,25 @@ class CpClient:
             return data
         return None
 
+    async def list_webhooks(self) -> Optional[list[dict[str, Any]]]:
+        """GET /api/webhooks. ``None`` (not ``[]``) when CP is disabled or
+        the call failed, so a caller never reads a failure as "none exist"."""
+        if not self.enabled:
+            return None
+        target = f"{self.settings.cp_base_url.rstrip('/')}/api/webhooks"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.get(target, headers=self._headers())
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CP list_webhooks failed (degraded): %s", exc)
+            return None
+        hooks = data.get("webhooks") if isinstance(data, dict) else None
+        if not isinstance(hooks, list):
+            return None
+        return [h for h in hooks if isinstance(h, dict)]
+
     async def delete_webhook(self, webhook_id: str) -> bool:
         """DELETE /api/webhooks/{id}. Idempotent — a 404 is treated as success."""
         if not self.enabled or not webhook_id:

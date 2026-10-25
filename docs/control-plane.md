@@ -74,7 +74,8 @@ request/response shape, auth, and filters, follow it into the CP's
 | `ingest_events(events)` | `POST /api/events` | end of every run (background); `cp_delegation_tree` (awaited, mid-run) | no-op, logged |
 | `publish_revocation(jti, reason)` | `POST /api/revocation/entries` | `revoke_tct` with `via_cp` | `False` |
 | `create_webhook(url, events, secret)` | `POST /api/webhooks` | `cp_subscribe_webhook` | `None` |
-| `delete_webhook(id)` | `DELETE /api/webhooks/{id}` | cleanup | `True` (404 = success) |
+| `list_webhooks()` | `GET /api/webhooks` | startup sweep (`main.py`) | `None` → nothing swept |
+| `delete_webhook(id)` | `DELETE /api/webhooks/{id}` | run-end teardown, startup sweep | `False`, logged (404 = success) |
 | `fetch_events_history(...)` | `GET /api/events/history` | `GET /runs/{id}/cp-audit` | `[]` |
 | `fetch_sessions(...)` | `GET /api/sessions` | `GET /runs/{id}/cp-sessions` | `[]` |
 | `fetch_tcts(...)` | `GET /api/tcts` | `GET /cp/tcts` | `[]` |
@@ -159,11 +160,24 @@ playground. The flow:
    Valid deliveries append a `cp.webhook.delivered` event to the run log,
    and a repeated `deliveryId` is recorded only once. The receiver returns
    `401` for a missing or invalid signature or timestamp, a stale timestamp,
-   or a body that carries only the body signature. Unknown runs return
-   `404`.
+   or a body that carries only the body signature. An unknown run returns
+   `410 Gone`, which the CP takes as "stop delivering here": it disables the
+   subscription instead of retrying.
 
 Inspect what arrived with `GET /runs/{id}/cp-deliveries` (the run's
 webhook config, secret stripped, plus the delivered events).
+
+A subscription lives only as long as its run:
+
+- **At run end** (completed, failed or cancelled) the runner deletes it. On
+  success it first waits for the end-of-run event ingest, and in every case
+  then waits `CP_WEBHOOK_TEARDOWN_GRACE_SECS` (default `120`), so the CP can
+  still deliver and retry the run's own events.
+- **At startup** the service lists the CP's webhooks and deletes every one
+  under its own `PLAYGROUND_BASE_URL/webhooks/cp/`, except those this process
+  has already made. No run survives a restart, so the rest are orphans. This
+  assumes one deployment per base URL: a second replica on the same URL would
+  delete the first one's live subscriptions.
 
 ## Observability projections
 

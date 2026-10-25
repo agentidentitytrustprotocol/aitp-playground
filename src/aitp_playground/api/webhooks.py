@@ -91,7 +91,9 @@ async def receive_cp_webhook(
     store = _store(request)
     record = store.get(run_id)
     if record is None:
-        raise HTTPException(status_code=404, detail="run not found")
+        # 410, not 404: an unknown run never comes back (run ids are not
+        # reused), and 410 tells the CP to stop delivering to this URL.
+        raise HTTPException(status_code=410, detail="run not found")
     cp_webhook = record.get("cp_webhook") or {}
     secret: str | None = cp_webhook.get("secret")
     if not secret:

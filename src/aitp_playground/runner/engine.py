@@ -90,6 +90,8 @@ class ScenarioRunner:
         self.config = config
         self.store = store
         self._bg_tasks: set[asyncio.Task[Any]] = set()
+        # CP webhooks this process subscribed; the startup sweep spares them.
+        self.webhook_ids: set[str] = set()
 
     async def run(
         self,
@@ -273,6 +275,7 @@ class ScenarioRunner:
         )
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
+        self._schedule_webhook_teardown(run_id, after=task)
 
         result = RunResult.success(run_id, step_outputs, ctx.events)
         # Events are already in the store via RunContext.emit → store.append_event;
@@ -308,6 +311,34 @@ class ScenarioRunner:
             except OSError:
                 logger.warning("could not remove bootstrap file %s", path)
 
+    def _schedule_webhook_teardown(
+        self, run_id: str, *, after: Optional[asyncio.Task[Any]] = None,
+    ) -> None:
+        """Delete the run's CP webhook subscription once the run has ended,
+        whether it completed, failed or was cancelled (a cancel lands in
+        `_finalize_failure`). It waits for `after` (the end-of-run ingest) and
+        then `cp_webhook_teardown_grace_secs`, so the CP can still fan out and
+        retry the events of the run itself. A run that never subscribed is a
+        no-op; a failed delete is left to the startup sweep in `main.py`."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # called outside a run (unit tests): nothing to tear down
+            return
+        task = loop.create_task(self._teardown_webhook(run_id, after))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _teardown_webhook(
+        self, run_id: str, after: Optional[asyncio.Task[Any]],
+    ) -> None:
+        if after is not None:
+            await asyncio.gather(after, return_exceptions=True)
+        await asyncio.sleep(self.config.cp_webhook_teardown_grace_secs)
+        record = self.store.get(run_id) or {}
+        webhook_id = (record.get("cp_webhook") or {}).get("id")
+        if webhook_id and await self.cp.delete_webhook(webhook_id):
+            logger.info("deleted CP webhook %s of run %s", webhook_id, run_id)
+
     def _finalize_failure(self, run_id: str, error: str, ctx: RunContext) -> RunResult:
         """The run FAILED — but if it was already cancelled, the record must
         say so, not "failed". `api/runs.py`'s `/cancel` route upserts
@@ -317,6 +348,7 @@ class ScenarioRunner:
         the cancellation the caller explicitly asked for, one HTTP round-trip
         later. See `DECISIONS.md` D-16.
         """
+        self._schedule_webhook_teardown(run_id)
         existing = self.store.get(run_id)
         if existing is not None and existing.get("status") == "cancelled":
             return RunResult.failure(run_id, error, events=ctx.events)
@@ -666,6 +698,8 @@ class ScenarioRunner:
                 ))
                 step_outputs[step.id] = {"subscribed": False}
                 return
+            if created.get("id"):
+                self.webhook_ids.add(created["id"])
             self.store.upsert(ctx.run_id, {
                 "cp_webhook": {
                     "id": created.get("id"),
