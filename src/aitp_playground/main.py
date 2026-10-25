@@ -1,6 +1,7 @@
 """FastAPI app factory + dependency wiring."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -37,6 +38,32 @@ def _configure_logging(settings: Settings) -> None:
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s :: %(message)s",
     )
+
+
+async def sweep_cp_webhooks(cp: CpClient, settings: Settings, runner: ScenarioRunner) -> int:
+    """Delete the CP webhooks a previous process of this deployment left
+    behind. Every one points at a run of that process, and no run survives a
+    restart: its agents are gone, so nothing more will happen on it. Ours are
+    the ones under our own `/webhooks/cp/` URL; one this process has already
+    subscribed (a run that started while the sweep ran) is spared. Returns how
+    many were deleted. Best-effort: with the CP unreachable they stay, and the
+    receiver's 410 for an unknown run tells the CP to stop."""
+    hooks = await cp.list_webhooks()
+    if not hooks:
+        return 0
+    prefix = f"{settings.playground_base_url.rstrip('/')}/webhooks/cp/"
+    deleted = 0
+    for hook in hooks:
+        hook_id, url = hook.get("id"), hook.get("url")
+        if not isinstance(hook_id, str) or not isinstance(url, str):
+            continue
+        if not url.startswith(prefix) or hook_id in runner.webhook_ids:
+            continue
+        if await cp.delete_webhook(hook_id):
+            deleted += 1
+    if deleted:
+        logging.getLogger(__name__).info("deleted %d stale CP webhook(s)", deleted)
+    return deleted
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -78,7 +105,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        sweep = asyncio.create_task(sweep_cp_webhooks(cp, settings, runner))
         yield
+        sweep.cancel()
         # Best-effort cleanup of any agent processes still alive
         for run_id in list(run_store.list_ids()):
             supervisor.kill_run(run_id)

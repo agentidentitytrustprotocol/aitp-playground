@@ -263,6 +263,7 @@ class FakeCp:
         self.revocations: list[tuple[str, str]] = []
         self.revocation_issuers: list[Optional[str]] = []
         self.webhook = webhook
+        self.deleted_webhooks: list[str] = []
         self.delegations = list(delegations or [])
         self.pinned: list[dict[str, Any]] = []
         self.anchors: list[dict[str, Any]] = []
@@ -283,6 +284,10 @@ class FakeCp:
     async def create_webhook(self, *, url: str, events: Optional[list[str]] = None,
                              **_: Any) -> Optional[dict[str, Any]]:
         return self.webhook
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        self.deleted_webhooks.append(webhook_id)
+        return True
 
     async def fetch_delegations(self, **_: Any) -> list[dict[str, Any]]:
         return list(self.delegations)
@@ -345,6 +350,7 @@ def make_env(
     settings = Settings(
         cp_base_url="http://cp.test" if cp.enabled else "",
         cp_api_key="",
+        cp_webhook_teardown_grace_secs=0,
     )
     manifests: dict[str, AgentManifest] = {}
     agent_specs: list[dict[str, Any]] = []
@@ -1060,6 +1066,42 @@ async def test_cp_subscribe_webhook_stores_subscription(agent_http) -> None:
     # signature-verifying receiver.
     assert env.store.get("run-1")["cp_webhook"]["secret"] == "sh"
     assert "cp.webhook.subscribed" in _event_types(result)
+
+
+async def test_a_completed_run_deletes_its_webhook_after_the_ingest(agent_http) -> None:
+    env = make_env(
+        agents={"alice": ["cap.a"]}, eager=False,
+        cp=FakeCp(enabled=True, webhook={"id": "wh-1", "secret": "sh"}),
+        steps=[{"id": "sub", "type": "cp_subscribe_webhook"}],
+    )
+    result = await _run(env)
+    assert result.status == "success", result.error
+    assert env.cp.ingested, "the run's events reach the CP before the unsubscribe"
+    assert env.cp.deleted_webhooks == ["wh-1"]
+    assert env.runner.webhook_ids == {"wh-1"}
+
+
+async def test_a_failed_run_deletes_its_webhook(agent_http) -> None:
+    env = make_env(
+        agents={"alice": ["cap.a"]}, eager=False,
+        cp=FakeCp(enabled=True, webhook={"id": "wh-1", "secret": "sh"}),
+        steps=[
+            {"id": "sub", "type": "cp_subscribe_webhook"},
+            {"id": "boom", "agent": "alice", "capability": "cap.missing"},
+        ],
+    )
+    result = await _run(env)
+    assert result.status == "failed"
+    assert env.cp.deleted_webhooks == ["wh-1"]
+
+
+async def test_a_run_that_never_subscribed_deletes_nothing(agent_http) -> None:
+    env = make_env(
+        agents={"alice": ["cap.a"]}, eager=False, cp=FakeCp(enabled=True),
+        steps=[{"id": "sub", "type": "cp_subscribe_webhook"}],
+    )
+    await _run(env)
+    assert env.cp.deleted_webhooks == []
 
 
 async def test_cp_subscribe_webhook_records_refusal_without_failing(agent_http) -> None:

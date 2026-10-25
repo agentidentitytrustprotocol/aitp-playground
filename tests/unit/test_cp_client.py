@@ -486,3 +486,32 @@ async def test_publish_revocation_sends_the_issuer_aid() -> None:
         _clear_transport()
     assert ok is True
     assert captured["body"] == {"jti": "jti-i", "iss": "aid:pubkey:abc"}
+
+
+@pytest.mark.asyncio
+async def test_list_webhooks_returns_the_subscriptions() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert str(request.url).endswith("/api/webhooks")
+        return httpx.Response(200, json={"webhooks": [{"id": "wh-1", "url": "u"}, "junk"]})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        hooks = await _client(httpx.MockTransport(handler)).list_webhooks()
+    finally:
+        _clear_transport()
+    assert hooks == [{"id": "wh-1", "url": "u"}]
+
+
+@pytest.mark.asyncio
+async def test_list_webhooks_failure_is_none_not_empty() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        hooks = await _client(httpx.MockTransport(handler)).list_webhooks()
+    finally:
+        _clear_transport()
+    assert hooks is None
+    assert await CpClient(Settings(cp_base_url="")).list_webhooks() is None

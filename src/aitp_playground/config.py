@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # one. The SDK's default.
     revocation_list_ttl_secs: int = 3600
     cp_timeout_ms: int = 5000
+    # A run's CP webhook subscription is deleted this long after the run
+    # ends (after the end-of-run event ingest, on success). The CP fans out
+    # the ingested events and retries with backoff, so deleting at once would
+    # drop exactly the deliveries the subscription exists for.
+    cp_webhook_teardown_grace_secs: float = 120
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     # ── API authentication and spend limits ──────────────────────────────

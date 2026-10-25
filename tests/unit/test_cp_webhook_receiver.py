@@ -66,14 +66,11 @@ def _headers(body: bytes, ts: int | str | None = None, **extra: str) -> dict[str
     }
 
 
-def test_unknown_run_returns_404(client: TestClient) -> None:
+def test_unknown_run_is_gone(client: TestClient) -> None:
+    """410, not 404: the CP treats it as "stop delivering here"."""
     body = b"{}"
-    r = client.post(
-        "/webhooks/cp/no-such-run",
-        content=body,
-        headers={"X-Aitp-Signature": _sig(body)},
-    )
-    assert r.status_code == 404
+    r = client.post("/webhooks/cp/no-such-run", content=body, headers=_headers(body))
+    assert r.status_code == 410
 
 
 def test_run_without_subscription_returns_401(client: TestClient) -> None:
