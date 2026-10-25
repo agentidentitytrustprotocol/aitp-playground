@@ -131,8 +131,12 @@ def test_mint_jwt_for_produces_a_jwt_a_real_handshake_actually_accepts() -> None
     a.build_manifest(
         "a", "http://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc", oidc_issuer=issuer.issuer_url, oidc_subject="alice",
+        accepted_identity_types=["pinned_key", "oidc"],
     )
-    b_manifest = b.build_manifest("b", "http://b/aitp/handshake/hello", ["demo.y"])
+    b_manifest = b.build_manifest(
+        "b", "http://b/aitp/handshake/hello", ["demo.y"],
+        accepted_identity_types=["pinned_key", "oidc"],
+    )
 
     ctx = OidcContext(_oidc_bootstrap(issuer, subject="alice"))
     mint_cb = ctx.mint_jwt_for(audience=b.aid, agent=a)

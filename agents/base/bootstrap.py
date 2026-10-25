@@ -51,4 +51,8 @@ def get_manifest_json(agent: "aitp.AitpAgent", bootstrap: dict[str, Any]) -> str
         kwargs["identity_type"] = "oidc"
         kwargs["oidc_issuer"] = cfg.get("oidc_issuer")
         kwargs["oidc_subject"] = cfg.get("oidc_subject")
+    # RFC-AITP-0004 §5.1 step 8: a peer whose identity type is not listed
+    # here is refused with INCOMPATIBLE_IDENTITY_TYPE. Passed explicitly so
+    # the Manifest states it; the default is the SDK's own, [own type].
+    kwargs["accepted_identity_types"] = list(cfg.get("accepted_identity_types") or [identity_type])
     return agent.build_manifest(**kwargs)

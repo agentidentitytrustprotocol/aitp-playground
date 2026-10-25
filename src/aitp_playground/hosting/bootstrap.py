@@ -67,6 +67,10 @@ class BootstrapBuilder:
             agent_spec.signing_suite
             or resolved_manifest.spec.aitp.signing_suite
         )
+        accepted_identity_types = (
+            agent_spec.accepted_identity_types
+            or resolved_manifest.spec.aitp.accepted_identity_types
+        )
 
         bootstrap: dict[str, Any] = {
             "run_id": run_id,
@@ -82,6 +86,9 @@ class BootstrapBuilder:
                 "ttl_secs": resolved_manifest.spec.aitp.ttl_secs,
                 "signing_suite": signing_suite,
                 "identity_type": resolved_manifest.spec.aitp.identity_type,
+                "accepted_identity_types": (
+                    list(accepted_identity_types) if accepted_identity_types else None
+                ),
                 "oidc_issuer": resolved_manifest.spec.aitp.oidc_issuer,
                 "oidc_subject": resolved_manifest.spec.aitp.oidc_subject,
             },

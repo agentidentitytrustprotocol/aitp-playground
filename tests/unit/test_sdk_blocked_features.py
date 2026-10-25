@@ -215,6 +215,10 @@ def test_spki_pin_verifier_matches_and_rejects() -> None:
     assert v_miss.is_pinned(der) is False
 
 
+# RFC-AITP-0004 §5.1 step 8: a mixed oidc <-> pinned_key pair accepts both
+# types on both sides.
+MIXED = ["pinned_key", "oidc"]
+
 # ── OIDC mock issuer ────────────────────────────────────────────────────────
 
 
@@ -243,8 +247,11 @@ def test_oidc_handshake_p256_initiator() -> None:
         identity_type="oidc",
         oidc_issuer=issuer.issuer_url,
         oidc_subject="alice",
+        accepted_identity_types=MIXED,
     )
-    b_m = b.build_manifest("b", "http://b/aitp/handshake/hello", ["demo.y"])
+    b_m = b.build_manifest(
+        "b", "http://b/aitp/handshake/hello", ["demo.y"], accepted_identity_types=MIXED,
+    )
     provider = aitp.JwksProvider({issuer.issuer_url: [issuer.public_jwk]})
     a_jkt = aitp.compute_aid_jkt(a.aid)
     now = int(time.time())
@@ -285,8 +292,11 @@ def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
         identity_type="oidc",
         oidc_issuer=issuer.issuer_url,
         oidc_subject="alice",
+        accepted_identity_types=MIXED,
     )
-    b_m = b.build_manifest("b", "http://b/aitp/handshake/hello", ["demo.y"])
+    b_m = b.build_manifest(
+        "b", "http://b/aitp/handshake/hello", ["demo.y"], accepted_identity_types=MIXED,
+    )
     provider = aitp.JwksProvider({issuer.issuer_url: [issuer.public_jwk]})
 
     a_jkt = aitp.compute_aid_jkt(a.aid)

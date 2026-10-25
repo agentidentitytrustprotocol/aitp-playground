@@ -18,6 +18,8 @@ spec:
       ref: _shared/agents/researcher-oidc
       port_offset: 0
       signing_suite: p256
+      accepted_identity_types: [pinned_key, oidc]
     - id: writer
       ref: _shared/agents/writer
       port_offset: 1
+      accepted_identity_types: [pinned_key, oidc]
