@@ -132,6 +132,8 @@ class _AgentHttpHandler:
             return httpx.Response(200, json={"revoked": True})
         if path == "/admin/refresh-revocations":
             return httpx.Response(200, json={"revoked_count": 2})
+        if path == "/admin/publish-revocations":
+            return httpx.Response(200, json={"published": True, "entry_count": 1})
         if path == "/admin/enroll-with-cp":
             return httpx.Response(200, json={
                 "aid": "aid-enrolled", "registered_at": "2026-07-07T00:00:00Z",
@@ -259,6 +261,7 @@ class FakeCp:
         self._enabled = enabled
         self.ingested: list[list[Any]] = []
         self.revocations: list[tuple[str, str]] = []
+        self.revocation_issuers: list[Optional[str]] = []
         self.webhook = webhook
         self.delegations = list(delegations or [])
         self.pinned: list[dict[str, Any]] = []
@@ -271,8 +274,10 @@ class FakeCp:
     async def ingest_events(self, events: list[Any]) -> None:
         self.ingested.append(list(events or []))
 
-    async def publish_revocation(self, jti: str, reason: str = "") -> bool:
+    async def publish_revocation(self, jti: str, reason: str = "", *,
+                                 iss: Optional[str] = None) -> bool:
         self.revocations.append((jti, reason))
+        self.revocation_issuers.append(iss)
         return True
 
     async def create_webhook(self, *, url: str, events: Optional[list[str]] = None,
@@ -866,6 +871,14 @@ async def test_revoke_tct_via_cp_publishes_and_refreshes_audience(agent_http) ->
     # The audience (alice, port 9500) is told to refresh from the CP.
     refresh = agent_http.body_of("/admin/refresh-revocations")
     assert refresh["cp_base_url"] == "http://cp.test"
+    # The entry is attributed to bob, and bob re-signs its own list at once.
+    assert env.cp.revocation_issuers == [env.supervisor.agents["bob"].aid]
+    publishes = [
+        r.url.port for r in agent_http.requests
+        if r.url.path == "/admin/publish-revocations"
+    ]
+    assert publishes == [9501]
+    assert out["issuer_list"] == {"published": True, "entry_count": 1}
 
 
 async def test_revoke_tct_cp_only_skips_the_issuer_and_refreshes_named_agents(

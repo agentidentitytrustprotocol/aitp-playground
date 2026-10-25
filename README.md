@@ -42,7 +42,7 @@ One service, ~20 scenarios, each isolating one AITP behavior:
 | **Handshake & TCTs** | the 4-message mutual handshake; per-call capability authorization |
 | **Trust gating** | a call with no/insufficient TCT is rejected (403), then succeeds after handshake; grant intersection |
 | **Delegation** | single-hop delegation and chained (multi-hop) redemption with scope narrowing (RFC-AITP-0006 / 0011) |
-| **Revocation** | fail-closed local revocation and propagation through the Control Plane's list (RFC-AITP-0008). The consuming agent verifies the CP-signed snapshot before applying any entry ([how](docs/aitp-integration.md#revocation-snapshot-ingest)) |
+| **Revocation** | fail-closed local revocation, and per-issuer signed lists (RFC-AITP-0008 §1.5): each agent pulls its own entries from the Control Plane, signs them with its own key, and serves them at `/.well-known/aitp-revocation-list` ([how](docs/aitp-integration.md#each-agents-own-revocation-list-issuer-side)) |
 | **Lifecycle** | key rotation (0003 §8), in-band TCT renewal (0013), a TCT verification cache, session bundles (0010), SPKI pinning |
 | **Discovery** | static localhost, `did:web`, and Control Plane registry — each with graceful fallback |
 | **Control Plane** | optional enrollment, webhooks, trust-anchor provisioning, delegation-tree observability |
@@ -201,7 +201,7 @@ aitp-playground/
 │   ├── capabilities.py    # SDK feature probe (GET /capabilities)
 │   └── conformance.py     # RFC fixture catalog + readiness
 ├── agents/                # agent subprocess workers
-│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm / revocation (revocation_state.py, revocation_refresh.py)
+│   ├── base/              # shared aitp_server / bootstrap / telemetry / llm / revocation (revocation_state.py, revocation_refresh.py, revocation_publish.py)
 │   ├── researcher/        # CrewAI worker
 │   ├── writer/            # LangChain worker
 │   └── analyzer/          # LangGraph worker
