@@ -55,18 +55,18 @@ jobs:
       packages: write
     steps:
       - name: Checkout aitp-playground
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: aitp-playground
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
         # Only push on main + tags. PRs build to validate the Dockerfile but
         # skip auth + push.
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -74,7 +74,7 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -86,7 +86,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build (and push on main / tags)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           # Context is the workspace root — the layout the Dockerfile was
           # written against. On the default AITP_SDK_SOURCE=pypi path the only
@@ -122,8 +122,8 @@ jobs:
       sdk_pin: ${{ steps.filter.outputs.sdk_pin }}
       docker_stack: ${{ steps.filter.outputs.docker_stack }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -213,7 +213,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout aitp-playground
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: aitp-playground
 
@@ -224,7 +224,7 @@ jobs:
         # aitp-rs source, because the sibling CP repo checks in only a
         # darwin-arm64 .node. Removing this checkout breaks the aitp-cp image,
         # not the playground one.
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: agentidentitytrustprotocol/aitp-rs
           path: aitp-rs
@@ -234,13 +234,13 @@ jobs:
         # under the path "aitp-cp" (its historical short name). The repo on
         # GitHub is "aitp-control-plane", so we check it out and rename via
         # the `path` input.
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: agentidentitytrustprotocol/aitp-control-plane
           path: aitp-cp
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Materialize .env for compose
         # docker-compose.test.yml reads aitp-playground/.env for OPENAI_API_KEY
