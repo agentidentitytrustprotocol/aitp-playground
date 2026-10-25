@@ -67,8 +67,9 @@ def test_a_pinned_only_responder_refuses_an_oidc_initiator() -> None:
     a, b = _oidc_initiator(issuer), aitp.AitpAgent.generate()
     _session, responder, hello = _hello(issuer, a, b, b.build_manifest("b", "http://b/x", ["demo.y"]))
 
-    with pytest.raises(RuntimeError, match="does not accept identity type `oidc`"):
+    with pytest.raises(RuntimeError) as exc:
         responder.process_hello(hello)
+    assert exc.value.code == "INCOMPATIBLE_IDENTITY_TYPE"
 
 
 def test_an_oidc_only_initiator_refuses_a_pinned_responder() -> None:
@@ -78,8 +79,9 @@ def test_an_oidc_only_initiator_refuses_a_pinned_responder() -> None:
     session, responder, hello = _hello(issuer, a, b, b_manifest)
     ack, session_id = responder.process_hello(hello)
 
-    with pytest.raises(RuntimeError, match="does not accept identity type `pinned_key`"):
+    with pytest.raises(RuntimeError) as exc:
         session.process_hello_ack(ack, session_id)
+    assert exc.value.code == "INCOMPATIBLE_IDENTITY_TYPE"
 
 
 def test_a_mixed_pair_listing_both_types_completes() -> None:
@@ -132,8 +134,10 @@ def test_an_agent_publishes_the_types_its_bootstrap_lists() -> None:
 
 
 async def test_a_pinned_only_agent_answers_an_oidc_hello_with_a_400() -> None:
+    """The agent has the run issuer configured, as every agent in an OIDC
+    run does, so the issuer is a trust anchor and only the type is refused."""
     issuer = RunOidcIssuer.generate()
-    bootstrap = _agent_bootstrap()
+    bootstrap = {**_agent_bootstrap(), "oidc": _oidc_bootstrap(issuer)["oidc"]}
     agent = agent_bootstrap.create_agent(bootstrap)
     server = AitpServer(
         agent=agent, manifest_json=agent_bootstrap.get_manifest_json(agent, bootstrap),
@@ -148,7 +152,7 @@ async def test_a_pinned_only_agent_answers_an_oidc_hello_with_a_400() -> None:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://b") as b:
         r = await b.post("/aitp/handshake/hello", content=hello)
     assert r.status_code == 400, r.text
-    assert "does not accept identity type `oidc`" in r.json()["error"]
+    assert r.json()["code"] == "INCOMPATIBLE_IDENTITY_TYPE"
 
 
 # ── scenarios ───────────────────────────────────────────────────────────
