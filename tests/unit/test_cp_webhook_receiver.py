@@ -213,7 +213,8 @@ def test_a_late_retry_with_an_old_enqueued_at_is_accepted(client: TestClient) ->
     assert [e["delivery_id"] for e in _delivered(client)] == ["d-late"]
 
 
-@pytest.mark.parametrize("skew", [-301, 301])
+# Clear of the boundary: `int(time.time())` already loses up to a second.
+@pytest.mark.parametrize("skew", [-310, 310])
 def test_a_signed_timestamp_outside_five_minutes_is_rejected(client: TestClient, skew: int) -> None:
     """A captured delivery replayed later: correctly signed, but stale."""
     r = _deliver(client, {
