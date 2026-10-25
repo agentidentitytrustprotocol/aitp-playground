@@ -56,6 +56,7 @@ class BootstrapBuilder:
             cp_block["fail_mode"] = self.settings.revocation_fail_mode
             cp_block["max_staleness_secs"] = self.settings.revocation_max_staleness_secs
             cp_block["poll_secs"] = self.settings.revocation_poll_secs
+            cp_block["list_ttl_secs"] = self.settings.revocation_list_ttl_secs
         if self.settings.cp_api_key:
             cp_block["api_key"] = self.settings.cp_api_key
         # Agents run as separate processes and read CP config from this block,

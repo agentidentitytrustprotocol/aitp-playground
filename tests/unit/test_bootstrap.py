@@ -90,4 +90,6 @@ def test_bootstrap_carries_cp_block_when_configured() -> None:
         "fail_mode": "fail_closed",
         "max_staleness_secs": 300,
         "poll_secs": 60,
+        # The agent's own signed list (issuer side, revocation_publish.py).
+        "list_ttl_secs": 3600,
     }

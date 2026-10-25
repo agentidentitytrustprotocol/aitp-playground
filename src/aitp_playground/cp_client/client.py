@@ -59,8 +59,14 @@ class CpClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("CP ingest_events failed (degraded): %s", exc)
 
-    async def publish_revocation(self, jti: str, reason: str = "") -> bool:
+    async def publish_revocation(
+        self, jti: str, reason: str = "", *, iss: Optional[str] = None
+    ) -> bool:
         """POST /api/revocation/entries — record a TCT jti as revoked.
+
+        ``iss`` is the AID of the agent that issued the TCT. The CP relays each
+        entry back to its issuer to sign, and refuses (400 ISS_REQUIRED) a jti
+        it cannot attribute, so send it whenever it is known.
 
         Returns True on a 2xx, False when CP is disabled or the call failed.
         Idempotent on the CP side; re-posting an existing jti is a no-op.
@@ -69,6 +75,8 @@ class CpClient:
             return False
         url = f"{self.settings.cp_base_url.rstrip('/')}/api/revocation/entries"
         body: dict[str, Any] = {"jti": jti}
+        if iss:
+            body["iss"] = iss
         if reason:
             body["reason"] = reason
         try:

@@ -9,6 +9,8 @@ httpx.MockTransport sidesteps any need for respx/httpx_mock as a test dep.
 """
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -464,3 +466,23 @@ async def test_upsert_pinned_key_posts_body() -> None:
     assert out is not None
     assert '"aid":"aid:x"' in captured["body"]
     assert '"pubkey":"pk43"' in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_publish_revocation_sends_the_issuer_aid() -> None:
+    """CP1.1 relays each entry to its issuer and 400s (ISS_REQUIRED) one it
+    cannot attribute, so the issuing agent's AID travels with the jti."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.read())
+        return httpx.Response(201, json={"jti": "jti-i"})
+
+    _set_transport(httpx.MockTransport(handler))
+    try:
+        cp = _client(httpx.MockTransport(handler))
+        ok = await cp.publish_revocation("jti-i", iss="aid:pubkey:abc")
+    finally:
+        _clear_transport()
+    assert ok is True
+    assert captured["body"] == {"jti": "jti-i", "iss": "aid:pubkey:abc"}

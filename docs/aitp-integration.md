@@ -95,6 +95,56 @@ first or the value is not load-bearing:
 
 Parsing is not the property that matters; *deciding* is.
 
+### Each agent's own revocation list (issuer side)
+
+**Every agent signs and serves its own list.** RFC-AITP-0008 §1.5 makes a
+revocation list valid only for tokens its signer issued (spec fixture rev-011),
+so the control plane signs nothing. It records entries and hands them back to
+their issuer. `IssuerRevocationList` (`agents/base/revocation_publish.py`)
+pulls `GET {CP_BASE_URL}/api/revocations?iss=<own AID>`, signs the full entry
+set with the agent's own key (`AitpAgent.sign_revocation_list`), and
+`AitpServer` serves it at `GET /.well-known/aitp-revocation-list`. That is the
+path aitp-rs serves `ListRevoked` at.
+
+```mermaid
+sequenceDiagram
+    participant R as Runner (revoke_tct, via_cp)
+    participant CP as Control plane
+    participant I as Issuing agent
+    participant V as Verifying peer
+    R->>CP: POST /api/revocation/entries {jti, iss}
+    R->>I: POST /admin/publish-revocations
+    I->>CP: GET /api/revocations?iss=<own AID>
+    CP-->>I: {iss, entries}
+    I->>I: sign_revocation_list(entries)
+    V->>I: GET /.well-known/aitp-revocation-list
+    I-->>V: list signed by the issuer
+```
+
+The list is re-signed before the agent reports ready, on every poll
+(`REVOCATION_POLL_SECS`), after `/admin/rotate-keys`, and on
+`POST /admin/publish-revocations`. Two rules decide what is served. Both follow
+from one fact: an empty signed list asserts that nothing is revoked.
+
+- **The CP is unreachable or answers with an error** (including its own 503
+  `REVOCATION_UNAVAILABLE`): the last list is served unchanged until its signed
+  `expires_at` (`REVOCATION_LIST_TTL_SECS`). It is not re-signed, since that
+  would extend a list nobody can currently confirm.
+- **No list is in force** (never pulled, or expired): the route answers
+  503 `REVOCATION_UNAVAILABLE` with `Retry-After: 30`, never an empty list. A
+  `fail_closed` verifier then refuses this issuer's tokens.
+
+An answer for a different `iss`, or one with a non-UUID jti, is refused as a
+whole, and the last list stays in force. With no control plane configured
+there is no revocation record anywhere, so the agent serves an empty signed
+list. Every agent therefore has one.
+
+Two pieces are still pending. The Manifest does not yet advertise the list
+under `rfc-aitp-0008.revocation_list_uri`, because aitp-py's `build_manifest`
+has no parameter for it (expected in 0.20.0). Verifiers also do not yet fetch
+peer lists: the ingest below still reads the control plane's old aggregate
+list, which CP1.1 removed. Both land with the aitp-sdk 0.20 adoption.
+
 ### Revocation snapshot ingest
 
 **The revocation snapshot has one ingest, and it verifies.** The snapshot

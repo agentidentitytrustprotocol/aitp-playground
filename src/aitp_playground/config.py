@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     # staleness deadline is either meaningless (nothing refreshes) or a time
     # bomb for a long-running scenario.
     revocation_poll_secs: int = 60
+    # How long this agent's own signed revocation list stays valid
+    # (RFC-AITP-0008 §1.5 `expires_at`). It is re-signed on every poll, so this
+    # is only reached when the CP is unreachable: the agent keeps serving the
+    # last list for this long, then stops serving rather than publish an empty
+    # one. The SDK's default.
+    revocation_list_ttl_secs: int = 3600
     cp_timeout_ms: int = 5000
     anthropic_api_key: str = ""
     openai_api_key: str = ""

@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from admin_auth import AdminAuthMiddleware
 from bootstrap import get_manifest_json
+from revocation_publish import REVOCATION_LIST_PATH, RETRY_AFTER_SECS, IssuerRevocationList
 from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
 from oidc import OidcContext, peer_aid_from_hello_envelope
@@ -99,7 +100,10 @@ def ready_lifespan(*, aid: str, port: int, server: "Optional[AitpServer]" = None
         # however tight, closes that window. The refresh has to be complete
         # before we claim to be ready, which is also why it cannot go over
         # HTTP to ourselves: nothing is listening yet.
+        # The same goes for this agent's own signed list: a peer verifying a
+        # TCT we issue straight after the handshake must find a list to fetch.
         if server is not None:
+            await server.publish_revocations_now(quiet=False)
             await server.refresh_revocations_now(quiet=False)
         sys.stdout.write(f"AITP_AGENT_READY aid={aid} port={port}\n")
         sys.stdout.flush()
@@ -146,6 +150,12 @@ class AitpServer:
         # see revocation_state.py for why a single set could not.
         self.revocation: RevocationState = (
             revocation if revocation is not None else RevocationState()
+        )
+        #: This agent's own signed revocation list, for the TCTs it issues
+        #: (RFC-AITP-0008 §1.5). Separate from `revocation`, which is what this
+        #: agent denies as a verifier. See revocation_publish.py.
+        self.issued_revocations = IssuerRevocationList(
+            agent_provider=lambda: self.agent, bootstrap=bootstrap,
         )
         _cp = bootstrap.get("cp") if isinstance(bootstrap.get("cp"), dict) else {}
         #: Whether a control plane is configured at all. With none, this agent
@@ -282,6 +292,7 @@ class AitpServer:
             await asyncio.sleep(self.revocation_poll_secs)
             ticks += 1
             try:
+                await self.publish_revocations_now(quiet=True)
                 ok = await self.refresh_revocations_now(quiet=True)
             except asyncio.CancelledError:
                 raise
@@ -299,6 +310,14 @@ class AitpServer:
                     ),
                 )
             healthy = ok
+
+    async def publish_revocations_now(self, *, quiet: bool) -> dict[str, Any]:
+        """Re-sign this agent's own revocation list from the CP's entries."""
+        try:
+            return await self.issued_revocations.refresh(emit=emit_event, quiet=quiet)
+        except Exception:  # noqa: BLE001 — a refresh must never kill the agent
+            logger.exception("revocation list publish raised")
+            return {"published": False, "cause": "internal_error"}
 
     async def refresh_revocations_now(self, *, quiet: bool) -> bool:
         """One refresh through the shared ingest path. No HTTP hop.
@@ -491,6 +510,35 @@ class AitpServer:
         def get_manifest() -> Response:
             return Response(self._fresh_manifest_json(), media_type="application/json")
 
+        @router.get(REVOCATION_LIST_PATH)
+        def get_revocation_list() -> Response:
+            """`ListRevoked` (RFC-AITP-0005 §11): this agent's signed list.
+
+            503 when no list is in force rather than an empty one: an empty
+            signed list says nothing is revoked, which we cannot vouch for.
+            """
+            signed = self.issued_revocations.serveable()
+            if signed is None:
+                return Response(
+                    json.dumps({
+                        "error": "no current revocation list for this issuer",
+                        "code": "REVOCATION_UNAVAILABLE",
+                    }),
+                    status_code=503,
+                    media_type="application/json",
+                    headers={"Retry-After": str(RETRY_AFTER_SECS), "Cache-Control": "no-store"},
+                )
+            return Response(
+                signed.envelope_json,
+                media_type="application/json",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @router.post("/admin/publish-revocations")
+        async def publish_revocations() -> dict[str, Any]:
+            """Re-sign this agent's list now instead of at the next poll."""
+            return await self.publish_revocations_now(quiet=False)
+
         @router.post("/admin/rotate-keys")
         async def rotate_keys(request: Request) -> Response:
             """Replace this agent's keypair and republish its manifest under
@@ -525,6 +573,8 @@ class AitpServer:
                 self.manifest_json = new_manifest
                 self._manifest_remint_cooldown_until = 0.0
             self._sessions.clear()
+            # The old list names the old issuer; sign one for the new AID.
+            await self.publish_revocations_now(quiet=True)
 
             await emit_event(
                 "identity.key.rotated", self.bootstrap,

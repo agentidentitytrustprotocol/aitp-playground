@@ -565,7 +565,16 @@ class ScenarioRunner:
                 # is the federation story.
                 published_to_cp = await self.cp.publish_revocation(
                     jti, reason=step.reason or f"step {step.id}",
+                    iss=running[step.issuer].aid,
                 )
+                # The issuer re-signs its own list now rather than at its next
+                # poll, so a verifier fetching it straight after sees the jti.
+                async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+                    pr = await client.post(
+                        f"http://localhost:{running[step.issuer].port}"
+                        "/admin/publish-revocations",
+                    )
+                issuer_list = pr.json() if pr.is_success else {"published": False}
                 ctx.emit(RunEvent(
                     type="revocation.published",
                     step_id=step.id, jti=jti,
@@ -597,6 +606,7 @@ class ScenarioRunner:
                     "audience_revoked_count": audience_refreshed,
                     "local_revoke": local_revoke,
                     "refreshed": refreshed,
+                    "issuer_list": issuer_list,
                 })
             step_outputs[step.id] = result_payload
             ctx.emit(RunEvent(
