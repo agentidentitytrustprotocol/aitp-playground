@@ -96,6 +96,18 @@ class ProtocolCase:
     # Validator runs against the terminal run body — receives the whole dict
     # (status / outputs / events / error) and is expected to assert.
     check: Callable[[dict], None]
+    # Set while the scenario is known to fail; a strict xfail, so it is
+    # reported the moment it starts passing again.
+    xfail: str | None = None
+
+
+# CP1.1 (aitp-control-plane #161) removed the CP-signed aggregate list these
+# scenarios pull. They come back once agents fetch each issuer's own list,
+# which needs aitp-sdk 0.20 (the verifier side of PG1.1).
+_VIA_CP_PENDING = (
+    "CP1.1 removed the CP-signed list; the per-issuer verifier side of "
+    "PG1.1 (#103) waits on aitp-sdk 0.20"
+)
 
 
 def _start_run(client: httpx.Client, case: ProtocolCase) -> str:
@@ -419,11 +431,13 @@ SCENARIOS: list[ProtocolCase] = [
         ref="intra-org/revocation-via-cp@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_revocation_via_cp,
+        xfail=_VIA_CP_PENDING,
     ),
     ProtocolCase(
         ref="intra-org/revocation-cp-only@1.0.0",
         inputs={"topic": "AITP self-test"},
         check=_check_revocation_cp_only,
+        xfail=_VIA_CP_PENDING,
     ),
     ProtocolCase(
         ref="intra-org/delegation-multihop@1.0.0",
@@ -471,7 +485,16 @@ def cp_client() -> httpx.Client:
         yield c
 
 
-@pytest.mark.parametrize("case", SCENARIOS, ids=lambda c: c.ref)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            c, id=c.ref,
+            marks=[pytest.mark.xfail(reason=c.xfail, strict=True)] if c.xfail else [],
+        )
+        for c in SCENARIOS
+    ],
+)
 def test_protocol_scenario(
     client: httpx.Client, cp_client: httpx.Client, case: ProtocolCase
 ) -> None:
