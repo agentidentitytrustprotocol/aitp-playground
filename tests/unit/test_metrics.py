@@ -55,6 +55,99 @@ def test_record_event_run_cancelled_counts_as_cancelled_and_decrements_once() ->
     assert snap["gauges"][("aitp_playground_runs_active", ())] == 0.0
 
 
+_ACTIVE = ("aitp_playground_runs_active", ())
+
+
+def _refused(code: str) -> float:
+    return metrics.snapshot()["counters"].get(
+        ("aitp_playground_runs_refused_total", (("code", code),)), 0.0,
+    )
+
+
+def test_refusal_counts_and_leaves_active_runs_alone() -> None:
+    """A run.failed with no run.started before it was refused at preflight:
+    counted by code, still a failed run, and never subtracted from a
+    different run that is genuinely active."""
+    record_event({"type": "run.started", "run_id": "live"})
+    record_event({
+        "type": "run.failed", "run_id": "refused", "code": "sdk_feature_unavailable",
+    })
+    snap = metrics.snapshot()
+    assert _refused("sdk_feature_unavailable") == 1.0
+    assert snap["counters"][("aitp_playground_runs_total", (("status", "failed"),))] == 1.0
+    assert snap["gauges"][_ACTIVE] == 1.0  # "live" is still running
+
+
+def test_refusal_without_code_is_labelled_unknown() -> None:
+    record_event({"type": "run.failed", "run_id": "r"})
+    assert _refused("unknown") == 1.0
+
+
+def test_started_then_failed_is_not_a_refusal() -> None:
+    record_event({"type": "run.started", "run_id": "a"})
+    record_event({"type": "run.started", "run_id": "b"})
+    record_event({"type": "run.failed", "run_id": "a", "code": "internal_error"})
+    assert metrics.snapshot()["gauges"][_ACTIVE] == 1.0
+    assert _refused("internal_error") == 0.0
+
+
+def test_terminal_event_decrements_only_once_per_run() -> None:
+    record_event({"type": "run.started", "run_id": "a"})
+    record_event({"type": "run.started", "run_id": "b"})
+    record_event({"type": "run.cancelled", "run_id": "a"})
+    record_event({"type": "run.failed", "run_id": "a"})  # stray second terminal
+    assert metrics.snapshot()["gauges"][_ACTIVE] == 1.0
+
+
+def test_duplicate_run_started_counts_once() -> None:
+    record_event({"type": "run.started", "run_id": "a"})
+    record_event({"type": "run.started", "run_id": "a"})
+    assert metrics.snapshot()["gauges"][_ACTIVE] == 1.0
+    record_event({"type": "run.complete", "run_id": "a"})
+    assert metrics.snapshot()["gauges"][_ACTIVE] == 0.0
+
+
+def test_events_without_run_id_keep_the_old_accounting() -> None:
+    record_event({"type": "run.started"})
+    record_event({"type": "run.failed"})
+    assert metrics.snapshot()["gauges"][_ACTIVE] == 0.0
+    assert _refused("unknown") == 0.0
+
+
+def test_reset_forgets_started_runs() -> None:
+    record_event({"type": "run.started", "run_id": "a"})
+    metrics.reset()
+    record_event({"type": "run.failed", "run_id": "a", "code": "x"})
+    assert _refused("x") == 1.0
+
+
+def test_concurrent_lifecycles_leave_no_leak() -> None:
+    import threading
+
+    started = threading.Barrier(50)
+
+    def lifecycle(i: int) -> None:
+        record_event({"type": "run.started", "run_id": f"r{i}"})
+        started.wait()  # all 50 active at once before any finishes
+        record_event({"type": "run.complete", "run_id": f"r{i}"})
+
+    threads = [threading.Thread(target=lifecycle, args=(i,)) for i in range(50)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert metrics.run_finished("r0") is False  # every id was discarded
+    assert metrics.snapshot()["gauges"][_ACTIVE] == 0.0
+    assert metrics.snapshot()["counters"][
+        ("aitp_playground_runs_total", (("status", "success"),))
+    ] == 50.0
+
+
+def test_runs_refused_total_is_in_the_exposition() -> None:
+    text = format_prometheus()
+    assert "# HELP aitp_playground_runs_refused_total" in text
+
+
 def test_record_event_handshake_and_tct() -> None:
     record_event({"type": "trust.established"})
     record_event({"type": "trust.established"})

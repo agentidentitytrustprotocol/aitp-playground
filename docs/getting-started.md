@@ -190,8 +190,8 @@ per-process token only the playground's own agents hold. See
 | `GET  /healthz` | Liveness |
 | `GET  /capabilities` | Installed `aitp` wheel + which optional features it exposes ([capabilities.md](capabilities.md)) |
 | `GET  /packs` | List loaded scenario packs |
-| `GET  /scenarios` | List all scenarios with refs |
-| `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed (+ template list) |
+| `GET  /scenarios` | List all scenarios with refs, plus `sdk_features_required` / `sdk_available` |
+| `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed (+ template list); same SDK fields, per template too |
 | `POST /runs` | Start a run (async; returns run_id immediately). Body accepts `template` to run a variant and an optional free-form `run_label` (echoed back in the create/list/get responses). |
 | `GET  /runs` | List recent runs (in-memory by default; `RUN_HISTORY_DB` makes them durable) |
 | `GET  /runs/{id}` | Full run record incl. outputs and events |

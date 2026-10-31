@@ -33,6 +33,10 @@ class Metrics:
         self._gauges: dict[tuple[str, Labels], float] = {}
         # Help text registered the first time a metric is touched.
         self._help: dict[str, str] = {}
+        # Runs that emitted run.started and no terminal event yet. A terminal
+        # event for a run not in here was refused before it started, so it
+        # must not decrement runs_active.
+        self._started_runs: set[str] = set()
 
     def reset(self) -> None:
         """Clear all observations but keep the registered-metric baseline.
@@ -45,8 +49,26 @@ class Metrics:
         with self._lock:
             self._counters.clear()
             self._gauges.clear()
+            self._started_runs.clear()
             for name in self._help:
                 self._counters[(name, ())] = 0.0
+
+    def run_started(self, run_id: str) -> bool:
+        """Record ``run_id`` as started. False if it already was."""
+        with self._lock:
+            if run_id in self._started_runs:
+                return False
+            self._started_runs.add(run_id)
+            return True
+
+    def run_finished(self, run_id: str) -> bool:
+        """Forget ``run_id``. True if it had started (so it was counted in
+        runs_active), False if it was refused before ``run.started``."""
+        with self._lock:
+            if run_id in self._started_runs:
+                self._started_runs.discard(run_id)
+                return True
+            return False
 
     def register(self, name: str, help_text: str) -> None:
         """Idempotently register a metric's help text. Safe to call even
@@ -66,6 +88,13 @@ class Metrics:
         key = (name, _norm(labels))
         with self._lock:
             self._gauges[key] = value
+
+    def add_gauge(self, name: str, delta: float, *, floor: float | None = None) -> None:
+        """Atomically add ``delta`` to an unlabelled gauge, clamped at ``floor``."""
+        key = (name, ())
+        with self._lock:
+            value = self._gauges.get(key, 0.0) + delta
+            self._gauges[key] = value if floor is None else max(floor, value)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -93,6 +122,7 @@ _KEY_ROTATIONS_TOTAL = "aitp_playground_key_rotations_total"
 _CAPABILITY_CALLS_TOTAL = "aitp_playground_capability_calls_total"
 _STEP_OUTCOMES_TOTAL = "aitp_playground_step_outcomes_total"
 _RUNS_ACTIVE = "aitp_playground_runs_active"
+_RUNS_REFUSED_TOTAL = "aitp_playground_runs_refused_total"
 
 metrics.register(_RUNS_TOTAL, "Scenario runs by terminal status")
 metrics.register(_HANDSHAKES_TOTAL, "AITP handshakes by outcome")
@@ -103,6 +133,10 @@ metrics.register(_KEY_ROTATIONS_TOTAL, "Agent key rotations")
 metrics.register(_CAPABILITY_CALLS_TOTAL, "Capability invocations by outcome")
 metrics.register(_STEP_OUTCOMES_TOTAL, "Workflow steps by type and outcome")
 metrics.register(_RUNS_ACTIVE, "Scenario runs currently executing")
+metrics.register(
+    _RUNS_REFUSED_TOTAL,
+    "Scenario runs that failed before run.started, by run.failed code",
+)
 
 
 # ── Event → metric mapping ──────────────────────────────────────────────────
@@ -120,17 +154,24 @@ def record_event(event: Mapping[str, Any]) -> None:
     if not etype:
         return
 
+    run_id = event.get("run_id")
     if etype == "run.started":
-        # Gauge increment via a manual read; counters can also serve as
-        # "active" but the convention is gauge for a current count.
-        snap = metrics.snapshot()
-        cur = snap["gauges"].get((_RUNS_ACTIVE, ()), 0.0)
-        metrics.set(_RUNS_ACTIVE, cur + 1)
+        if run_id is not None and not metrics.run_started(str(run_id)):
+            return  # a duplicate run.started must not count twice
+        # A gauge, by convention, for a current count. add_gauge is one
+        # locked read-modify-write, so concurrent runs can't lose an update.
+        metrics.add_gauge(_RUNS_ACTIVE, 1)
         return
     if etype in ("run.complete", "run.failed", "run.cancelled"):
-        snap = metrics.snapshot()
-        cur = snap["gauges"].get((_RUNS_ACTIVE, ()), 0.0)
-        metrics.set(_RUNS_ACTIVE, max(0.0, cur - 1))
+        # Without a run_id there is no way to tell, so keep the old
+        # decrement. With one, only a run that started was ever counted.
+        started = True if run_id is None else metrics.run_finished(str(run_id))
+        if started:
+            metrics.add_gauge(_RUNS_ACTIVE, -1, floor=0.0)
+        elif etype == "run.failed":
+            # Refused before run.started: unknown scenario, missing SDK
+            # feature. Still a failed run in runs_total below.
+            metrics.inc(_RUNS_REFUSED_TOTAL, {"code": str(event.get("code") or "unknown")})
         status = etype.split(".", 1)[1]  # "complete" -> "complete" etc.
         # Normalize complete -> success so the labels read naturally.
         if status == "complete":

@@ -227,6 +227,15 @@ A step's `type` defaults sensibly when omitted:
 | `cp_delegation_tree` | `agent` | Flush the run's events to the CP (awaiting the ingest so the projection is populated mid-run), then walk the named delegator's delegation chain as the Control Plane observed it (`GET /api/delegations` with a recursive `root_jti` query) and emit `cp.delegation.tree`. When `CP_BASE_URL` is unset the step skips. See `intra-org/cp-delegation-tree`. |
 | _(implicit `meta`)_ | — | Not a writable `type`: a step that omits `type` and lacks either `agent` or `capability` is classified as `meta`, is skipped, and records `step.skipped` (useful for narration). Writing `type: meta` explicitly fails validation. |
 
+Three step types need an optional SDK feature: `renew_tct` (`tct_renewal`),
+`export_session_bundle` and `verify_session_bundle` (`session_bundle`).
+From `aitp-sdk` 0.24 these are opt-in build features. A scenario's
+requirements are derived from its resolved steps (a template can add or
+remove them); the scenario listings report them as
+`sdk_features_required` / `sdk_available`, and a run on a wheel without
+them is refused before any agent starts — see
+[capabilities.md](capabilities.md#graceful-degradation).
+
 ### Fault injection
 
 Only `handshake`, `workflow`, and `capability_probe` steps can carry a
@@ -384,6 +393,11 @@ uv run python -m aitp_playground.cli dry-run intra-org/research-and-write@1.0.0 
 
 `dry-run` adds schema validation against the scenario's `inputs.schema`
 and prints the agent/capability layout.
+
+Both print `sdk features: <feature> (available)` or
+`(MISSING in aitp-sdk <version>)` for a scenario whose steps need an
+optional SDK feature. For `validate` that is a warning (the YAML is fine);
+`dry-run` exits 1, because a real run would be refused.
 
 ## Worked example — adding a scenario
 

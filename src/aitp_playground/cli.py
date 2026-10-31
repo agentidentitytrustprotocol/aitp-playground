@@ -10,9 +10,12 @@ from typing import Iterable
 
 import jsonschema
 
+from .capabilities import get_capabilities, missing_sdk_features, required_sdk_features
 from .config import get_settings
 from .errors import PlaygroundError
+from .registry.models import ScenarioVersion
 from .registry.service import RegistryService
+from .registry.templates import apply_template
 
 _KEBAB = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
@@ -20,6 +23,21 @@ _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 def _registry() -> RegistryService:
     return RegistryService(get_settings())
+
+
+def _sdk_feature_lines(sv: ScenarioVersion) -> tuple[list[str], bool]:
+    """Lines describing ``sv``'s optional SDK features, and whether all of
+    them are present in the installed SDK."""
+    required = required_sdk_features(sv)
+    if not required:
+        return [], True
+    missing = set(missing_sdk_features(sv))
+    version = get_capabilities().get("version") or "(none)"
+    parts = [
+        f"{f} (MISSING in aitp-sdk {version})" if f in missing else f"{f} (available)"
+        for f in required
+    ]
+    return [f"sdk features: {', '.join(parts)}"], not missing
 
 
 def cmd_list(_: argparse.Namespace) -> int:
@@ -56,8 +74,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
         for sv in scenarios:
             ref = f"{sv.metadata.pack}/{sv.metadata.scenario}@{sv.metadata.version}"
             print(f"ok  {ref}")
+            # A missing feature is a warning, not a failure: the YAML is
+            # valid, only this SDK can't run it.
+            lines, _ = _sdk_feature_lines(sv)
+            for line in lines:
+                print(f"      {line}")
             for tpl in reg.list_templates(ref):
                 print(f"ok    template {tpl.metadata.name}")
+                tpl_lines, _ = _sdk_feature_lines(apply_template(sv, tpl))
+                for line in tpl_lines:
+                    print(f"        {line}")
         if not filter_to_subset:
             for ref in reg.all_agent_refs():
                 print(f"ok  agent {ref}")
@@ -84,6 +110,9 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
             print(f"inputs INVALID: {exc.message}", file=sys.stderr)
             return 1
     print(f"Scenario: {sv.metadata.name}")
+    feature_lines, features_ok = _sdk_feature_lines(sv)
+    for line in feature_lines:
+        print(line)
     print(
         f"Trust:    boundary={sv.spec.trust.boundary} "
         f"discovery={sv.spec.trust.discovery} eager={sv.spec.trust.eager}"
@@ -103,6 +132,10 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
             for t in available:
                 summary = t.metadata.summary or "(no summary)"
                 print(f"  - {t.metadata.name}: {summary.strip()}")
+    if not features_ok:
+        # A real run would be refused before spawning (sdk_feature_unavailable).
+        print("FAIL  the installed aitp-sdk lacks a feature this scenario needs", file=sys.stderr)
+        return 1
     return 0
 
 

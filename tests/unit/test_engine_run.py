@@ -22,6 +22,7 @@ import aitp
 import httpx
 import pytest
 
+from aitp_playground.capabilities import ALL_FEATURES
 from aitp_playground.config import Settings
 from aitp_playground.errors import ScenarioNotFoundError
 from aitp_playground.hosting.adapters.base import ManifestValidation
@@ -336,6 +337,13 @@ def _agent_manifest(agent_id: str, caps: list[str], identity_type: str = "pinned
     })
 
 
+def all_sdk_features() -> dict[str, Any]:
+    return {
+        "sdk_available": True, "version": "test",
+        "features": {name: True for name in ALL_FEATURES},
+    }
+
+
 def make_env(
     *,
     agents: dict[str, list[str]],
@@ -390,6 +398,9 @@ def make_env(
         port_alloc=ports,
         config=settings,
         store=store,
+        # Every optional SDK feature present, so the renew_tct and session
+        # bundle step tests (mocked agents) also run on a stable-only wheel.
+        capabilities_provider=all_sdk_features,
         )
     return SimpleNamespace(
         runner=runner, supervisor=supervisor, ports=ports, store=store,

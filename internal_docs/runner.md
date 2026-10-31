@@ -26,9 +26,14 @@ through `RunStore`.
 
 ```
 ScenarioRunner.run
-├─ 1. Load scenario from registry
+├─ 1. Load scenario from registry (template applied)
+│       unknown → run.failed code=scenario_not_found
+├─ 1b. SDK feature preflight (capabilities.missing_sdk_features)
+│       missing → run.failed code=sdk_feature_unavailable, no run.started
+│   emit run.started
 ├─ 2. Validate inputs against scenario.spec.inputs.schema (jsonschema)
-├─ 3. Per agent:
+│       invalid → run.failed code=inputs_invalid
+├─ 3. Per agent (inside the run try from here on):
 │       allocate port (port_offset honored, else monotonic)
 │       resolve manifest
 │       build placeholder peers (localhost URLs)
@@ -55,9 +60,19 @@ ScenarioRunner.run
     (best-effort POST events to CP /events as a background task)
 ```
 
-Any unhandled exception inside steps 4-7 fails the run with
-`run.failed` and the exception's message as `error`. Cleanup always
-runs.
+Any unhandled exception inside steps 3-7 fails the run with
+`run.failed`, the exception's message as `error`, and as `code` the
+`PlaygroundError` code (`internal_error`, `agent_spawn_error`, …), or
+`null` for any other exception (a foreign `code` attribute is ignored). Cleanup always runs: ports are allocated one by one
+into the run's dict, so a failure part-way still releases the ones taken.
+
+Failures before `run.started` (steps 1 and 1b) are *refusals*: they emit
+only `run.failed`, and `/metrics` counts them in
+`aitp_playground_runs_refused_total{code}` without touching
+`runs_active`. The preflight reads the SDK report through
+`ScenarioRunner.capabilities_provider` (default
+`capabilities.get_capabilities`); tests inject an all-features or
+absent-feature report there.
 
 ## Bootstrap and peer placeholder
 
@@ -192,9 +207,11 @@ on `target` will present the redeemed TCT.
 ### Identity, renewal, and bundle steps
 
 These dispatch the same way — resolve the named agent(s), POST the
-matching `/admin/*` route, emit a domain event then `step.complete`. Most
-are gated behind an SDK `experimental-*` feature and degrade cleanly when
-the wheel lacks it (see [capabilities.md](../docs/capabilities.md)). Field-level
+matching `/admin/*` route, emit a domain event then `step.complete`.
+`renew_tct`, `export_session_bundle` and `verify_session_bundle` need an
+optional SDK feature (`STEP_SDK_FEATURES`); a run containing one is refused
+at preflight when the wheel lacks it (see
+[capabilities.md](../docs/capabilities.md#graceful-degradation)). Field-level
 reference lives in [scenarios.md](../docs/scenarios.md#workflow-steps); the engine
 behavior:
 
@@ -267,7 +284,7 @@ log — see [agents.md](agents.md). The narrator
 | `oidc.issuer_minted` | issuer url, kid | When a scenario has any `identity_type: oidc` agent. |
 | `trust.peers_resolved` | `peers: {agent_id: manifest_url}` | After `TrustOrchestrator.resolve_peers`. |
 | `run.complete` | — | Workflow finished cleanly. |
-| `run.failed` | `error` | Exception inside spawn / step. |
+| `run.failed` | `error`, `code` | Refusal before start (`scenario_not_found`, `sdk_feature_unavailable`), invalid inputs (`inputs_invalid`), or an exception inside spawn / step (the `PlaygroundError` code, else `null`). |
 
 **Trust, delegation, revocation, identity**
 

@@ -10,8 +10,11 @@ this probe still reports what the *currently installed* wheel provides.
 This module reports what the *currently installed* wheel actually provides so
 that:
 
-* scenarios requiring a missing feature degrade with a clear
-  "feature-not-available" status instead of crashing mid-run, and
+* a scenario whose workflow needs a missing feature is refused before any
+  agent is spawned (``ScenarioRunner.run`` preflight, ``run.failed`` with
+  ``code="sdk_feature_unavailable"``) instead of crashing mid-run. A
+  scenario's requirements are derived from its step types
+  (``STEP_SDK_FEATURES``), never declared by hand, and
 * operators can see the SDK's true surface at runtime (``GET /capabilities``).
 
 Detection mirrors the ``hasattr`` convention already used in
@@ -22,7 +25,10 @@ feature reports ``False`` and ``sdk_available`` is ``False``.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
+
+if TYPE_CHECKING:
+    from .registry.models import ScenarioVersion
 
 # Stable feature keys. Scenarios reference these names when declaring a
 # required SDK capability, so keep them stable across releases.
@@ -74,10 +80,14 @@ def _probe() -> dict[str, Any]:
     agent = getattr(aitp, "AitpAgent", None)
     features = {
         FEATURE_OIDC: hasattr(aitp, "JwksProvider"),
-        FEATURE_SESSION_BUNDLE: hasattr(aitp, "SessionBundleBuilder"),
+        FEATURE_SESSION_BUNDLE: hasattr(aitp, "SessionBundleBuilder")
+        and hasattr(aitp, "verify_session_bundle"),
         FEATURE_SPKI_PINNING: hasattr(aitp, "SpkiPinVerifier"),
+        # Both halves: a wheel with only one would pass the probe and then
+        # fail on the issuer (or holder) side. Mirrors agents/base/sdk_features.py.
         FEATURE_TCT_RENEWAL: agent is not None
-        and hasattr(agent, "build_renewal_request"),
+        and hasattr(agent, "build_renewal_request")
+        and hasattr(agent, "process_renewal_request"),
         FEATURE_TCT_CACHE: hasattr(aitp, "TctStore"),
         FEATURE_MULTIHOP_DELEGATION: hasattr(
             aitp, "verify_delegation_multihop"
@@ -109,3 +119,36 @@ def has_feature(name: str) -> bool:
 def sdk_available() -> bool:
     """True if the real ``aitp`` SDK is importable."""
     return bool(get_capabilities()["sdk_available"])
+
+
+# Workflow step types that call an optional SDK feature, and which one. A
+# scenario's requirements are the union over its resolved steps, so a
+# template that adds or drops a gated step changes them with no YAML to
+# keep in sync. A step type not listed here needs only the stable surface.
+STEP_SDK_FEATURES: Mapping[str, str] = {
+    "renew_tct": FEATURE_TCT_RENEWAL,
+    "export_session_bundle": FEATURE_SESSION_BUNDLE,
+    "verify_session_bundle": FEATURE_SESSION_BUNDLE,
+}
+
+CapabilitiesProvider = Callable[[], dict[str, Any]]
+
+
+def required_sdk_features(scenario: "ScenarioVersion") -> list[str]:
+    """The optional SDK features ``scenario``'s workflow calls, sorted."""
+    return sorted({
+        STEP_SDK_FEATURES[step.type]
+        for step in scenario.spec.workflow.steps
+        if step.type in STEP_SDK_FEATURES
+    })
+
+
+def missing_sdk_features(
+    scenario: "ScenarioVersion",
+    capabilities: Optional[CapabilitiesProvider] = None,
+) -> list[str]:
+    """The required features the installed SDK lacks. With no SDK at all,
+    every requirement is missing."""
+    caps = (capabilities or get_capabilities)()
+    features = caps["features"] if caps["sdk_available"] else {}
+    return [f for f in required_sdk_features(scenario) if not features.get(f, False)]

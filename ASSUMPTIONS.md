@@ -150,3 +150,19 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
   successor release existing; P16 is a pre-merge check *inside* that phase, not why it
   hasn't shipped) and is now `**Blocks:** nothing today` / `**Gates:** Phase 5's eventual
   adoption`. See `DECISIONS.md` D-21.
+
+## #117 D5 — keep the multihop redeem branch, guarded
+- **Plan:** plans/sdk-experimental-features.md
+- **Assumed:** the `allow_multihop_delegation` branch in `aitp_server.py` stays, though no shipped scenario sets the flag (test-only today).
+- **Chose:** guard it with the same 501 as the other gated surfaces; it is the playground's only end-to-end exercise of `verify_delegation_multihop`.
+- **Alternatives:** wire it through `AgentSpec` (a feature #117 doesn't ask for); delete it (separate cleanup).
+- **Blast radius if wrong:** a small dead branch plus its tests; removable in one commit.
+- **Status:** UNCONFIRMED
+
+## #117 D7 — hosted demo and docker stacks build the `experimental` wheel
+- **Plan:** plans/sdk-experimental-features.md (Phase 4, BLOCKED-ON aitp-rs 1.0-rc)
+- **Assumed:** the two gated demos (`tct-renewal`, `session-bundle`) should stay runnable on Railway after 0.24.
+- **Chose:** a source build with `--features experimental` for Railway/docker images; plain `uv sync` and default CI stay on the default wheel.
+- **Alternatives:** ship the default wheel and let the two scenarios refuse cleanly (safe after Phases 1–3, but removes two public demos).
+- **Blast radius if wrong:** minutes added per image build; reversible with one build argument.
+- **Status:** UNCONFIRMED

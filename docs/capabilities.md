@@ -86,22 +86,45 @@ and the
 
 ## Graceful degradation
 
-Scenarios that exercise a feature-gated surface check `GET /capabilities`
-(or the SDK raises) and degrade cleanly when the wheel lacks the feature —
-the step records a "feature not available" outcome instead of crashing the
-run. This is why you can run the whole scenario catalog against a
-core-only wheel and still get a clean event log.
+From `aitp-sdk` 0.24 (aitp-rs 1.0-rc), renewal, session bundles and
+multi-hop delegation are opt-in build features (`experimental`), so a
+default wheel lacks them. The playground handles a missing feature at two
+levels:
 
-The feature-gated step types and their scenarios:
+- **Run preflight.** A scenario's SDK requirements are derived from its
+  workflow step types (`STEP_SDK_FEATURES` in
+  `src/aitp_playground/capabilities.py`), after any template is applied;
+  scenarios never declare them. If the installed wheel lacks one,
+  `ScenarioRunner.run` refuses the run before spawning any agent:
+  `POST /runs` still returns 202, and the run ends `failed` with one
+  `run.failed` event carrying `code: "sdk_feature_unavailable"` and an
+  error such as
+  `sdk_feature_unavailable: intra-org/tct-renewal@1.0.0 needs tct_renewal; the installed aitp-sdk 0.24.0 lacks it`.
+  There is no `run.started`. A refused run still counts against
+  `MAX_RUNS_PER_HOUR`, like the other preflight failures (unknown scenario,
+  invalid inputs).
+- **Discovery.** `GET /scenarios`, `GET /scenarios/{ref}` (and each of its
+  templates), `GET /scenarios/{ref}/templates` and
+  `GET /scenarios/{ref}/templates/{name}` report `sdk_features_required`
+  (sorted list) and `sdk_available` (bool), so a client can grey out what
+  this deployment can't run. `cli validate` prints the requirement as a
+  warning; `cli dry-run` exits 1 when a feature is missing.
 
-| Feature | Step types | Demo scenario |
-| --- | --- | --- |
-| `oidc` | (handshake with an `identity_type: oidc` agent) | `intra-org/oidc-identity` |
-| `tct_renewal` | `renew_tct` | `intra-org/tct-renewal` |
-| `tct_cache` | `tct_cache_stats` | `intra-org/tct-cache-perf` |
-| `session_bundle` | `export_session_bundle`, `verify_session_bundle` | `intra-org/session-bundle` |
-| `spki_pinning` | `spki_pin_check` | `intra-org/spki-pinning` |
-| `multihop_delegation` | `delegate` / `redeem_delegation` (2-hop) | `intra-org/delegation-multihop` |
+The step types that need an optional feature, and their scenarios. Only
+the rows marked *gated* are refused at preflight; the others are probed
+for reporting only:
+
+| Feature | Step types | Demo scenario | Preflight |
+| --- | --- | --- | --- |
+| `oidc` | (handshake with an `identity_type: oidc` agent) | `intra-org/oidc-identity` | stable |
+| `tct_renewal` | `renew_tct` | `intra-org/tct-renewal` | *gated* |
+| `tct_cache` | `tct_cache_stats` | `intra-org/tct-cache-perf` | stable |
+| `session_bundle` | `export_session_bundle`, `verify_session_bundle` | `intra-org/session-bundle` | *gated* |
+| `spki_pinning` | `spki_pin_check` | `intra-org/spki-pinning` | stable |
+| `multihop_delegation` | `delegate` / `redeem_delegation` (2-hop) | `intra-org/delegation-multihop` | stable (the scenario redeems hop by hop; `verify_delegation_multihop` is not on its path) |
+
+`tct_renewal` reports present only when the wheel has **both**
+`AitpAgent.build_renewal_request` and `process_renewal_request`.
 
 See [aitp-integration.md](aitp-integration.md#draft-and-extension-surfaces)
 for where each SDK surface is actually called.
