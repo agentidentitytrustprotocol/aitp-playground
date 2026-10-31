@@ -46,6 +46,7 @@ from agent_admin import build_admin_router  # noqa: E402
 from aitp_server import AitpServer  # noqa: E402
 from pop_challenges import decode_header, encode_header  # noqa: E402
 from revocation_state import RevocationState  # noqa: E402
+from tests._sdk_features import requires_sdk_feature  # noqa: E402
 
 
 def _events(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
@@ -399,6 +400,7 @@ def test_renew_tct_without_a_held_tct_is_412() -> None:
     assert "no tct held" in resp.text.lower()
 
 
+@requires_sdk_feature("tct_renewal")
 def test_renew_tct_success_swaps_the_held_tct_for_a_fresh_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -434,6 +436,7 @@ def test_renew_tct_success_swaps_the_held_tct_for_a_fresh_one(
 # ── /admin/export-session-bundle + /admin/verify-session-bundle ──────────
 
 
+@requires_sdk_feature("session_bundle")
 def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """The success complement to `test_agent_admin_routes.py`'s tampered-bundle
     test. Uses the `participant_tcts` override the export route's own

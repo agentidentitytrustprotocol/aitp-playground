@@ -114,10 +114,55 @@ measurement — not one aggregate, so a regression in `src/` can't hide behind
 
 Add `--cov` locally if you want a report before pushing.
 
+### Optional SDK features: `@requires_sdk_feature`
+
+From `aitp-sdk` 0.24, TCT renewal, session bundles and multi-hop
+delegation are built only with the `experimental` feature (#117). A test
+that drives a **real** call to one of them carries
+`@requires_sdk_feature("tct_renewal" | "session_bundle" | "multihop_delegation")`
+from `tests/_sdk_features.py`:
+
+- every marked test is tagged `sdk_feature(<key>)`, so
+  `pytest -m sdk_feature tests/unit --collect-only` lists them;
+- on a wheel without the feature it is skipped
+  (`aitp-sdk built without <key> (experimental)`);
+- with `AITP_EXPECT_EXPERIMENTAL=1` a missing feature **fails** the test
+  instead (in setup, via `tests/conftest.py`), so a broken experimental
+  build can't pass by skipping. This mirrors aitp-rs
+  `bindings/aitp-py/tests/_experimental.py`.
+
+Presence is `agents/base/sdk_features.has`, the check the agent routes
+use. Tests that *simulate* absence (`monkeypatch.delattr(..., raising=False)`
+or a fake `capabilities_provider`) must not carry the marker; they hold
+on every wheel. A test whose only gated step is mocked (the engine's
+`renew_tct` step tests, which inject an all-features provider) is not
+marked either.
+
+`tests/_stable_only_sdk.py` is a pytest plugin that deletes the five
+experimental attributes from the installed wheel before collection. Load it
+only in a subprocess (it would strip the running session's SDK):
+
+```bash
+uv run python -m pytest tests/unit -p tests._stable_only_sdk
+```
+
 ## Layer 2 — integration (`tests/integration/`)
 
-Two files, both gated behind env vars so they stay off the default
-suite.
+The live files are gated behind env vars so they stay off the default
+suite. `test_stable_only_sdk.py` is not gated.
+
+### `test_stable_only_sdk.py` — no gate
+
+Re-runs `tests/unit` in subprocesses with the stable-only plugin above and
+checks two things:
+- without `AITP_EXPECT_EXPERIMENTAL`, the run passes and the skipped tests
+  are exactly the `@requires_sdk_feature` tests;
+- with `AITP_EXPECT_EXPERIMENTAL=1`, exactly those tests fail.
+
+The subprocesses run in parallel, each with its own `TMPDIR`; the file
+takes about as long as the unit suite. CI runs it in the integration job,
+which also clones `aitp-verifier-py` because the re-run unit suite includes
+the JCS drift guard, and that guard fails under `CI` without the checkout.
 
 ### `test_runner.py` — `AITP_E2E=1`
 
@@ -284,6 +329,7 @@ for spawned agents.
 | --- | --- | --- | --- | --- |
 | `tests/unit/` | default | no | no | seconds |
 | `tests/integration/test_runner.py` | `AITP_E2E=1` | no (stubs) | yes | ~30-45s |
+| `tests/integration/test_stable_only_sdk.py` | default | no | no (re-runs `tests/unit`) | ~30s |
 | `tests/integration/test_protocol_e2e.py` | `AITP_PROTOCOL_E2E=1` | no (stubs) | yes (Docker recommended) | minutes |
 | `tests/integration/test_llm_e2e.py` | `AITP_LLM_E2E=1` | yes | yes (Docker recommended) | minutes |
 | `tests/scenarios/*` | currently skipped | — | — | — |

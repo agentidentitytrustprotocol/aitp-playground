@@ -24,14 +24,15 @@ pytest.importorskip(
     "cryptography", reason="cryptography not installed", exc_type=ImportError,
 )
 
-# Surfaces that depend on Cargo features the wheel may have been built
-# without — skip individual tests rather than fail collection.
-_HAS_BUNDLE = hasattr(aitp, "SessionBundleBuilder")
+from tests._sdk_features import requires_sdk_feature  # noqa: E402
+
+# Surfaces a default wheel may lack. Renewal and session bundles are
+# experimental from aitp-sdk 0.24 and use the shared marker (it fails
+# instead of skipping under AITP_EXPECT_EXPERIMENTAL=1); the rest are in
+# the default build and only skip on an unusual --no-default-features wheel.
 _HAS_PINNING = hasattr(aitp, "SpkiPinVerifier")
-_HAS_RENEWAL = hasattr(aitp.AitpAgent, "build_renewal_request")
 _HAS_OIDC = hasattr(aitp, "JwksProvider")
 _HAS_TCT_CACHE = hasattr(aitp, "TctStore")
-_HAS_MULTIHOP = hasattr(aitp, "verify_delegation_multihop")
 
 
 def _claims(token: str) -> dict:
@@ -72,7 +73,7 @@ def test_unknown_signing_suite_rejected() -> None:
 # ── TCT renewal ─────────────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(not _HAS_RENEWAL, reason="aitp built without experimental-renewal")
+@requires_sdk_feature("tct_renewal")
 def test_tct_renewal_round_trip() -> None:
     """Build a TCT via a full handshake, renew it, and confirm the new
     envelope has a different jti but identical subject + grants."""
@@ -152,7 +153,7 @@ def _participant_handshake(participant, coordinator, coord_manifest):
     return json.loads(sess.complete(commit_ack, revoked_jtis=set()))["tct"]
 
 
-@pytest.mark.skipif(not _HAS_BUNDLE, reason="aitp built without experimental-bundle")
+@requires_sdk_feature("session_bundle")
 def test_session_bundle_export_and_verify() -> None:
     """RFC-0010 bundle round-trip: coordinator is the issuer
     (responder), participants are initiators. The coordinator-issued
@@ -197,14 +198,14 @@ _TEST_CERT_DER_B64 = (
 _TEST_CERT_SPKI_B64 = "oFCDfYUHBYLM9zlLCYiEfMMSy4glm4lImfbyOc8XkaU="
 
 
-@pytest.mark.skipif(not _HAS_PINNING, reason="aitp built without experimental-pinning")
+@pytest.mark.skipif(not _HAS_PINNING, reason="aitp built without spki-pinning")
 def test_compute_spki_hash_is_deterministic() -> None:
     der = base64.b64decode(_TEST_CERT_DER_B64)
     computed = bytes(aitp.compute_spki_hash(der))
     assert base64.b64encode(computed).decode() == _TEST_CERT_SPKI_B64
 
 
-@pytest.mark.skipif(not _HAS_PINNING, reason="aitp built without experimental-pinning")
+@pytest.mark.skipif(not _HAS_PINNING, reason="aitp built without spki-pinning")
 def test_spki_pin_verifier_matches_and_rejects() -> None:
     der = base64.b64decode(_TEST_CERT_DER_B64)
     matching_pin = base64.b64decode(_TEST_CERT_SPKI_B64)

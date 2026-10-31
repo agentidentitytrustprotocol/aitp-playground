@@ -27,6 +27,7 @@ import agent_admin  # noqa: E402
 import sdk_features  # noqa: E402
 from agent_admin import build_admin_router  # noqa: E402
 from revocation_state import RevocationState  # noqa: E402
+from tests._sdk_features import requires_sdk_feature  # noqa: E402
 from aitp_playground import capabilities as caps  # noqa: E402
 from tests.unit.test_agent_admin_routes import _participant_handshake  # noqa: E402
 from tests.unit.test_delegation_revocation import (  # noqa: E402
@@ -176,6 +177,7 @@ def test_renew_tct_without_a_session_is_still_412(monkeypatch) -> None:
     assert resp.status_code == 412, resp.text
 
 
+@requires_sdk_feature("tct_renewal")
 def test_issuer_501_reaches_the_holder_unchanged(monkeypatch) -> None:
     """The holder's wheel can renew, the issuer's can't: the issuer's coded
     refusal comes back through the holder, not as a bare 500."""
@@ -200,6 +202,7 @@ def test_issuer_501_reaches_the_holder_unchanged(monkeypatch) -> None:
     assert [c.url.path for c in calls] == ["/admin/process-renewal"]
 
 
+@requires_sdk_feature("tct_renewal")
 def test_other_issuer_errors_still_raise(monkeypatch) -> None:
     """Only the coded 501 is relayed; an issuer 409 keeps its pre-existing handling."""
     coord = aitp.AitpAgent.generate()
@@ -299,6 +302,7 @@ def test_multihop_guard_runs_after_the_body_check(monkeypatch) -> None:
     httpx.Response(501, text="<html>Not Implemented</html>"),
     httpx.Response(501, json={"code": "SOMETHING_ELSE"}),
 ])
+@requires_sdk_feature("tct_renewal")
 def test_an_uncoded_issuer_501_is_not_relayed(monkeypatch, issuer) -> None:
     """Only the SDK refusal is relayed; a proxy's 501 stays a holder 500."""
     coord = aitp.AitpAgent.generate()

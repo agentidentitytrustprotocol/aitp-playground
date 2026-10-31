@@ -25,3 +25,25 @@ os.environ.setdefault("PLAYGROUND_API_KEY", TEST_API_KEY)
 os.environ.setdefault("RATE_LIMIT_BURST", "100000")
 os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
 os.environ.setdefault("MAX_RUNS_PER_HOUR", "100000")
+
+
+def pytest_configure(config) -> None:
+    config.addinivalue_line(
+        "markers", "sdk_feature(key): the test drives a real optional aitp-sdk feature",
+    )
+    config.addinivalue_line(
+        "markers",
+        "sdk_feature_expected_missing(key): AITP_EXPECT_EXPERIMENTAL=1 but the SDK lacks key",
+    )
+
+
+def pytest_runtest_setup(item) -> None:
+    """Fail a test marked by tests._sdk_features in expect mode."""
+    import pytest
+
+    mark = item.get_closest_marker("sdk_feature_expected_missing")
+    if mark is not None:
+        pytest.fail(
+            f"aitp-sdk lacks {mark.args[0]} but AITP_EXPECT_EXPERIMENTAL=1",
+            pytrace=False,
+        )
