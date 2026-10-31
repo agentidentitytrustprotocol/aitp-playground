@@ -98,8 +98,14 @@ jobs:
           # call a real provider when LLM_PROVIDER / *_API_KEY are set at
           # runtime. Without this the image ships no LLM libs and every worker
           # silently falls back to its deterministic stub.
+          # AITP_SDK_SOURCE=pypi-src compiles the locked aitp-sdk sdist with
+          # the experimental features, which the PyPI wheels lack from 0.24,
+          # so the hosted tct-renewal and session-bundle demos keep working
+          # (D-26). The Dockerfile fails the build if the wheel lacks them.
           build-args: |
             INSTALL_EXTRAS=all-agents
+            AITP_SDK_SOURCE=pypi-src
+            AITP_SDK_FEATURES=experimental
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

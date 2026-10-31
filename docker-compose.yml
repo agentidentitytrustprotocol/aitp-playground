@@ -1,10 +1,16 @@
 services:
   playground:
     build:
-      # Parent directory so the multi-stage build can see the sibling
-      # aitp-rs/ source tree and build the SDK wheel from source.
+      # Parent directory: the Dockerfile copies `aitp-playground/...` paths
+      # relative to it (and AITP_SDK_SOURCE=path needs the sibling aitp-rs/).
       context: ..
       dockerfile: aitp-playground/Dockerfile
+      args:
+        # The published PyPI wheels lack the experimental features
+        # (renewal, session bundles, multihop) from aitp-sdk 0.24; compile
+        # the locked sdist with them, like the hosted image (D-26).
+        AITP_SDK_SOURCE: pypi-src
+        AITP_SDK_FEATURES: experimental
     image: aitp-playground:latest
     ports:
       - "8000:8000"

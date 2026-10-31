@@ -379,5 +379,7 @@ def test_an_initiator_refuses_a_hello_ack_from_another_agent() -> None:
         decoy.build_hello(other_m, ["demo.write"])
     )
 
-    with pytest.raises(RuntimeError, match="does not match the intended peer"):
+    with pytest.raises(RuntimeError) as exc:
         session.process_hello_ack(ack, sid)
+    # RFC-AITP-0004 §5.2 step 3; aitp-sdk 0.24 gives it its own code.
+    assert exc.value.code == "PEER_MISMATCH"

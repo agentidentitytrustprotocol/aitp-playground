@@ -109,6 +109,11 @@ services:
       dockerfile: aitp-playground/Dockerfile
       args:
         INSTALL_EXTRAS: "all-agents"
+        # The published PyPI wheels lack the experimental features
+        # (renewal, session bundles, multihop) from aitp-sdk 0.24; compile
+        # the locked sdist with them, like the hosted image (D-26).
+        AITP_SDK_SOURCE: pypi-src
+        AITP_SDK_FEATURES: experimental
     image: aitp-playground:e2e
     depends_on:
       aitp-cp:
@@ -165,6 +170,11 @@ services:
       dockerfile: aitp-playground/Dockerfile
       args:
         INSTALL_EXTRAS: "all-agents,dev"
+        # The published PyPI wheels lack the experimental features
+        # (renewal, session bundles, multihop) from aitp-sdk 0.24; compile
+        # the locked sdist with them, like the hosted image (D-26).
+        AITP_SDK_SOURCE: pypi-src
+        AITP_SDK_FEATURES: experimental
     image: aitp-playground:e2e-tests
     depends_on:
       playground:

@@ -14,12 +14,25 @@ stage 2 is a slim runtime image that installs it and runs the playground.
 
 | Value | What stage 1 does | Use it for |
 |-------|-------------------|------------|
-| `pypi` (**default**) | Installs `aitp-sdk` at the version `uv.lock` pins | Everything: CI, the published image, the e2e stack |
+| `pypi` (**default**) | Installs the PyPI wheel at the version `uv.lock` pins | Fast local builds; that wheel lacks the experimental features from 0.24 |
+| `pypi-src` | Downloads the same version's sdist (URL and sha256 from `uv.lock`, checked with `sha256sum -c`) and compiles it with maturin | The published image and every compose stack except federated, with `AITP_SDK_FEATURES=experimental` (D-26) |
 | `path` | Compiles `../aitp-rs` with maturin | Testing *unreleased* SDK source |
+
+`AITP_SDK_FEATURES` (default empty) becomes maturin's `--features` for
+`pypi-src` and `path`; `pypi` ignores it. When it is set, the runtime stage
+fails the build unless the five experimental names are present, so a
+featureless wheel can't be published by mistake. The federated stack keeps
+`pypi`, because its demo uses no gated feature. The two source builds share
+a `rust-builder` stage and cache cargo with BuildKit mounts.
 
 ```bash
 # default — reproducible from this commit
 docker build -f aitp-playground/Dockerfile -t aitp-playground .
+
+# what the published image runs: the locked sdist, with experimental
+docker build -f aitp-playground/Dockerfile \
+  --build-arg AITP_SDK_SOURCE=pypi-src \
+  --build-arg AITP_SDK_FEATURES=experimental -t aitp-playground .
 
 # opt in to sibling source (requires ../aitp-rs checked out)
 docker build -f aitp-playground/Dockerfile \

@@ -101,6 +101,47 @@ jobs:
           uv run coverage report --include="src/*" --fail-under=88
           uv run coverage report --include="agents/base/*" --fail-under=54
 
+  test-experimental:
+    # Not a required check yet (D-13): it compiles aitp-sdk from source.
+    name: Tests (experimental SDK)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          # setup-uv prunes with `uv cache prune --ci`, which keeps wheels
+          # built from source, so the compiled SDK is reused until uv.lock
+          # changes. That replaces a Rust cache.
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install dependencies, compiling aitp-sdk with `experimental`
+        # The PyPI wheels lack the experimental features from aitp-sdk 0.24
+        # (D-26), so build the locked sdist. A config setting, not
+        # MATURIN_PEP517_ARGS, carries the features: config settings are part
+        # of uv's build-cache key, so a cached featureless build can't win.
+        run: |
+          uv sync --locked --all-extras --no-binary-package aitp-sdk \
+            --config-settings-package 'aitp-sdk:build-args=--features experimental'
+          uv run --no-sync python -c "import aitp; assert hasattr(aitp, 'SessionBundleBuilder') and hasattr(aitp.AitpAgent, 'build_renewal_request') and hasattr(aitp, 'verify_delegation_multihop'), 'aitp-sdk built without experimental'"
+
+      - name: Check out the independent verifier (drift source)
+        # Same as the Tests job: the JCS drift guard fails under CI without it.
+        run: |
+          git clone --depth 1 \
+            https://github.com/agentidentitytrustprotocol/aitp-verifier-py \
+            "$(dirname "$GITHUB_WORKSPACE")/aitp-verifier-py"
+
+      - name: Run unit + scenario tests, failing on any missing feature
+        # `--no-sync` keeps `uv run` from re-syncing the PyPI wheel over the
+        # source build. AITP_EXPECT_EXPERIMENTAL=1 turns every
+        # @requires_sdk_feature skip into a failure.
+        run: AITP_EXPECT_EXPERIMENTAL=1 uv run --no-sync pytest tests/unit tests/scenarios -q
+
   integration:
     name: Integration (agent subprocess e2e)
     runs-on: ubuntu-latest

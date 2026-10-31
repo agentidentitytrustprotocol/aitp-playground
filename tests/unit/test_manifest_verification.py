@@ -148,14 +148,15 @@ async def test_an_expired_peer_manifest_is_rejected_with_its_own_cause(
 
     monkeypatch.setattr(agent_admin, "emit_event", _capture)
 
-    # A negative TTL back-dates `expires_at` one second before `published_at`,
-    # so the manifest is expired the instant it is minted. Deterministic, and
-    # no sleep: the SDK reads the *system* clock inside Rust
-    # (`Timestamp::now()`), so monkeypatching Python's `time.time` cannot move
-    # it. `ttl_secs=0` is NOT enough — `expires_at == now` is not in the past.
+    # A negative TTL starts the validity window that many seconds in the past
+    # with a zero lifetime, so the manifest is expired the instant it is
+    # minted. Deterministic, and no sleep: the SDK reads the *system* clock
+    # inside Rust (`Timestamp::now()`), so monkeypatching Python's `time.time`
+    # cannot move it. `ttl_secs=0` is NOT enough — `expires_at == now` is not
+    # in the past.
     envelope_json = _mint(peer, ttl_secs=-1)
     body = json.loads(envelope_json)["manifest"]
-    assert int(body["expires_at"]) < int(body["published_at"])
+    assert int(body["expires_at"]) < time.time()
 
     with pytest.raises(HTTPException) as exc:
         await _verify_peer_manifest(envelope_json, "http://peer/m", _BOOTSTRAP)

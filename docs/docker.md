@@ -10,12 +10,18 @@ playground.
 
 | Value | What stage 1 does | Use it for |
 |-------|-------------------|------------|
-| `pypi` (**default**) | Installs `aitp-sdk` at the version `uv.lock` pins | Everything: the published image, the e2e stack |
+| `pypi` (**default**) | Installs the PyPI wheel at the version `uv.lock` pins | Fast local builds; from aitp-sdk 0.24 that wheel lacks the experimental features |
+| `pypi-src` | Compiles that version's locked, hash-checked sdist with `AITP_SDK_FEATURES` | The published image and the compose stacks, with `AITP_SDK_FEATURES=experimental` |
 | `path` | Compiles the sibling `aitp-rs` checkout with maturin | Testing *unreleased* SDK source |
 
 ```bash
 # default — reproducible from this commit
 docker build -f aitp-playground/Dockerfile -t aitp-playground .
+
+# what the published image runs (TCT renewal, session bundles, multihop)
+docker build -f aitp-playground/Dockerfile \
+  --build-arg AITP_SDK_SOURCE=pypi-src \
+  --build-arg AITP_SDK_FEATURES=experimental -t aitp-playground .
 
 # opt in to sibling source (requires ../aitp-rs checked out next to this repo)
 docker build -f aitp-playground/Dockerfile \
@@ -98,8 +104,9 @@ for what this stack actually runs.
 
 ## Common pitfalls
 
-- **First build is slow with `AITP_SDK_SOURCE=path`** — a cold Rust compile
-  of the SDK takes several minutes on Apple Silicon. The default `pypi` build
+- **First build is slow with `AITP_SDK_SOURCE=pypi-src` or `path`** (the
+  compose files use `pypi-src`) — a cold Rust compile of the SDK takes several
+  minutes on Apple Silicon. The default `pypi` build
   only downloads the wheel (plus the LLM extras if requested). Subsequent
   builds reuse cache layers and finish in seconds for source-only changes.
 - **Tests container exits 0 instantly** — check `AITP_LLM_E2E=1` and

@@ -69,15 +69,27 @@ the compiled wheel doesn't always set `__version__`.
 
 ## Getting a feature-complete wheel
 
-Nothing special: the PyPI wheel is feature-complete. `uv sync` installs
-`aitp-sdk` with the full default surface, and a plain source build
-(`maturin develop --release` in `aitp-rs/bindings/aitp-py`) compiles the
-same defaults. A slimmed-down wheel only appears if someone builds with
-`--no-default-features` — the probe above is what keeps that (or an old
-0.3.x wheel) from crashing scenarios. The Docker build installs the same
-lock-pinned PyPI wheel by default (`AITP_SDK_SOURCE=pypi`); compiling the
-sibling `aitp-rs` source is opt-in (`AITP_SDK_SOURCE=path`). The Dockerfile
-wiring is in [docker.md](docker.md).
+From `aitp-sdk` 0.24 the PyPI wheels leave out the `experimental`
+features: TCT renewal, session bundles and multi-hop delegation. Plain
+`uv sync` installs that default wheel, so on it the
+`intra-org/tct-renewal` and `intra-org/session-bundle` scenarios refuse
+cleanly (see below). To get all three, compile the locked sdist with the
+feature:
+
+```bash
+uv sync --locked --all-extras --no-binary-package aitp-sdk \
+  --config-settings-package 'aitp-sdk:build-args=--features experimental'
+uv run --no-sync uvicorn aitp_playground.main:app --port 8000
+```
+
+`--no-sync` matters on every later `uv run`: a plain `uv run` re-syncs the
+default wheel over the source build. The compile needs a Rust toolchain.
+
+The published image and the compose stacks already do this
+(`AITP_SDK_SOURCE=pypi-src`, `AITP_SDK_FEATURES=experimental`; DECISIONS.md
+D-26). A plain `docker build` keeps the default PyPI wheel
+(`AITP_SDK_SOURCE=pypi`), and compiling the sibling `aitp-rs` source is
+`AITP_SDK_SOURCE=path`. The Dockerfile wiring is in [docker.md](docker.md).
 The Cargo feature gates and what each one turns on are documented by the
 SDK itself —
 [aitp-rs · sdk-python.md § Build](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#build)

@@ -131,10 +131,13 @@ Two paths.
 ### Docker (no host toolchain)
 
 The Dockerfile is multi-stage. By default (`AITP_SDK_SOURCE=pypi`) it
-installs the exact `aitp-sdk` wheel pinned in `uv.lock`; pass
-`--build-arg AITP_SDK_SOURCE=path` to compile the sibling `aitp-rs`
-source instead (needs that checkout next to this repo). The compose files
-set the build context to the parent directory so sibling checkouts are
+installs the exact `aitp-sdk` wheel pinned in `uv.lock`. That wheel lacks the
+experimental features (TCT renewal, session bundles, multi-hop delegation), so
+the published image and the compose stacks compile the same version's locked
+sdist with them instead (`AITP_SDK_SOURCE=pypi-src`,
+`AITP_SDK_FEATURES=experimental`). Pass `--build-arg AITP_SDK_SOURCE=path` to
+compile the sibling `aitp-rs` source (needs that checkout next to this repo).
+The compose files set the build context to the parent directory so sibling checkouts are
 visible when needed. Images use Python 3.13 (the full e2e stack also
 uses Node 24 and Postgres 18) — see [docs/docker.md](docs/docker.md).
 
