@@ -515,3 +515,27 @@ def test_session_bundle_probe_needs_both_names(monkeypatch, present) -> None:
     monkeypatch.setitem(sys.modules, "aitp", fake)
     caps.get_capabilities.cache_clear()
     assert caps.has_feature(caps.FEATURE_SESSION_BUNDLE) is (len(present) == 2)
+
+
+def test_post_runs_end_to_end_refusal(monkeypatch, simulate_absent) -> None:
+    """The API → engine → metrics seam: POST /runs still answers 202, the
+    background run ends failed with the coded refusal and nothing spawned,
+    and /metrics counts it as a refusal."""
+    from tests._auth import AUTH
+
+    simulate_absent("tct_renewal")
+    client = _client(monkeypatch)
+    client.headers.update(AUTH)
+    posted = client.post("/runs", json={"scenario_ref": RENEWAL_REF, "inputs": {"topic": "x"}})
+    assert posted.status_code == 202, posted.text
+    rid = posted.json()["run_id"]
+
+    run = client.get(f"/runs/{rid}").json()
+    assert run["status"] == "failed"
+    assert run["error"].startswith(f"sdk_feature_unavailable: {RENEWAL_REF} needs tct_renewal")
+    types_ = [e["type"] for e in run["events"]]
+    assert types_ == ["run.failed"]
+    assert run["events"][0]["code"] == "sdk_feature_unavailable"
+
+    text = client.get("/metrics").text
+    assert 'aitp_playground_runs_refused_total{code="sdk_feature_unavailable"} 1' in text
