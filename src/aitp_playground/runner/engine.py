@@ -12,9 +12,10 @@ import aitp
 import httpx
 import jsonschema
 
+from ..capabilities import CapabilitiesProvider, get_capabilities, missing_sdk_features
 from ..config import Settings
 from ..cp_client.client import CpClient
-from ..errors import PlaygroundError
+from ..errors import PlaygroundError, SdkFeatureUnavailableError
 from ..hosting.adapters.registry import AdapterRegistry
 from ..hosting.bootstrap import BootstrapBuilder
 from ..hosting.port_allocator import PortAllocator
@@ -79,6 +80,7 @@ class ScenarioRunner:
         port_alloc: PortAllocator,
         config: Settings,
         store: RunStore,
+        capabilities_provider: CapabilitiesProvider = get_capabilities,
     ) -> None:
         self.registry = registry
         self.supervisor = supervisor
@@ -89,6 +91,9 @@ class ScenarioRunner:
         self.ports = port_alloc
         self.config = config
         self.store = store
+        # The installed SDK's feature report; tests inject one to simulate a
+        # wheel without the optional features.
+        self.capabilities_provider = capabilities_provider
         self._bg_tasks: set[asyncio.Task[Any]] = set()
         # CP webhooks this process subscribed; the startup sweep spares them.
         self.webhook_ids: set[str] = set()
@@ -120,8 +125,21 @@ class ScenarioRunner:
                 scenario_ref, template=template,
             )
         except PlaygroundError as exc:
-            ctx.emit(RunEvent(type="run.failed", error=str(exc)))
+            ctx.emit(RunEvent(type="run.failed", code=exc.code, error=str(exc)))
             return self._finalize_failure(run_id, str(exc), ctx)
+
+        # 1b. Refuse a scenario whose steps call SDK features this wheel
+        # lacks, before spawning anything (#117: from aitp-sdk 0.24 renewal
+        # and session bundles are opt-in build features). Without this the
+        # run spawned every agent and died on a 500 from the agent route.
+        missing = missing_sdk_features(scenario, self.capabilities_provider)
+        if missing:
+            refusal = SdkFeatureUnavailableError(
+                scenario_ref, missing, self.capabilities_provider().get("version"),
+            )
+            logger.warning("Run %s refused: %s", run_id, refusal)
+            ctx.emit(RunEvent(type="run.failed", code=refusal.code, error=str(refusal)))
+            return self._finalize_failure(run_id, str(refusal), ctx)
 
         ctx.emit(RunEvent(
             type="run.started",
@@ -135,58 +153,68 @@ class ScenarioRunner:
             if schema:
                 jsonschema.validate(inputs, schema)
         except jsonschema.ValidationError as exc:
-            ctx.emit(RunEvent(type="run.failed", error=f"inputs validation: {exc.message}"))
+            ctx.emit(RunEvent(
+                type="run.failed", code="inputs_invalid",
+                error=f"inputs validation: {exc.message}",
+            ))
             return self._finalize_failure(run_id, f"inputs validation: {exc.message}", ctx)
 
-        # 3. Assign ports + resolve manifests + write bootstrap
-        ports = {a.id: self.ports.allocate(offset=a.port_offset) for a in scenario.spec.agents}
-        resolved_manifests = {
-            a.id: self.registry.get_agent_manifest(a.ref) for a in scenario.spec.agents
-        }
-
-        # If any agent uses OIDC identity, mint a per-run mock issuer
-        # (Ed25519 keypair + JWK) so every OIDC agent shares the same
-        # trust anchor. Pinned-key-only runs leave run_oidc=None.
-        run_oidc = None
-        if any(
-            resolved_manifests[a.id].spec.aitp.identity_type == "oidc"
-            for a in scenario.spec.agents
-        ):
-            from ..trust.oidc_issuer import RunOidcIssuer
-            run_oidc = RunOidcIssuer.generate()
-            ctx.emit(RunEvent(
-                type="oidc.issuer_minted",
-                result={"issuer_url": run_oidc.issuer_url, "kid": run_oidc.kid},
-            ))
-
+        # 3-4. Everything from here on can raise and holds resources (ports,
+        # bootstrap files, subprocesses), so it all sits inside one try: a
+        # failure always emits a terminal run.failed and releases what was
+        # taken. Ports are allocated one by one into the dict so a failure
+        # part-way still releases the ones already taken.
+        ports: dict[str, int] = {}
         bootstrap_files: dict[str, str] = {}
-        admin_tokens: dict[str, str] = {}
-        # RUN_TOKEN_BUDGET is per run; each agent process enforces its share.
-        agent_token_budget = self.config.run_token_budget // max(1, len(scenario.spec.agents))
-        for agent_spec in scenario.spec.agents:
-            placeholder_peers = {
-                other.id: {
-                    "manifest_url": f"http://localhost:{ports[other.id]}/.well-known/aitp-manifest",
-                    "did": None,
-                }
-                for other in scenario.spec.agents if other.id != agent_spec.id
-            }
-            bs = self.bootstrap_builder.build(
-                run_id=run_id,
-                agent_spec=agent_spec,
-                resolved_manifest=resolved_manifests[agent_spec.id],
-                port=ports[agent_spec.id],
-                peers=placeholder_peers,
-                inputs=inputs,
-                oidc=run_oidc,
-                token_budget=agent_token_budget,
-            )
-            bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
-            admin_tokens[agent_spec.id] = bs["admin_token"]
-
-        # 4. Spawn all agents
         running: dict[str, RunningAgent] = {}
         try:
+            # 3. Assign ports + resolve manifests + write bootstrap
+            for a in scenario.spec.agents:
+                ports[a.id] = self.ports.allocate(offset=a.port_offset)
+            resolved_manifests = {
+                a.id: self.registry.get_agent_manifest(a.ref) for a in scenario.spec.agents
+            }
+
+            # If any agent uses OIDC identity, mint a per-run mock issuer
+            # (Ed25519 keypair + JWK) so every OIDC agent shares the same
+            # trust anchor. Pinned-key-only runs leave run_oidc=None.
+            run_oidc = None
+            if any(
+                resolved_manifests[a.id].spec.aitp.identity_type == "oidc"
+                for a in scenario.spec.agents
+            ):
+                from ..trust.oidc_issuer import RunOidcIssuer
+                run_oidc = RunOidcIssuer.generate()
+                ctx.emit(RunEvent(
+                    type="oidc.issuer_minted",
+                    result={"issuer_url": run_oidc.issuer_url, "kid": run_oidc.kid},
+                ))
+
+            admin_tokens: dict[str, str] = {}
+            # RUN_TOKEN_BUDGET is per run; each agent process enforces its share.
+            agent_token_budget = self.config.run_token_budget // max(1, len(scenario.spec.agents))
+            for agent_spec in scenario.spec.agents:
+                placeholder_peers = {
+                    other.id: {
+                        "manifest_url": f"http://localhost:{ports[other.id]}/.well-known/aitp-manifest",
+                        "did": None,
+                    }
+                    for other in scenario.spec.agents if other.id != agent_spec.id
+                }
+                bs = self.bootstrap_builder.build(
+                    run_id=run_id,
+                    agent_spec=agent_spec,
+                    resolved_manifest=resolved_manifests[agent_spec.id],
+                    port=ports[agent_spec.id],
+                    peers=placeholder_peers,
+                    inputs=inputs,
+                    oidc=run_oidc,
+                    token_budget=agent_token_budget,
+                )
+                bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
+                admin_tokens[agent_spec.id] = bs["admin_token"]
+
+            # 4. Spawn all agents
             for agent_spec in scenario.spec.agents:
                 manifest = resolved_manifests[agent_spec.id]
                 adapter = self.adapters.get(manifest.metadata.framework)
@@ -253,7 +281,14 @@ class ScenarioRunner:
             # See `DECISIONS.md` D-16.
             existing = self.store.get(run_id)
             if existing is None or existing.get("status") != "cancelled":
-                ctx.emit(RunEvent(type="run.failed", error=str(exc)))
+                # Only a PlaygroundError's code is a run code: other
+                # exceptions may carry an unrelated (even non-str) `code`
+                # that would fail RunEvent validation and strand the run.
+                ctx.emit(RunEvent(
+                    type="run.failed",
+                    code=exc.code if isinstance(exc, PlaygroundError) else None,
+                    error=str(exc),
+                ))
             self._cleanup_run(run_id, ports, bootstrap_files)
             return self._finalize_failure(run_id, str(exc), ctx)
         finally:

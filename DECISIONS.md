@@ -582,3 +582,33 @@ No new secret, env var or deployment step: the token lives only as long as the a
   calls come from the same host anyway.
 - *A service-wide shared secret from env.* It needs provisioning, and one leaked value would
   open every agent.
+
+## D-24 — Optional SDK features: derived requirements, preflight refusal, agent 501s (#117)
+**2026-10-30 · recorded**
+
+From aitp-sdk 0.24 (aitp-rs 1.0-rc, aitp-rs PR #440) TCT renewal, session bundles and
+multi-hop delegation compile only into an `experimental` build. On a default wheel the
+names are missing attributes, so today a run of `intra-org/tct-renewal` or
+`intra-org/session-bundle` would spawn every agent and die on an `AttributeError` 500.
+
+**Chosen (plan: `plans/sdk-experimental-features.md`, D1–D6):**
+- *Requirements derive from step types* (`STEP_SDK_FEATURES` in `capabilities.py`:
+  `renew_tct` → `tct_renewal`; `export_session_bundle` / `verify_session_bundle` →
+  `session_bundle`), over the resolved workflow, after any template. No hand-written
+  `requires:` field to drift from the steps.
+- *Refuse before spawn, as a coded `run.failed`* (`code="sdk_feature_unavailable"`, no
+  `run.started`). `POST /runs` still returns 202, like the other preflight failures.
+  A new `skipped` run status was rejected: it changes an enum the console switches on.
+- *Discovery fields* `sdk_features_required` / `sdk_available` on every scenario listing
+  (additive).
+- *Agent routes return 501 `SDK_FEATURE_UNAVAILABLE`* (`agents/base/sdk_features.py`)
+  for direct callers; a holder relays an issuer's 501. No engine-side 501 mapping: engine
+  and agents share one image and SDK, so the preflight makes that state unreachable.
+- *One test marker* (`tests/_sdk_features.py::requires_sdk_feature`); skips on a
+  stable-only wheel, fails under `AITP_EXPECT_EXPERIMENTAL=1`.
+- Metrics: `runs_active` counts only runs that emitted `run.started`; refusals go to
+  `aitp_playground_runs_refused_total{code}`.
+
+**Deferred:** building the hosted demo and docker stacks with `experimental` (D7) is
+BLOCKED-ON the aitp-rs 1.0-rc release; it and keeping the guarded multihop branch (D5)
+are logged UNCONFIRMED in `ASSUMPTIONS.md`.

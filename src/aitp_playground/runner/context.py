@@ -28,6 +28,10 @@ class RunEvent(BaseModel):
     peers: dict[str, Any] | None = None
     result: Any | None = None
     error: Optional[str] = None
+    # Machine-readable reason on run.failed: a lowercase playground code
+    # (``errors.PlaygroundError.code``, e.g. ``sdk_feature_unavailable``).
+    # Agent telemetry uses the same key for uppercase AITP wire codes.
+    code: Optional[str] = None
     notes: Optional[str] = None
     # Used by trust.established (for revocation lookup) and tct.revoked.
     jti: Optional[str] = None

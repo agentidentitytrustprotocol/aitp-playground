@@ -35,6 +35,7 @@ if str(_AGENT_BASE) not in sys.path:
 aitp = pytest.importorskip("aitp")
 
 from revocation_state import RevocationState  # noqa: E402
+from tests._sdk_features import requires_sdk_feature  # noqa: E402
 
 
 def _b64url(seg: str) -> bytes:
@@ -292,6 +293,7 @@ def test_redeem_enforces_axis_b_freshness_before_minting() -> None:
     assert "no verified snapshot" in resp.text.lower()
 
 
+@requires_sdk_feature("multihop_delegation")
 def test_multihop_branch_also_enforces_the_deny_set() -> None:
     """The multi-hop verifier's deny-set argument — item 3.
 

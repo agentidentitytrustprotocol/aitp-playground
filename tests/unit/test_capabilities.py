@@ -48,8 +48,11 @@ def test_probe_detects_features_from_a_fake_sdk(monkeypatch) -> None:
     fake = types.ModuleType("aitp")
     fake.__version__ = "0.2.0"
 
-    class _Agent:  # only renewal present
+    class _Agent:  # only renewal present (the probe needs both halves)
         def build_renewal_request(self):  # pragma: no cover - presence check
+            ...
+
+        def process_renewal_request(self):  # pragma: no cover - presence check
             ...
 
     fake.AitpAgent = _Agent

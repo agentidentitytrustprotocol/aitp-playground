@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from oidc import OidcContext
 from pop_challenges import CHALLENGE_HEADER, RESPONSE_HEADER, decode_header, encode_header
+import sdk_features
 from revocation_state import RevocationState
 from tct_claims import decode_claims, tct_event
 from telemetry import emit_event
@@ -162,6 +163,17 @@ async def _verify_peer_manifest(
             f"peer manifest from {source_url} has no `manifest` body",
         )
     return manifest
+
+
+def _is_sdk_feature_refusal(r: httpx.Response) -> bool:
+    """True for a peer's ``sdk_features.unavailable`` 501."""
+    if r.status_code != 501:
+        return False
+    try:
+        body = r.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("code") == sdk_features.UNAVAILABLE_CODE
 
 
 def build_admin_router(
@@ -422,6 +434,8 @@ def build_admin_router(
                 detail=f"No TCT held for port {peer_port} — run handshake first",
             )
 
+        if not sdk_features.has(sdk_features.TCT_RENEWAL):
+            return sdk_features.unavailable(sdk_features.TCT_RENEWAL)
         request_payload = agent.build_renewal_request(current_tct_token)
 
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -430,6 +444,11 @@ def build_admin_router(
                 content=request_payload,
                 headers={"Content-Type": "application/json"},
             )
+            if _is_sdk_feature_refusal(r):
+                # The issuer's wheel lacks renewal: hand its coded refusal
+                # back as is rather than turning it into a bare 500. Any
+                # other 501 (a proxy's, say) falls through to the raise.
+                return Response(r.content, status_code=501, media_type="application/json")
             r.raise_for_status()
         # Issuer returns ``{"tct": "<compact JWS>", "grant_voucher": ...}``.
         renewed = json.loads(r.text)
@@ -503,6 +522,8 @@ def build_admin_router(
                 detail="no participants — handshake first or pass participant_tcts",
             )
 
+        if not sdk_features.has(sdk_features.SESSION_BUNDLE):
+            return sdk_features.unavailable(sdk_features.SESSION_BUNDLE)
         builder = aitp.SessionBundleBuilder(agent)
         session_id = str(uuid.uuid4())
         builder.session_id(session_id)
@@ -545,6 +566,9 @@ def build_admin_router(
                 status_code=400,
                 detail="coordinator_manifest_url is required to verify a session bundle",
             )
+        # Before the manifest fetch: a refused call does no network I/O.
+        if not sdk_features.has(sdk_features.SESSION_BUNDLE):
+            return sdk_features.unavailable(sdk_features.SESSION_BUNDLE)
         async with httpx.AsyncClient(timeout=10.0) as client:
             mr = await client.get(coordinator_manifest_url)
             mr.raise_for_status()
@@ -580,6 +604,10 @@ def build_admin_router(
         """
         import time
 
+        # First: nothing below can run without the SDK call, and the caller
+        # (a holder's /admin/renew-tct) relays this 501 unchanged.
+        if not sdk_features.has(sdk_features.TCT_RENEWAL):
+            return sdk_features.unavailable(sdk_features.TCT_RENEWAL)
         request_payload = (await request.body()).decode("utf-8")
         cfg = bootstrap.get("aitp", {})
         ttl_secs = int(cfg.get("ttl_secs", 3600))

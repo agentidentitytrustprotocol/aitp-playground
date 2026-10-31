@@ -41,7 +41,7 @@ ordered stream.
 | `oidc.issuer_minted` | issuer url, kid | When a scenario has any `identity_type: oidc` agent. |
 | `trust.peers_resolved` | `peers: {agent_id: manifest_url}` | After peer discovery resolves. |
 | `run.complete` | — | Workflow finished cleanly. |
-| `run.failed` | `error` | Exception inside spawn / step. |
+| `run.failed` | `error`, `code` | Refused before start (unknown scenario, missing SDK feature) or an exception inside spawn / step. `code` is a lowercase playground code: `scenario_not_found`, `sdk_feature_unavailable`, `inputs_invalid`, a `PlaygroundError` code such as `internal_error`, or `null`. |
 
 **Trust, delegation, revocation, identity**
 
@@ -84,6 +84,11 @@ ordered stream.
 | `cp.webhook.delivered` | A verified CP webhook delivery arrived (`POST /webhooks/cp/{run_id}`). |
 | `cp.trust_anchor.provisioned` | `cp_provision_trust_anchor` step. |
 | `cp.delegation.tree` | `cp_delegation_tree` step. |
+
+**`code` casing.** The same `code` key carries two vocabularies, by
+producer: runner events use lowercase playground codes
+(`sdk_feature_unavailable`), agent telemetry and agent HTTP error bodies use
+uppercase AITP wire codes (`REVOCATION_UNAVAILABLE`).
 
 ### Agent-emitted
 
@@ -169,7 +174,8 @@ so `/metrics` returns a stable, complete surface even before the first run.
 | Metric | Type | Labels | Incremented on |
 | --- | --- | --- | --- |
 | `aitp_playground_runs_total` | counter | `status` = success/failed/cancelled | run reaches terminal state |
-| `aitp_playground_runs_active` | gauge | — | `run.started` (+1) / terminal (−1) |
+| `aitp_playground_runs_active` | gauge | — | `run.started` (+1) / terminal (−1), only for a run that started |
+| `aitp_playground_runs_refused_total` | counter | `code` = the `run.failed` code (`unknown` if none) | `run.failed` with no `run.started` before it (also counted in `runs_total{status="failed"}`) |
 | `aitp_playground_handshakes_total` | counter | `outcome` = established/failed | `trust.established` / failures |
 | `aitp_playground_tcts_issued_total` | counter | — | `trust.established`, delegation redeem |
 | `aitp_playground_delegations_total` | counter | `outcome` = issued/redeemed/rejected | delegation events |

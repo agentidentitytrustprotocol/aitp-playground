@@ -25,6 +25,7 @@ from handshake_replay import HandshakeRejected, ReplayGuard
 from revocation_publish import REVOCATION_LIST_PATH, RETRY_AFTER_SECS, IssuerRevocationList
 from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
+import sdk_features
 from oidc import OidcContext, peer_aid_from_hello_envelope
 from pop_challenges import CHALLENGE_HEADER, PopChallenges, PopRejected, decode_header, encode_header
 from tct_claims import decode_claims, tct_event
@@ -718,6 +719,8 @@ class AitpServer:
             cfg = self.bootstrap.get("aitp", {})
             allow_multihop = bool(cfg.get("allow_multihop_delegation"))
             max_hops = int(cfg.get("max_delegation_hops", 3))
+            if allow_multihop and not sdk_features.has(sdk_features.MULTIHOP_DELEGATION):
+                return sdk_features.unavailable(sdk_features.MULTIHOP_DELEGATION)
             # RFC-AITP-0006 §4 step 7 / RFC-AITP-0011 §6. Redeeming mints a
             # *fresh TCT* for the delegatee, so skipping this is not a
             # bookkeeping miss: a revoked grant keeps minting credentials for

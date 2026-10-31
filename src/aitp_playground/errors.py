@@ -43,6 +43,22 @@ class AgentSpawnError(PlaygroundError):
     code = "agent_spawn_error"
 
 
+class SdkFeatureUnavailableError(PlaygroundError):
+    """A scenario needs an optional SDK feature the installed ``aitp-sdk``
+    lacks. Raised before any agent is spawned."""
+
+    status_code = 409
+    code = "sdk_feature_unavailable"
+
+    def __init__(self, scenario_ref: str, missing: list[str], sdk_version: str | None) -> None:
+        self.scenario_ref = scenario_ref
+        self.missing = list(missing)
+        super().__init__(
+            f"{self.code}: {scenario_ref} needs {', '.join(self.missing)}; "
+            f"the installed aitp-sdk {sdk_version or '(none)'} lacks it"
+        )
+
+
 def install_handlers(app: FastAPI) -> None:
     @app.exception_handler(PlaygroundError)
     async def handle_playground_error(_: Request, exc: PlaygroundError) -> JSONResponse:

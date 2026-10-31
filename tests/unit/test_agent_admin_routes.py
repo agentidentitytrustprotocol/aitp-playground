@@ -31,6 +31,7 @@ import aitp  # noqa: E402
 import agent_admin  # noqa: E402
 from agent_admin import build_admin_router  # noqa: E402
 from revocation_state import RevocationState  # noqa: E402
+from tests._sdk_features import requires_sdk_feature  # noqa: E402
 
 
 def _app(*, manifest_provider=None, capabilities=None) -> tuple[FastAPI, Any]:
@@ -178,6 +179,7 @@ def _verifier_app(agent) -> FastAPI:
     return app
 
 
+@requires_sdk_feature("session_bundle")
 def test_verify_session_bundle_with_a_tampered_signature_is_403(monkeypatch) -> None:
     _coord, coord_manifest, participant, envelope = _bundle_parties()
     doc = json.loads(envelope)
@@ -194,6 +196,7 @@ def test_verify_session_bundle_with_a_tampered_signature_is_403(monkeypatch) -> 
     assert resp.status_code == 403, resp.text
 
 
+@requires_sdk_feature("session_bundle")
 def test_verify_session_bundle_under_the_wrong_coordinator_is_403(monkeypatch) -> None:
     """A genuine bundle checked against someone else's (valid) Manifest: the
     signer is not the coordinator the caller named."""
@@ -214,9 +217,11 @@ def test_verify_session_bundle_under_the_wrong_coordinator_is_403(monkeypatch) -
 
 
 def test_verify_session_bundle_without_a_coordinator_manifest_is_400() -> None:
-    _coord, _coord_manifest, participant, envelope = _bundle_parties()
+    """The 400 fires before the envelope is read, so no real bundle (and no
+    session_bundle SDK feature) is needed: this holds on every wheel."""
+    participant = aitp.AitpAgent.generate()
     resp = _client(_verifier_app(participant)).post(
-        "/admin/verify-session-bundle", json={"bundle_envelope": envelope},
+        "/admin/verify-session-bundle", json={"bundle_envelope": "{}"},
     )
     assert resp.status_code == 400, resp.text
     assert "coordinator_manifest_url" in resp.text
