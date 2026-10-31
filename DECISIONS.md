@@ -586,7 +586,7 @@ No new secret, env var or deployment step: the token lives only as long as the a
 ## D-24 — Optional SDK features: derived requirements, preflight refusal, agent 501s (#117)
 **2026-10-30 · recorded**
 
-From aitp-sdk 0.24 (aitp-rs 1.0-rc, aitp-rs PR #440) TCT renewal, session bundles and
+From aitp-sdk 0.24 (aitp-rs v0.24.0, aitp-rs PR #440) TCT renewal, session bundles and
 multi-hop delegation compile only into an `experimental` build. On a default wheel the
 names are missing attributes, so today a run of `intra-org/tct-renewal` or
 `intra-org/session-bundle` would spawn every agent and die on an `AttributeError` 500.
@@ -609,9 +609,9 @@ names are missing attributes, so today a run of `intra-org/tct-renewal` or
 - Metrics: `runs_active` counts only runs that emitted `run.started`; refusals go to
   `aitp_playground_runs_refused_total{code}`.
 
-**Deferred:** building the hosted demo and docker stacks with `experimental` (D7) is
-BLOCKED-ON the aitp-rs 1.0-rc release; it and keeping the guarded multihop branch (D5)
-were settled in D-26.
+**Deferred, then done:** building the hosted demo and docker stacks with `experimental`
+(D7) waited for the aitp-sdk 0.24.0 release and shipped with the 0.24.0 bump (#117
+phase 4). It and keeping the guarded multihop branch (D5) were settled in D-26.
 
 ## D-25 — A cancel that lands before the agents exist (#118)
 **2026-10-30 · recorded**
@@ -660,6 +660,7 @@ thread, so it can interleave between the read and the write.
   keeps the suite honest there.
 - Reversible: dropping the build argument returns the image to the default wheel. The
   two scenarios then refuse cleanly (D-24).
-- Applied in Phase 4 of `plans/sdk-experimental-features.md`, which is BLOCKED-ON the
-  aitp-rs 1.0-rc release.
+- Applied with the aitp-sdk 0.24.0 bump (#117 phase 4): the image's
+  `AITP_SDK_SOURCE=pypi-src` stage compiles the locked sdist, and the "Tests
+  (experimental SDK)" CI job runs the suite with `AITP_EXPECT_EXPERIMENTAL=1`.
 

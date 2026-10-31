@@ -1,6 +1,6 @@
 """Agent-side check for optional ``aitp-sdk`` features (#117).
 
-From aitp-sdk 0.24 (aitp-rs 1.0-rc) TCT renewal, session bundles and
+From aitp-sdk 0.24 (aitp-rs v0.24.0) TCT renewal, session bundles and
 multi-hop delegation are compiled only into an ``experimental`` build, so on
 a default wheel the names below are simply missing attributes. Routes that
 call them check first and refuse with a coded 501 instead of crashing into

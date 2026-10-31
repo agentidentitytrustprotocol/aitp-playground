@@ -3,7 +3,7 @@
 The ``aitp`` wheel is compiled from the sibling ``aitp-rs/bindings/aitp-py``
 repo (it is *not* the unrelated PyPI package of the same name). From SDK
 0.4.0 to 0.23 the full surface shipped by default. From 0.24 (aitp-rs
-1.0-rc), TCT renewal, session bundles and multi-hop delegation are compiled
+v0.24.0), TCT renewal, session bundles and multi-hop delegation are compiled
 only into an ``experimental`` build (#117), so a default wheel lacks them.
 
 This module reports what the *currently installed* wheel actually provides so

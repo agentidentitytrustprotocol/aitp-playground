@@ -98,7 +98,7 @@ and the
 
 ## Graceful degradation
 
-From `aitp-sdk` 0.24 (aitp-rs 1.0-rc), renewal, session bundles and
+From `aitp-sdk` 0.24 (aitp-rs v0.24.0), renewal, session bundles and
 multi-hop delegation are opt-in build features (`experimental`), so a
 default wheel lacks them. The playground handles a missing feature at two
 levels:
