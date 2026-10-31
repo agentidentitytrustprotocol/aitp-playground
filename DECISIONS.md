@@ -623,9 +623,12 @@ upsert but before the spawn loop finished found nothing to kill, and later agent
 spawned.
 
 **Chosen:**
-- `run()` starts through `RunStore.start_unless_cancelled`: the check and the upsert run
+- `run()` writes `running` through `RunStore.upsert_unless_cancelled`: the check and the upsert run
   together under the store lock, so no check-then-write window remains. `SqliteRunStore`
   persists only an accepted start.
+- `success` is written the same way, and `run.complete` is emitted only when the write
+  succeeds, so a cancel after the last step stays cancelled. Preflight `run.failed` and
+  `run.started` are skipped for an already-cancelled run, so `runs_active` can't leak.
 - The spawn loop checks the record before each launch. A cancelled record unwinds
   through the run's `except` (D-16 guard: no `run.failed`), which releases ports and
   bootstrap files.

@@ -33,11 +33,12 @@ class RunStore:
         with self._lock:
             self._merge_locked(run_id, record)
 
-    def start_unless_cancelled(self, run_id: str, record: dict[str, Any]) -> bool:
+    def upsert_unless_cancelled(self, run_id: str, record: dict[str, Any]) -> bool:
         """Upsert ``record`` unless the run is already ``cancelled``, as one
-        step under the lock. The engine starts a run through this, so a
-        ``/runs/{id}/cancel`` landing while the run is still ``pending``
-        can't be overwritten by ``running`` (#118). False means not started."""
+        step under the lock. The engine writes ``running`` and ``success``
+        through this, so a ``/runs/{id}/cancel`` (a threadpool thread) can't
+        land between a status check and the write and be overwritten (#118).
+        False means nothing was written."""
         with self._lock:
             if self._runs.get(run_id, {}).get("status") == "cancelled":
                 return False
@@ -204,11 +205,11 @@ class SqliteRunStore(RunStore):
         super().upsert(run_id, record)
         self._persist_record(run_id)
 
-    def start_unless_cancelled(self, run_id: str, record: dict[str, Any]) -> bool:
-        started = super().start_unless_cancelled(run_id, record)
-        if started:
+    def upsert_unless_cancelled(self, run_id: str, record: dict[str, Any]) -> bool:
+        written = super().upsert_unless_cancelled(run_id, record)
+        if written:
             self._persist_record(run_id)
-        return started
+        return written
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
         super().append_event(run_id, event)

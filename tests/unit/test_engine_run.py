@@ -1668,3 +1668,63 @@ async def test_cancel_after_start_before_spawn_spawns_nothing(agent_http) -> Non
     assert env.store.get("run-1")["status"] == "cancelled"
     assert result.status == "cancelled"
     assert env.ports._in_use == set(), "ports taken before the cancel are released"
+
+
+def _cancel(env: SimpleNamespace, run_id: str = "run-1") -> None:
+    """What /runs/{id}/cancel writes: the status, then run.cancelled."""
+    env.store.upsert(run_id, {"status": "cancelled"})
+    env.store.append_event(run_id, {"type": "run.cancelled", "run_id": run_id})
+
+
+async def test_cancel_after_the_last_step_is_not_overwritten_by_success(agent_http) -> None:
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False,
+                   steps=[{"id": "s1", "agent": "alice", "capability": "cap.a"}])
+
+    def _finish_then_cancel(request: httpx.Request) -> httpx.Response:
+        _cancel(env)  # lands while the last step's response is in flight
+        return httpx.Response(200, text="done")
+
+    agent_http.overrides["/admin/self-execute"] = _finish_then_cancel
+
+    result = await _run(env)
+
+    assert result.status == "cancelled"
+    record = env.store.get("run-1")
+    assert record["status"] == "cancelled"
+    types = [e["type"] for e in record["events"]]
+    assert "run.complete" not in types and types.count("run.cancelled") == 1
+
+
+async def test_cancel_between_start_and_run_started_emits_nothing(agent_http) -> None:
+    """A cancel after the start but before run.started: emitting run.started
+    then would leave the run counted in runs_active with no terminal event."""
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False,
+                   steps=[{"id": "s1", "agent": "alice", "capability": "cap.a"}])
+
+    def _cancel_during_preflight() -> dict[str, Any]:
+        _cancel(env)
+        return all_sdk_features()
+
+    env.runner.capabilities_provider = _cancel_during_preflight
+
+    result = await _run(env)
+
+    assert result.status == "cancelled"
+    assert env.supervisor.launched == []
+    assert [e["type"] for e in env.store.get("run-1")["events"]] == ["run.cancelled"]
+
+
+async def test_scenario_load_failure_after_a_cancel_emits_no_run_failed(agent_http) -> None:
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False,
+                   steps=[{"id": "s1", "agent": "alice", "capability": "cap.a"}])
+
+    def _cancel_then_missing(ref: str, template: Optional[str] = None):
+        _cancel(env)
+        raise ScenarioNotFoundError(f"scenario not found: {ref}")
+
+    env.runner.registry.get_scenario_resolved = _cancel_then_missing
+
+    result = await _run(env)
+
+    assert result.status == "cancelled"
+    assert [e["type"] for e in env.store.get("run-1")["events"]] == ["run.cancelled"]

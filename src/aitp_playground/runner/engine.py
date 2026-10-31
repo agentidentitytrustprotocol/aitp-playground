@@ -122,7 +122,7 @@ class ScenarioRunner:
         )
         # A cancel can land while POST /runs still has the run pending; it
         # has already emitted run.cancelled, so the run must not start (#118).
-        if not self.store.start_unless_cancelled(run_id, {
+        if not self.store.upsert_unless_cancelled(run_id, {
             "run_id": run_id, "status": "running", "scenario_ref": scenario_ref,
             "run_label": run_label, "outputs": {}, "events": [], "error": None,
         }):
@@ -135,7 +135,8 @@ class ScenarioRunner:
                 scenario_ref, template=template,
             )
         except PlaygroundError as exc:
-            ctx.emit(RunEvent(type="run.failed", code=exc.code, error=str(exc)))
+            if not self._is_cancelled(run_id):  # a cancel already emitted the terminal event
+                ctx.emit(RunEvent(type="run.failed", code=exc.code, error=str(exc)))
             return self._finalize_failure(run_id, str(exc), ctx)
 
         # 1b. Refuse a scenario whose steps call SDK features this wheel
@@ -148,9 +149,14 @@ class ScenarioRunner:
                 scenario_ref, missing, self.capabilities_provider().get("version"),
             )
             logger.warning("Run %s refused: %s", run_id, refusal)
-            ctx.emit(RunEvent(type="run.failed", code=refusal.code, error=str(refusal)))
+            if not self._is_cancelled(run_id):
+                ctx.emit(RunEvent(type="run.failed", code=refusal.code, error=str(refusal)))
             return self._finalize_failure(run_id, str(refusal), ctx)
 
+        # A cancel since the start already emitted run.cancelled; a
+        # run.started after it would be counted active and never finish.
+        if self._is_cancelled(run_id):
+            return self._finalize_failure(run_id, "cancelled before start", ctx)
         ctx.emit(RunEvent(
             type="run.started",
             scenario_ref=scenario_ref,
@@ -310,7 +316,17 @@ class ScenarioRunner:
         finally:
             self._cleanup_run(run_id, ports, bootstrap_files)
 
-        ctx.emit(RunEvent(type="run.complete"))
+        # The steps finished, but a cancel may have landed after the last of
+        # them: the caller already saw `cancelled`, so don't overwrite it.
+        # Events are already in the store via RunContext.emit →
+        # store.append_event; don't pass them here or the merge doubles them.
+        completed = self.store.upsert_unless_cancelled(run_id, {
+            "run_id": run_id, "status": "success", "scenario_ref": scenario_ref,
+            "outputs": step_outputs,
+            "error": None,
+        })
+        if completed:
+            ctx.emit(RunEvent(type="run.complete"))
         # Ingest the FULL run event log, not just ctx.events. Agent
         # subprocesses deliver their canonical events (handshake.complete,
         # delegation.issued/redeemed, tct.*) to POST /internal/telemetry,
@@ -328,15 +344,10 @@ class ScenarioRunner:
         task.add_done_callback(self._bg_tasks.discard)
         self._schedule_webhook_teardown(run_id, after=task)
 
-        result = RunResult.success(run_id, step_outputs, ctx.events)
-        # Events are already in the store via RunContext.emit → store.append_event;
-        # don't pass them here or upsert's merge would double them.
-        self.store.upsert(run_id, {
-            "run_id": run_id, "status": "success", "scenario_ref": scenario_ref,
-            "outputs": step_outputs,
-            "error": None,
-        })
-        return result
+        if not completed:
+            return RunResult(run_id=run_id, status="cancelled", outputs=step_outputs,
+                             events=ctx.events)
+        return RunResult.success(run_id, step_outputs, ctx.events)
 
     def _cleanup_run(
         self,
