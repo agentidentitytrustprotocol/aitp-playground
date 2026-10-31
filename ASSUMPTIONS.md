@@ -157,7 +157,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** guard it with the same 501 as the other gated surfaces; it is the playground's only end-to-end exercise of `verify_delegation_multihop`.
 - **Alternatives:** wire it through `AgentSpec` (a feature #117 doesn't ask for); delete it (separate cleanup).
 - **Blast radius if wrong:** a small dead branch plus its tests; removable in one commit.
-- **Status:** UNCONFIRMED
+- **Status:** **CONFIRMED (2026-10-30)**: see DECISIONS.md D-26. The bootstrap builder never sets the flag, so no scenario can reach the branch. The preflight must refuse on multihop starting with the first change that wires the flag.
 
 ## #117 D7 — hosted demo and docker stacks build the `experimental` wheel
 - **Plan:** plans/sdk-experimental-features.md (Phase 4, BLOCKED-ON aitp-rs 1.0-rc)
@@ -165,4 +165,4 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** a source build with `--features experimental` for Railway/docker images; plain `uv sync` and default CI stay on the default wheel.
 - **Alternatives:** ship the default wheel and let the two scenarios refuse cleanly (safe after Phases 1–3, but removes two public demos).
 - **Blast radius if wrong:** minutes added per image build; reversible with one build argument.
-- **Status:** UNCONFIRMED
+- **Status:** **CONFIRMED (2026-10-30)**: see DECISIONS.md D-26. Applies in Phase 4, which is still BLOCKED-ON the aitp-rs 1.0-rc release.

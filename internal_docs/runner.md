@@ -335,9 +335,23 @@ appended to the same run record.
 
 `POST /runs/{id}/cancel`:
 - No-op for runs already in a terminal state.
-- Otherwise kills every subprocess for the run via
-  `supervisor.kill_run`, marks the record `cancelled`, and emits
-  `run.cancelled`.
+- Otherwise marks the record `cancelled`, emits `run.cancelled`, then
+  kills every subprocess for the run via `supervisor.kill_run` (mark
+  first, kill second: D-16).
+- A cancel can land before any agent exists (#118, D-25):
+  - while the run is still `pending`, `run()` starts it through
+    `RunStore.upsert_unless_cancelled`, which refuses a `cancelled`
+    record as one step under the store lock. The run returns
+    `cancelled` without emitting anything: no `run.started`, no second
+    terminal event.
+  - after `run()` started it but before every agent spawned,
+    `kill_run` has nothing to kill, so the spawn loop checks the record
+    before each launch and unwinds, releasing ports and bootstrap files.
+  - Neither a preflight failure nor `run.started` is emitted for a run
+    already cancelled.
+- A cancel that lands after the last step: `success` is written through
+  `upsert_unless_cancelled` too, so it can't overwrite `cancelled`, and
+  `run.complete` is emitted only when that write succeeds.
 - The background run task usually fails its next inter-agent HTTP
   call once subprocesses die — but `_finalize_failure` checks the
   store for an already-`cancelled` status before upserting `failed`

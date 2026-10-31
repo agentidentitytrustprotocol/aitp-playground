@@ -611,4 +611,55 @@ names are missing attributes, so today a run of `intra-org/tct-renewal` or
 
 **Deferred:** building the hosted demo and docker stacks with `experimental` (D7) is
 BLOCKED-ON the aitp-rs 1.0-rc release; it and keeping the guarded multihop branch (D5)
-are logged UNCONFIRMED in `ASSUMPTIONS.md`.
+were settled in D-26.
+
+## D-25 — A cancel that lands before the agents exist (#118)
+**2026-10-30 · recorded**
+
+`POST /runs` stores the run `pending` and schedules `run()`. A cancel landing before
+`run()` began was overwritten by its unconditional `status="running"` upsert, and the
+cancelled run then spawned agents and spent LLM credit. A cancel landing after that
+upsert but before the spawn loop finished found nothing to kill, and later agents still
+spawned.
+
+**Chosen:**
+- `run()` writes `running` through `RunStore.upsert_unless_cancelled`: the check and the upsert run
+  together under the store lock, so no check-then-write window remains. `SqliteRunStore`
+  persists only an accepted start.
+- `success` is written the same way, and `run.complete` is emitted only when the write
+  succeeds, so a cancel after the last step stays cancelled. Preflight `run.failed` and
+  `run.started` are skipped for an already-cancelled run. These are check-then-emit
+  guards, so they narrow the `runs_active` leak window to microseconds rather than
+  close it; only the status writes are atomic.
+- The spawn loop checks the record before each launch. A cancelled record unwinds
+  through the run's `except` (D-16 guard: no `run.failed`), which releases ports and
+  bootstrap files.
+- `RunResult.status` is `cancelled` for a cancelled run, matching the record, and keeps
+  the triggering error. Nothing in the service read the old `failed`.
+
+**Rejected:** a check-then-upsert in the engine. The cancel route runs on a threadpool
+thread, so it can interleave between the read and the write.
+
+## D-26 — #117 D5 and D7 settled
+**2026-10-30 · reconciled**
+
+**D5: keep the guarded multihop redeem branch. CONFIRMED.**
+- `agents/base/aitp_server.py` reads `aitp.allow_multihop_delegation` from the bootstrap.
+  `hosting/bootstrap.py` never writes it, so today only tests reach the branch.
+- The preflight therefore has nothing to refuse. `STEP_SDK_FEATURES` has no multihop entry
+  on purpose.
+- **Condition:** the change that first lets a scenario set the flag (through `AgentSpec`
+  or the manifest) must also make `required_sdk_features` report `multihop_delegation`
+  for that scenario. A run then refuses before spawn instead of reaching the agent's 501.
+- Reversible: deleting the branch and its tests is one commit.
+
+**D7: hosted demo and docker stacks build the `experimental` wheel. CONFIRMED.**
+- Keeps the two public demos (`intra-org/tct-renewal`, `intra-org/session-bundle`)
+  runnable after aitp-sdk 0.24.
+- Local `uv sync` and default CI stay on the default wheel. The stable-only meta-test
+  keeps the suite honest there.
+- Reversible: dropping the build argument returns the image to the default wheel. The
+  two scenarios then refuse cleanly (D-24).
+- Applied in Phase 4 of `plans/sdk-experimental-features.md`, which is BLOCKED-ON the
+  aitp-rs 1.0-rc release.
+

@@ -176,3 +176,19 @@ def test_a_set_value_in_a_record_round_trips_via_json_default(tmp_path: Path) ->
     reopened = SqliteRunStore(str(db))
     assert reopened.get("r1")["tags"] == ["a", "b"]
     reopened.close()
+
+
+def test_upsert_unless_cancelled_persists_only_when_it_starts(tmp_path: Path) -> None:
+    """#118: the refused start writes nothing; the accepted one is durable."""
+    db = tmp_path / "runs.sqlite"
+    store = SqliteRunStore(str(db))
+    store.upsert("gone", {"run_id": "gone", "status": "cancelled", "events": []})
+    store.upsert("live", {"run_id": "live", "status": "pending", "events": []})
+    assert store.upsert_unless_cancelled("gone", {"status": "running", "events": []}) is False
+    assert store.upsert_unless_cancelled("live", {"status": "running", "events": []}) is True
+    store.close()
+
+    reopened = SqliteRunStore(str(db))
+    assert reopened.get("gone")["status"] == "cancelled"
+    assert reopened.get("live")["status"] == "running"
+    reopened.close()

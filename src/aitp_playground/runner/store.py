@@ -31,12 +31,27 @@ class RunStore:
 
     def upsert(self, run_id: str, record: dict[str, Any]) -> None:
         with self._lock:
-            existing = self._runs.get(run_id, {})
-            if "created_at" not in existing and "created_at" not in record:
-                record = {**record, "created_at": time.time()}
-            merged = {**existing, **record}
-            merged["events"] = list(existing.get("events", [])) + list(record.get("events", []))
-            self._runs[run_id] = merged
+            self._merge_locked(run_id, record)
+
+    def upsert_unless_cancelled(self, run_id: str, record: dict[str, Any]) -> bool:
+        """Upsert ``record`` unless the run is already ``cancelled``, as one
+        step under the lock. The engine writes ``running`` and ``success``
+        through this, so a ``/runs/{id}/cancel`` (a threadpool thread) can't
+        land between a status check and the write and be overwritten (#118).
+        False means nothing was written."""
+        with self._lock:
+            if self._runs.get(run_id, {}).get("status") == "cancelled":
+                return False
+            self._merge_locked(run_id, record)
+            return True
+
+    def _merge_locked(self, run_id: str, record: dict[str, Any]) -> None:
+        existing = self._runs.get(run_id, {})
+        if "created_at" not in existing and "created_at" not in record:
+            record = {**record, "created_at": time.time()}
+        merged = {**existing, **record}
+        merged["events"] = list(existing.get("events", [])) + list(record.get("events", []))
+        self._runs[run_id] = merged
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
         with self._lock:
@@ -189,6 +204,12 @@ class SqliteRunStore(RunStore):
     def upsert(self, run_id: str, record: dict[str, Any]) -> None:
         super().upsert(run_id, record)
         self._persist_record(run_id)
+
+    def upsert_unless_cancelled(self, run_id: str, record: dict[str, Any]) -> bool:
+        written = super().upsert_unless_cancelled(run_id, record)
+        if written:
+            self._persist_record(run_id)
+        return written
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
         super().append_event(run_id, event)

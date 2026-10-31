@@ -197,3 +197,28 @@ def test_json_default_stringifies_anything_else() -> None:
             return "<thing>"
 
     assert _json_default(Thing()) == "<thing>"
+
+
+def test_upsert_unless_cancelled_starts_a_pending_run() -> None:
+    store = RunStore()
+    store.upsert("r", {"run_id": "r", "status": "pending"})
+    assert store.upsert_unless_cancelled("r", {"status": "running", "events": []}) is True
+    assert store.get("r")["status"] == "running"
+
+
+def test_upsert_unless_cancelled_leaves_a_cancelled_run_alone() -> None:
+    """#118: a cancel that lands while the run is pending must survive."""
+    store = RunStore()
+    store.upsert("r", {"run_id": "r", "status": "pending"})
+    store.upsert("r", {"status": "cancelled"})
+    store.append_event("r", {"type": "run.cancelled"})
+    assert store.upsert_unless_cancelled("r", {"status": "running", "error": None, "events": []}) is False
+    record = store.get("r")
+    assert record["status"] == "cancelled"
+    assert [e["type"] for e in record["events"]] == ["run.cancelled"]
+
+
+def test_upsert_unless_cancelled_starts_an_unknown_run() -> None:
+    store = RunStore()
+    assert store.upsert_unless_cancelled("r", {"run_id": "r", "status": "running"}) is True
+    assert store.get("r")["status"] == "running"

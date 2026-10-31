@@ -30,6 +30,12 @@ from .store import RunStore
 logger = logging.getLogger(__name__)
 
 
+class _RunCancelled(Exception):
+    """Stops a run whose record turned ``cancelled`` mid-setup. It unwinds
+    through the run's ``except`` so ports and bootstrap files are released;
+    the cancel route already emitted the terminal ``run.cancelled``."""
+
+
 def _classify_manifest_verify_failure(exc: BaseException) -> str:
     """Mirror of `agent_admin.classify_manifest_verify_failure`.
 
@@ -114,10 +120,14 @@ class ScenarioRunner:
             run_label=run_label,
             store=self.store,
         )
-        self.store.upsert(run_id, {
+        # A cancel can land while POST /runs still has the run pending; it
+        # has already emitted run.cancelled, so the run must not start (#118).
+        if not self.store.upsert_unless_cancelled(run_id, {
             "run_id": run_id, "status": "running", "scenario_ref": scenario_ref,
             "run_label": run_label, "outputs": {}, "events": [], "error": None,
-        })
+        }):
+            logger.info("Run %s was cancelled before it started", run_id)
+            return RunResult(run_id=run_id, status="cancelled")
 
         # 1. Load scenario (optionally merged with a named template)
         try:
@@ -125,7 +135,8 @@ class ScenarioRunner:
                 scenario_ref, template=template,
             )
         except PlaygroundError as exc:
-            ctx.emit(RunEvent(type="run.failed", code=exc.code, error=str(exc)))
+            if not self._is_cancelled(run_id):  # a cancel already emitted the terminal event
+                ctx.emit(RunEvent(type="run.failed", code=exc.code, error=str(exc)))
             return self._finalize_failure(run_id, str(exc), ctx)
 
         # 1b. Refuse a scenario whose steps call SDK features this wheel
@@ -138,9 +149,14 @@ class ScenarioRunner:
                 scenario_ref, missing, self.capabilities_provider().get("version"),
             )
             logger.warning("Run %s refused: %s", run_id, refusal)
-            ctx.emit(RunEvent(type="run.failed", code=refusal.code, error=str(refusal)))
+            if not self._is_cancelled(run_id):
+                ctx.emit(RunEvent(type="run.failed", code=refusal.code, error=str(refusal)))
             return self._finalize_failure(run_id, str(refusal), ctx)
 
+        # A cancel since the start already emitted run.cancelled; a
+        # run.started after it would be counted active and never finish.
+        if self._is_cancelled(run_id):
+            return self._finalize_failure(run_id, "cancelled before start", ctx)
         ctx.emit(RunEvent(
             type="run.started",
             scenario_ref=scenario_ref,
@@ -214,8 +230,11 @@ class ScenarioRunner:
                 bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
                 admin_tokens[agent_spec.id] = bs["admin_token"]
 
-            # 4. Spawn all agents
+            # 4. Spawn all agents. A cancel that lands before an agent exists
+            # finds nothing to kill, so check before each launch (#118).
             for agent_spec in scenario.spec.agents:
+                if self._is_cancelled(run_id):
+                    raise _RunCancelled(run_id)
                 manifest = resolved_manifests[agent_spec.id]
                 adapter = self.adapters.get(manifest.metadata.framework)
                 validation = adapter.validate(manifest)
@@ -265,7 +284,10 @@ class ScenarioRunner:
                 )
 
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Run %s failed: %s", run_id, exc)
+            if isinstance(exc, _RunCancelled):
+                logger.info("Run %s cancelled before all agents spawned", run_id)
+            else:
+                logger.exception("Run %s failed: %s", run_id, exc)
             # This is the one failure site that can race `/runs/{id}/cancel`:
             # steps 1-2 above run before any agent exists, so nothing there
             # can be mid-flight when a cancel lands, but a step dispatch can.
@@ -294,7 +316,17 @@ class ScenarioRunner:
         finally:
             self._cleanup_run(run_id, ports, bootstrap_files)
 
-        ctx.emit(RunEvent(type="run.complete"))
+        # The steps finished, but a cancel may have landed after the last of
+        # them: the caller already saw `cancelled`, so don't overwrite it.
+        # Events are already in the store via RunContext.emit →
+        # store.append_event; don't pass them here or the merge doubles them.
+        completed = self.store.upsert_unless_cancelled(run_id, {
+            "run_id": run_id, "status": "success", "scenario_ref": scenario_ref,
+            "outputs": step_outputs,
+            "error": None,
+        })
+        if completed:
+            ctx.emit(RunEvent(type="run.complete"))
         # Ingest the FULL run event log, not just ctx.events. Agent
         # subprocesses deliver their canonical events (handshake.complete,
         # delegation.issued/redeemed, tct.*) to POST /internal/telemetry,
@@ -312,15 +344,10 @@ class ScenarioRunner:
         task.add_done_callback(self._bg_tasks.discard)
         self._schedule_webhook_teardown(run_id, after=task)
 
-        result = RunResult.success(run_id, step_outputs, ctx.events)
-        # Events are already in the store via RunContext.emit → store.append_event;
-        # don't pass them here or upsert's merge would double them.
-        self.store.upsert(run_id, {
-            "run_id": run_id, "status": "success", "scenario_ref": scenario_ref,
-            "outputs": step_outputs,
-            "error": None,
-        })
-        return result
+        if not completed:
+            return RunResult(run_id=run_id, status="cancelled", outputs=step_outputs,
+                             events=ctx.events)
+        return RunResult.success(run_id, step_outputs, ctx.events)
 
     def _cleanup_run(
         self,
@@ -384,15 +411,18 @@ class ScenarioRunner:
         later. See `DECISIONS.md` D-16.
         """
         self._schedule_webhook_teardown(run_id)
-        existing = self.store.get(run_id)
-        if existing is not None and existing.get("status") == "cancelled":
-            return RunResult.failure(run_id, error, events=ctx.events)
+        if self._is_cancelled(run_id):
+            return RunResult(run_id=run_id, status="cancelled", events=ctx.events, error=error)
         self.store.upsert(run_id, {
             "run_id": run_id, "status": "failed",
             "outputs": {},
             "error": error,
         })
         return RunResult.failure(run_id, error, events=ctx.events)
+
+    def _is_cancelled(self, run_id: str) -> bool:
+        existing = self.store.get(run_id)
+        return existing is not None and existing.get("status") == "cancelled"
 
     # ---- step dispatch ----
 
