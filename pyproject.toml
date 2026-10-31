@@ -109,13 +109,16 @@ dependencies = [
   #     with INCOMPATIBLE_IDENTITY_TYPE. `build_manifest` takes the list
   #     (default `[own type]`), so mixed oidc <-> pinned_key pairs list both.
   #     Handshake errors now carry `.code`. Still `aitp/0.3`.
+  #   0.23.0 — no binding change (aitp-cli release: `aitp handshake`,
+  #     `aitp manifest fetch`, `aitp serve --interop`). Still `aitp/0.3`; the
+  #     floor moves with the `<0.23` bound.
   #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md;
   #   0.20 is in ../aitp-rs/CHANGELOG.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.22.0,<0.23",
+  "aitp-sdk>=0.23.0,<0.24",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",
