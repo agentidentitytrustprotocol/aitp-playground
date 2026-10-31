@@ -628,7 +628,9 @@ spawned.
   persists only an accepted start.
 - `success` is written the same way, and `run.complete` is emitted only when the write
   succeeds, so a cancel after the last step stays cancelled. Preflight `run.failed` and
-  `run.started` are skipped for an already-cancelled run, so `runs_active` can't leak.
+  `run.started` are skipped for an already-cancelled run. These are check-then-emit
+  guards, so they narrow the `runs_active` leak window to microseconds rather than
+  close it; only the status writes are atomic.
 - The spawn loop checks the record before each launch. A cancelled record unwinds
   through the run's `except` (D-16 guard: no `run.failed`), which releases ports and
   bootstrap files.
