@@ -107,7 +107,7 @@ swallowed rather than failing the run):
 | `capability.self_execute` | — | `/admin/self-execute` runs. |
 | `llm.started` / `llm.complete` | — | Wraps the LLM call — the clearest signal in the log that real work happened, not a stub. |
 | `llm.failed` | `task`, `detail` (research tasks also carry `topic`) | The real provider call was attempted (a key was configured) but failed — bad/expired key, quota, unreachable. Surfaces as a 502 from the capability route, `detail` is the provider's own error text. |
-| `manifest.verify_failed` | `cause` (`signature_invalid \| expired \| malformed \| unknown`), `source_url` | A fetched peer manifest failed verification. |
+| `manifest.verify_failed` | `cause` (the SDK's `.code`: `pop_failed`, `signature_invalid`, `expired`, `aid_mismatch`, `malformed`, …; `unknown` when it has none), `source_url` | A fetched peer manifest failed verification. The SDK checks the proof of possession before the signature (RFC-AITP-0003 §5 steps 4–5), so `pop_failed` says nothing about the signature: it was never assessed. |
 | `tct.renewal.requested` / `tct.renewal.issued` | `jti`, plus TCT identifying fields | Holder requests a fresh TCT before the held one expires / issuer mints it. |
 | `session.bundle.exported` | `session_id`, `participant_count` | RFC-AITP-0010 coordinator built a session bundle. |
 | `session.bundle.verified` | `kind`, `active_count` | RFC-AITP-0010 verifier checked one. |

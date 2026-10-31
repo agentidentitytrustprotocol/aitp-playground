@@ -195,6 +195,62 @@ async def test_verification_failure_emits_a_named_event_distinct_from_expiry(
     assert events[0][1]["source_url"] == "http://peer/m"
 
 
+def _corrupt(b64url: str) -> str:
+    return ("A" if b64url[0] != "A" else "B") + b64url[1:]
+
+
+async def test_a_manifest_failing_pop_and_signature_reports_pop_failed(
+    peer: "aitp.AitpAgent", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RFC-AITP-0003 §5: the PoP (step 4) is checked before the signature (step 5).
+
+    aitp-sdk 0.24 follows that order, so a manifest with both broken stops
+    at `pop_failed` and its signature is never assessed. `pop_failed` must
+    therefore never read as "the signature was verified": the request is
+    still refused and the event names only the PoP.
+    """
+    import agent_admin
+
+    events: list[tuple[str, dict]] = []
+
+    async def _capture(event_type, _bootstrap, **fields):
+        events.append((event_type, fields))
+
+    monkeypatch.setattr(agent_admin, "emit_event", _capture)
+
+    envelope = json.loads(_mint(peer))
+    body = envelope["manifest"]
+    body["signature"] = _corrupt(body["signature"])
+    body["proof_of_possession"]["signature"] = _corrupt(body["proof_of_possession"]["signature"])
+    with pytest.raises(HTTPException) as exc:
+        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+
+    assert exc.value.status_code == 502
+    assert "(pop_failed)" in exc.value.detail
+    assert events == [("manifest.verify_failed", {"cause": "pop_failed", "source_url": "http://peer/m"})]
+
+
+async def test_a_broken_signature_with_a_valid_pop_is_signature_invalid(
+    peer: "aitp.AitpAgent", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The counterpart: only once the PoP passes is the signature judged."""
+    import agent_admin
+
+    events: list[tuple[str, dict]] = []
+
+    async def _capture(event_type, _bootstrap, **fields):
+        events.append((event_type, fields))
+
+    monkeypatch.setattr(agent_admin, "emit_event", _capture)
+
+    envelope = json.loads(_mint(peer))
+    envelope["manifest"]["signature"] = _corrupt(envelope["manifest"]["signature"])
+    with pytest.raises(HTTPException):
+        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+
+    assert events[0][1]["cause"] == "signature_invalid"
+
+
 async def test_an_extra_manifest_member_is_classified_unknown_field(
     peer: "aitp.AitpAgent", monkeypatch: pytest.MonkeyPatch
 ) -> None:
