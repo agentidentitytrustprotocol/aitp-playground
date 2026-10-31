@@ -153,7 +153,8 @@ suite. `test_stable_only_sdk.py` is not gated.
 
 ### `test_stable_only_sdk.py` — no gate
 
-Re-runs `tests/unit` in subprocesses with the stable-only plugin above and
+Re-runs `tests/unit` (only: no scenario or integration test reaches a gated
+SDK call today) in subprocesses with the stable-only plugin above and
 checks two things:
 - without `AITP_EXPECT_EXPERIMENTAL`, the run passes and the skipped tests
   are exactly the `@requires_sdk_feature` tests;

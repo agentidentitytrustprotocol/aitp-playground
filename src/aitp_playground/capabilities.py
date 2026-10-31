@@ -1,11 +1,10 @@
 """Runtime probe of the installed ``aitp`` SDK feature surface.
 
 The ``aitp`` wheel is compiled from the sibling ``aitp-rs/bindings/aitp-py``
-repo (it is *not* the unrelated PyPI package of the same name). As of SDK
-0.4.0 the full surface — renewal, session bundles, SPKI pinning, the TCT
-verification cache, and multi-hop delegation — ships **by default**, but a
-``--no-default-features`` wheel (or an older 0.3.x wheel) may omit some, so
-this probe still reports what the *currently installed* wheel provides.
+repo (it is *not* the unrelated PyPI package of the same name). From SDK
+0.4.0 to 0.23 the full surface shipped by default. From 0.24 (aitp-rs
+1.0-rc), TCT renewal, session bundles and multi-hop delegation are compiled
+only into an ``experimental`` build (#117), so a default wheel lacks them.
 
 This module reports what the *currently installed* wheel actually provides so
 that:
@@ -30,8 +29,9 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 if TYPE_CHECKING:
     from .registry.models import ScenarioVersion
 
-# Stable feature keys. Scenarios reference these names when declaring a
-# required SDK capability, so keep them stable across releases.
+# Stable feature keys, reported by GET /capabilities and the scenario
+# listings and used by STEP_SDK_FEATURES (scenarios never declare them), so
+# keep them stable across releases.
 FEATURE_OIDC = "oidc"
 FEATURE_SESSION_BUNDLE = "session_bundle"
 FEATURE_SPKI_PINNING = "spki_pinning"
