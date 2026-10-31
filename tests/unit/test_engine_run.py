@@ -1527,7 +1527,10 @@ def test_finalize_failure_preserves_an_already_cancelled_record() -> None:
 
     result = env.runner._finalize_failure("run-1", "connection refused", ctx)
 
-    assert result.status == "failed", "the RunResult itself reports what happened"
+    # The run ends as the caller asked; the failure that the kill caused is
+    # kept as the error (#118 made RunResult agree with the record).
+    assert result.status == "cancelled"
+    assert result.error == "connection refused"
     record = env.store.get("run-1")
     assert record["status"] == "cancelled", (
         "the STORE record must stay cancelled — the caller already saw that "
@@ -1582,7 +1585,7 @@ async def test_run_failed_not_emitted_when_dispatch_races_a_cancel(agent_http) -
 
     result = await _run(env)
 
-    assert result.status == "failed", result.error
+    assert result.status == "cancelled", result.error
     assert "run.failed" not in _event_types(result), (
         "the dispatch-level guard must not emit run.failed for a run the "
         "caller already saw as cancelled"
@@ -1612,3 +1615,56 @@ async def test_every_admin_call_carries_the_launched_agents_token(agent_http) ->
     assert {r.url.path for r in admin_calls} >= {"/admin/trust-peers", "/admin/invoke"}
     for r in admin_calls:
         assert r.headers.get("X-Aitp-Admin-Token") == tokens[r.url.port], r.url
+
+
+# --- #118: a run cancelled before the engine starts it stays cancelled ---
+
+
+def _seed_pending_then_cancel(env: SimpleNamespace, run_id: str = "run-1") -> None:
+    """What POST /runs then POST /runs/{id}/cancel leave behind when the
+    cancel lands before the background task reaches ``run()``."""
+    env.store.upsert(run_id, {"run_id": run_id, "status": "pending", "events": []})
+    env.store.upsert(run_id, {"status": "cancelled"})
+    env.store.append_event(run_id, {"type": "run.cancelled", "run_id": run_id})
+
+
+async def test_run_cancelled_while_pending_never_starts(agent_http) -> None:
+    env = make_env(agents={"alice": ["cap.a"]}, eager=False,
+                   steps=[{"id": "s1", "agent": "alice", "capability": "cap.a"}])
+    _seed_pending_then_cancel(env)
+
+    result = await _run(env)
+
+    assert result.status == "cancelled"
+    assert result.events == []
+    assert env.supervisor.launched == []
+    record = env.store.get("run-1")
+    assert record["status"] == "cancelled"
+    assert [e["type"] for e in record["events"]] == ["run.cancelled"], (
+        "no run.started and no second terminal event for a run cancelled while pending"
+    )
+    assert env.ports._in_use == set()
+
+
+async def test_cancel_after_start_before_spawn_spawns_nothing(agent_http) -> None:
+    """A cancel landing after run() claimed the run but before the agents
+    exist (kill_run then has nothing to kill) must stop the spawn loop."""
+    env = make_env(agents={"alice": ["cap.a"], "bob": ["cap.b"]}, eager=False,
+                   steps=[{"id": "s1", "agent": "alice", "capability": "cap.a"}])
+    real_launch = env.supervisor.launch
+
+    async def _launch_then_cancel(**kw):
+        ra = await real_launch(**kw)
+        env.store.upsert("run-1", {"status": "cancelled"})  # cancel lands mid-spawn
+        return ra
+
+    env.supervisor.launch = _launch_then_cancel
+
+    result = await _run(env)
+
+    assert env.supervisor.launched == ["alice"], "bob must not spawn after the cancel"
+    types = [e["type"] for e in env.store.get("run-1")["events"]]
+    assert "run.failed" not in types and "run.complete" not in types
+    assert env.store.get("run-1")["status"] == "cancelled"
+    assert result.status == "cancelled"
+    assert env.ports._in_use == set(), "ports taken before the cancel are released"

@@ -30,6 +30,12 @@ from .store import RunStore
 logger = logging.getLogger(__name__)
 
 
+class _RunCancelled(Exception):
+    """Stops a run whose record turned ``cancelled`` mid-setup. It unwinds
+    through the run's ``except`` so ports and bootstrap files are released;
+    the cancel route already emitted the terminal ``run.cancelled``."""
+
+
 def _classify_manifest_verify_failure(exc: BaseException) -> str:
     """Mirror of `agent_admin.classify_manifest_verify_failure`.
 
@@ -114,10 +120,14 @@ class ScenarioRunner:
             run_label=run_label,
             store=self.store,
         )
-        self.store.upsert(run_id, {
+        # A cancel can land while POST /runs still has the run pending; it
+        # has already emitted run.cancelled, so the run must not start (#118).
+        if not self.store.start_unless_cancelled(run_id, {
             "run_id": run_id, "status": "running", "scenario_ref": scenario_ref,
             "run_label": run_label, "outputs": {}, "events": [], "error": None,
-        })
+        }):
+            logger.info("Run %s was cancelled before it started", run_id)
+            return RunResult(run_id=run_id, status="cancelled")
 
         # 1. Load scenario (optionally merged with a named template)
         try:
@@ -214,8 +224,11 @@ class ScenarioRunner:
                 bootstrap_files[agent_spec.id] = self.bootstrap_builder.write(bs)
                 admin_tokens[agent_spec.id] = bs["admin_token"]
 
-            # 4. Spawn all agents
+            # 4. Spawn all agents. A cancel that lands before an agent exists
+            # finds nothing to kill, so check before each launch (#118).
             for agent_spec in scenario.spec.agents:
+                if self._is_cancelled(run_id):
+                    raise _RunCancelled(run_id)
                 manifest = resolved_manifests[agent_spec.id]
                 adapter = self.adapters.get(manifest.metadata.framework)
                 validation = adapter.validate(manifest)
@@ -265,7 +278,10 @@ class ScenarioRunner:
                 )
 
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Run %s failed: %s", run_id, exc)
+            if isinstance(exc, _RunCancelled):
+                logger.info("Run %s cancelled before all agents spawned", run_id)
+            else:
+                logger.exception("Run %s failed: %s", run_id, exc)
             # This is the one failure site that can race `/runs/{id}/cancel`:
             # steps 1-2 above run before any agent exists, so nothing there
             # can be mid-flight when a cancel lands, but a step dispatch can.
@@ -384,15 +400,18 @@ class ScenarioRunner:
         later. See `DECISIONS.md` D-16.
         """
         self._schedule_webhook_teardown(run_id)
-        existing = self.store.get(run_id)
-        if existing is not None and existing.get("status") == "cancelled":
-            return RunResult.failure(run_id, error, events=ctx.events)
+        if self._is_cancelled(run_id):
+            return RunResult(run_id=run_id, status="cancelled", events=ctx.events, error=error)
         self.store.upsert(run_id, {
             "run_id": run_id, "status": "failed",
             "outputs": {},
             "error": error,
         })
         return RunResult.failure(run_id, error, events=ctx.events)
+
+    def _is_cancelled(self, run_id: str) -> bool:
+        existing = self.store.get(run_id)
+        return existing is not None and existing.get("status") == "cancelled"
 
     # ---- step dispatch ----
 

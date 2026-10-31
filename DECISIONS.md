@@ -612,3 +612,26 @@ names are missing attributes, so today a run of `intra-org/tct-renewal` or
 **Deferred:** building the hosted demo and docker stacks with `experimental` (D7) is
 BLOCKED-ON the aitp-rs 1.0-rc release; it and keeping the guarded multihop branch (D5)
 are logged UNCONFIRMED in `ASSUMPTIONS.md`.
+
+## D-25 — A cancel that lands before the agents exist (#118)
+**2026-10-30 · recorded**
+
+`POST /runs` stores the run `pending` and schedules `run()`. A cancel landing before
+`run()` began was overwritten by its unconditional `status="running"` upsert, and the
+cancelled run then spawned agents and spent LLM credit. A cancel landing after that
+upsert but before the spawn loop finished found nothing to kill, and later agents still
+spawned.
+
+**Chosen:**
+- `run()` starts through `RunStore.start_unless_cancelled`: the check and the upsert run
+  together under the store lock, so no check-then-write window remains. `SqliteRunStore`
+  persists only an accepted start.
+- The spawn loop checks the record before each launch. A cancelled record unwinds
+  through the run's `except` (D-16 guard: no `run.failed`), which releases ports and
+  bootstrap files.
+- `RunResult.status` is `cancelled` for a cancelled run, matching the record, and keeps
+  the triggering error. Nothing in the service read the old `failed`.
+
+**Rejected:** a check-then-upsert in the engine. The cancel route runs on a threadpool
+thread, so it can interleave between the read and the write.
+
