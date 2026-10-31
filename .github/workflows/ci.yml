@@ -115,8 +115,11 @@ jobs:
         with:
           # setup-uv prunes with `uv cache prune --ci`, which keeps wheels
           # built from source, so the compiled SDK is reused until uv.lock
-          # changes. That replaces a Rust cache.
+          # changes. That replaces a Rust cache. The suffix keeps this cache
+          # apart from the plain 3.13 Tests job, which has the same lock
+          # hash and would otherwise save a cache without the compiled SDK.
           enable-cache: true
+          cache-suffix: experimental
           python-version: "3.13"
 
       - name: Install dependencies, compiling aitp-sdk with `experimental`

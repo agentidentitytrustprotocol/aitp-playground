@@ -11,10 +11,11 @@ dependencies = [
   # It is the Rust-backed wheel from the sibling ../aitp-rs/bindings/aitp-py,
   # published to PyPI as aitp-sdk and installed from there by default (the
   # Docker image does the same; AITP_SDK_SOURCE=path compiles the sibling
-  # source instead). The optional capabilities (renewal, session bundles,
-  # SPKI pinning, multi-hop delegation) are default-on cargo features of the
-  # published wheel; the service detects what's available at runtime via
-  # GET /capabilities.
+  # source instead). From 0.24 the published wheel leaves out renewal,
+  # session bundles and multi-hop delegation (the `experimental` cargo
+  # feature); the image compiles the locked sdist with it
+  # (AITP_SDK_SOURCE=pypi-src, D-26). The service detects what's available
+  # at runtime via GET /capabilities.
   # The floor records wire compatibility, not "the newest we happened to test".
   # These breaking changes, and one routine adoption, are behind it:
   #   0.3.0 — the compact-JWS SDK (protocol `aitp/0.2`). The pre-0.3 wheels

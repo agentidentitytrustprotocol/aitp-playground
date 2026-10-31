@@ -155,8 +155,10 @@ docker compose up --build
 docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 ```
 
-The default (PyPI wheel) build takes a minute or two; only the opt-in
-`path` variant pays a Rust cold compile (several minutes). The e2e stack
+These compose builds compile the locked `aitp-sdk` sdist with the
+experimental features (`AITP_SDK_SOURCE=pypi-src`), so a cold build pays a
+Rust compile (several minutes); a plain `docker build` with the default
+PyPI wheel takes a minute or two. The e2e stack
 also builds the Control Plane image from the sibling `aitp-cp` /
 `aitp-rs` checkouts.
 

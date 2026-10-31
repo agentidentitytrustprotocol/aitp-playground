@@ -23,7 +23,9 @@ stage 2 is a slim runtime image that installs it and runs the playground.
 fails the build unless the five experimental names are present, so a
 featureless wheel can't be published by mistake. The federated stack keeps
 `pypi`, because its demo uses no gated feature. The two source builds share
-a `rust-builder` stage and cache cargo with BuildKit mounts.
+a `rust-builder` stage and cache the cargo registry and target dir with BuildKit mounts; a
+`uv.lock` change still invalidates the sdist layer, so a bump pays a cold
+compile.
 
 ```bash
 # default — reproducible from this commit
@@ -53,11 +55,12 @@ asserts the running container's `/capabilities` version equals the `uv.lock`
 pin, so this cannot silently regress.
 
 **What changed about image tags.** Before this, `:latest` meant "aitp-rs main
-as of build time"; now it means "the pinned wheel". Older tags are not
+as of build time"; now it means "the pinned version, compiled from its locked
+sdist with `experimental`". Older tags are not
 reproducible from their commit — don't diagnose against them as if they were.
 
-**Local dev note.** `docker compose -f docker-compose.test.yml up` now gets the
-PyPI wheel. If you were relying on it picking up your `../aitp-rs` working
+**Local dev note.** `docker compose -f docker-compose.test.yml up` now compiles
+the pinned sdist from PyPI (`AITP_SDK_SOURCE=pypi-src`). If you were relying on it picking up your `../aitp-rs` working
 tree, pass `--build-arg AITP_SDK_SOURCE=path` (see
 [testing.md](testing.md)).
 

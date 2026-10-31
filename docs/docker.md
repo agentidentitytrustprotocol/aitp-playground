@@ -71,8 +71,8 @@ volume-mounts `./tests` read-only so test edits don't require a rebuild.
 This stack needs sibling checkouts next to this repo: `../aitp-cp` (the
 `aitp-control-plane` repo — `aitp-cp` is the local directory alias the
 compose file expects) and `../aitp-rs` (the CP image compiles its native
-binding from `aitp-rs` source even though the playground image itself uses
-the PyPI wheel).
+binding from `aitp-rs` source even though the playground image itself
+compiles the locked `aitp-sdk` sdist from PyPI).
 
 ```bash
 cp .env.example .env

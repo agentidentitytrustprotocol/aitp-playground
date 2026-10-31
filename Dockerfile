@@ -126,7 +126,7 @@ WORKDIR /build/sdist
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/sdist/target \
+    --mount=type=cache,target=/build/sdist/bindings/aitp-py/target \
     maturin build --release --out /wheels --interpreter python3.13 \
         ${AITP_SDK_FEATURES:+--features "$AITP_SDK_FEATURES"} && \
     ls -la /wheels
