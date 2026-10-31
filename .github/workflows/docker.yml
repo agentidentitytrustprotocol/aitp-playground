@@ -15,10 +15,11 @@ name: Docker
 #
 # Note which image needs which sibling — they are NOT the same dependency:
 #
-#   * The PLAYGROUND image no longer needs aitp-rs at all. It defaults to
-#     AITP_SDK_SOURCE=pypi and installs aitp-sdk at the version uv.lock pins,
-#     so both the published image and the e2e stack run the SDK this repo
-#     actually depends on. Previously every job checked aitp-rs out at
+#   * The PLAYGROUND image no longer needs aitp-rs at all. It builds with
+#     AITP_SDK_SOURCE=pypi-src, compiling the sdist of the aitp-sdk version
+#     uv.lock pins (with AITP_SDK_FEATURES=experimental), so both the
+#     published image and the e2e stack run the SDK this repo actually
+#     depends on. Previously every job checked aitp-rs out at
 #     unpinned `main` and compiled it, which meant the published image
 #     embedded an unreleased SDK and no test here could observe a
 #     pin/behaviour mismatch. Hence `build-and-push` checks out only this
@@ -98,8 +99,14 @@ jobs:
           # call a real provider when LLM_PROVIDER / *_API_KEY are set at
           # runtime. Without this the image ships no LLM libs and every worker
           # silently falls back to its deterministic stub.
+          # AITP_SDK_SOURCE=pypi-src compiles the locked aitp-sdk sdist with
+          # the experimental features, which the PyPI wheels lack from 0.24,
+          # so the hosted tct-renewal and session-bundle demos keep working
+          # (D-26). The Dockerfile fails the build if the wheel lacks them.
           build-args: |
             INSTALL_EXTRAS=all-agents
+            AITP_SDK_SOURCE=pypi-src
+            AITP_SDK_FEATURES=experimental
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -186,7 +193,7 @@ jobs:
     # nothing else pre-merge builds that combination, so `docker_stack` gates
     # this job on those paths too.
     #
-    # Deliberately NOT widened to all PRs: the stack is ~6 minutes and pulls
+    # Deliberately NOT widened to all PRs: the stack is ~6 minutes plus a cold SDK compile and pulls
     # two sibling repos. Scope it to the pin (and the stack definition), and
     # note that a paths-filter also catches a hand-edited pin, which a
     # branch-name match on the bump bot's convention would not.
@@ -218,8 +225,8 @@ jobs:
           path: aitp-playground
 
       - name: Checkout sibling aitp-rs (needed by Dockerfile.cp-e2e)
-        # NOT for the playground image — that installs the pinned wheel from
-        # PyPI now (AITP_SDK_SOURCE=pypi). This is for the *control plane*:
+        # NOT for the playground image — that compiles the pinned sdist from
+        # PyPI (AITP_SDK_SOURCE=pypi-src). This is for the *control plane*:
         # Dockerfile.cp-e2e:46-48 compiles the CP's own napi binding from
         # aitp-rs source, because the sibling CP repo checks in only a
         # darwin-arm64 .node. Removing this checkout breaks the aitp-cp image,

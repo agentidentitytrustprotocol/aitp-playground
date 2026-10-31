@@ -129,7 +129,10 @@ from `tests/_sdk_features.py`:
 - with `AITP_EXPECT_EXPERIMENTAL=1` a missing feature **fails** the test
   instead (in setup, via `tests/conftest.py`), so a broken experimental
   build can't pass by skipping. This mirrors aitp-rs
-  `bindings/aitp-py/tests/_experimental.py`.
+  `bindings/aitp-py/tests/_experimental.py`. CI's "Tests (experimental
+  SDK)" job compiles the locked sdist with `experimental` and runs
+  `tests/unit` and `tests/scenarios` this way; the other test jobs run the
+  default PyPI wheel, where the marked tests skip.
 
 Presence is `agents/base/sdk_features.has`, the check the agent routes
 use. Tests that *simulate* absence (`monkeypatch.delattr(..., raising=False)`
@@ -269,8 +272,9 @@ from merging until this job goes green.
 If this job goes red because the control-plane half of a coordinated flip has not shipped,
 that is the design working — sequence the rollout rather than disabling the job.
 
-The stack builds the playground image on the default `AITP_SDK_SOURCE=pypi`
-path, so it exercises the `aitp-sdk` version `uv.lock` pins — and
+The stack builds the playground image with `AITP_SDK_SOURCE=pypi-src` and
+`AITP_SDK_FEATURES=experimental`: the locked sdist, compiled with the
+experimental features, so it exercises the `aitp-sdk` version `uv.lock` pins — and
 `test_sdk_version_matches_lock` asserts exactly that, rather than trusting it. To run the stack against an unreleased `../aitp-rs` working tree
 instead, add `--build-arg AITP_SDK_SOURCE=path` (or set it in the compose
 `args:` block):

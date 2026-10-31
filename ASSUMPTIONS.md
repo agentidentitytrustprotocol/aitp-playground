@@ -160,9 +160,9 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Status:** **CONFIRMED (2026-10-30)**: see DECISIONS.md D-26. The bootstrap builder never sets the flag, so no scenario can reach the branch. The preflight must refuse on multihop starting with the first change that wires the flag.
 
 ## #117 D7 — hosted demo and docker stacks build the `experimental` wheel
-- **Plan:** plans/sdk-experimental-features.md (Phase 4, BLOCKED-ON aitp-rs 1.0-rc)
+- **Plan:** plans/sdk-experimental-features.md (Phase 4)
 - **Assumed:** the two gated demos (`tct-renewal`, `session-bundle`) should stay runnable on Railway after 0.24.
 - **Chose:** a source build with `--features experimental` for Railway/docker images; plain `uv sync` and default CI stay on the default wheel.
 - **Alternatives:** ship the default wheel and let the two scenarios refuse cleanly (safe after Phases 1–3, but removes two public demos).
 - **Blast radius if wrong:** minutes added per image build; reversible with one build argument.
-- **Status:** **CONFIRMED (2026-10-30)**: see DECISIONS.md D-26. Applies in Phase 4, which is still BLOCKED-ON the aitp-rs 1.0-rc release.
+- **Status:** **CONFIRMED (2026-10-30)**: see DECISIONS.md D-26. Applied in Phase 4 with the aitp-sdk 0.24.0 bump.

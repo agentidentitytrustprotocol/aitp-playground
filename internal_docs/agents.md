@@ -402,8 +402,12 @@ Conventions used by current workers:
   opaque 500 — see issue #77.
 - `manifest.verify_failed` — a fetched peer manifest failed
   `aitp.verify_manifest_json`. Carries `cause`
-  (`signature_invalid | expired | malformed | unknown` — from the
-  SDK's `.code`, never guessed at from message text) and `source_url`.
+  (the SDK's `.code` — `pop_failed`, `signature_invalid`, `expired`,
+  `aid_mismatch`, `malformed`, … — never guessed at from message text;
+  `unknown` when there is none) and `source_url`. From aitp-sdk 0.24 the
+  proof of possession is checked before the signature (RFC-AITP-0003 §5
+  steps 4–5): a manifest failing both reports `pop_failed`, and its
+  signature was never assessed.
 - `tct.renewal.requested` / `tct.renewal.issued` — holder requests a
   fresh TCT before the held one expires / issuer mints it. Both carry
   `jti` and enough of the TCT to identify it (`tct_event(...)`);
