@@ -253,6 +253,37 @@ From `build_admin_router`:
   control plane's registry (two-step: `/enroll` for a token, then
   `/agents` to register).
 
+**Optional SDK features.** Four of these routes (`renew-tct`, `export-session-bundle`,
+`verify-session-bundle`, `process-renewal`) call SDK surfaces that are
+opt-in build features from `aitp-sdk` 0.24 (`experimental`). On a wheel
+without them each returns **501** with
+`{"error": "aitp-sdk <v> lacks <feature>", "code": "SDK_FEATURE_UNAVAILABLE", "feature": "tct_renewal" | "session_bundle"}`
+instead of an `AttributeError` 500, and emits no event. The check is
+`agents/base/sdk_features.py` (`has` / `unavailable`), resolved at call
+time and kept in step with the playground's
+`src/aitp_playground/capabilities.py` probe by a parity test. Ordering:
+
+- `renew-tct` and `export-session-bundle` keep their 412 (no held TCT /
+  no participants) first; the 501 sits right before the SDK call.
+- `verify-session-bundle` keeps its 400 (no `coordinator_manifest_url`)
+  first; the 501 comes before the coordinator-manifest fetch, so a refused
+  call does no network I/O.
+- `process-renewal` checks first, before reading the body. A holder's
+  `renew-tct` relays an issuer's `SDK_FEATURE_UNAVAILABLE` 501 body unchanged
+  (holder and issuer on different wheels); any other issuer error,
+  including an uncoded 501, keeps its old handling (500).
+- `/aitp/delegation/redeem` with `aitp.allow_multihop_delegation` set
+  returns the same 501 (`feature: "multihop_delegation"`) when
+  `verify_delegation_multihop` is missing, after the `issuer_manifests`
+  400 and before the revocation-freshness check. Single-hop redemption is
+  unaffected. No shipped scenario sets the flag; the branch is exercised
+  by tests only.
+
+In a playground run these 501s are unreachable: the engine refuses a run
+whose steps need a missing feature before spawning agents (see
+[runner.md](runner.md)). They protect direct callers: hosted agents,
+`/admin/*` tooling and a peer's issuer call.
+
 Per worker:
 - `POST /capabilities/<name>` — one per `offered_caps` entry.
 
