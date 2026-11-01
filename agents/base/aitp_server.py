@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from admin_auth import AdminAuthMiddleware
 from bootstrap import get_manifest_json
 from handshake_replay import HandshakeRejected, ReplayGuard
+from loopback import insecure_localhost
 from revocation_publish import REVOCATION_LIST_PATH, RETRY_AFTER_SECS, IssuerRevocationList
 from revocation_refresh import refresh_revocations
 from revocation_state import RevocationState
@@ -45,6 +46,7 @@ def run_agent(
     host: str,
     port: int,
     admin_token: Optional[str],
+    tls: Optional[dict[str, str]],
     log_level: str = "warning",
 ) -> None:
     """Run ``app`` under uvicorn with the socket already listening at startup.
@@ -69,9 +71,18 @@ def run_agent(
     incoming connection whether or not uvicorn's asyncio accept loop has
     started consuming it yet. uvicorn calls ``sock.listen()`` again inside
     ``create_server()``; re-listening an already-listening socket is a no-op.
+
+    ``tls`` is the bootstrap's ``loopback_tls`` block, required for the same
+    reason as ``admin_token``. ``None`` serves plain HTTP: a hosted agent behind
+    its TLS terminator, or the local/test opt-in.
     """
     config = uvicorn.Config(
-        AdminAuthMiddleware(app, token=admin_token), host=host, port=port, log_level=log_level
+        AdminAuthMiddleware(app, token=admin_token),
+        host=host,
+        port=port,
+        log_level=log_level,
+        ssl_certfile=tls["certfile"] if tls else None,
+        ssl_keyfile=tls["keyfile"] if tls else None,
     )
     server = uvicorn.Server(config)
     sock = config.bind_socket()
@@ -211,6 +222,7 @@ class AitpServer:
         self._tct_cache_hits = 0
         self._tct_cache_misses = 0
         self.oidc = OidcContext(bootstrap)
+        self.insecure_localhost = insecure_localhost(bootstrap)
         self.router = self._build_router()
 
     def _new_responder(self):
@@ -224,8 +236,11 @@ class AitpServer:
                 jwks=self.oidc.jwks,
                 trust_anchors=self.oidc.trust_anchors,
                 pinned_keys=pinned,
+                insecure_localhost_dangerous=self.insecure_localhost,
             )
-        return self.agent.new_responder(pinned_keys=pinned)
+        return self.agent.new_responder(
+            pinned_keys=pinned, insecure_localhost_dangerous=self.insecure_localhost,
+        )
 
     # ── background revocation refresh ────────────────────────────────────
 
@@ -742,11 +757,13 @@ class AitpServer:
                     verified = aitp.verify_delegation_multihop(
                         token_json, self.agent.aid, issuer_manifests,
                         max_delegation_hops=max_hops, revoked_jtis=deny_set,
+                        insecure_localhost_dangerous=self.insecure_localhost,
                     )
                 else:
                     verified = aitp.verify_delegation(
                         token_json, self.agent.aid, issuer_manifests,
                         revoked_jtis=deny_set,
+                        insecure_localhost_dangerous=self.insecure_localhost,
                     )
             except (RuntimeError, ValueError) as exc:
                 # The SDK has decided; this only names the source, as the

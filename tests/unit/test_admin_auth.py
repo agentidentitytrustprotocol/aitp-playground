@@ -17,6 +17,7 @@ from fastapi import FastAPI
 
 from aitp_playground.config import Settings
 from aitp_playground.hosting.bootstrap import BootstrapBuilder
+from aitp_playground.hosting.loopback import AgentLoopback
 from aitp_playground.hosting.supervisor import (
     ADMIN_TOKEN_HEADER,
     AdminTokenAuth,
@@ -109,26 +110,26 @@ def _send(auth: httpx.Auth, url: str) -> httpx.Request:
 
 def test_auth_hook_attaches_token_only_to_loopback_admin_of_a_known_port() -> None:
     auth = AdminTokenAuth({9100: TOKEN})
-    assert _send(auth, "http://localhost:9100/admin/trust-peers").headers[ADMIN_TOKEN_HEADER] == TOKEN
-    assert _send(auth, "http://127.0.0.1:9100/admin/invoke").headers[ADMIN_TOKEN_HEADER] == TOKEN
+    assert _send(auth, "https://localhost:9100/admin/trust-peers").headers[ADMIN_TOKEN_HEADER] == TOKEN
+    assert _send(auth, "https://127.0.0.1:9100/admin/invoke").headers[ADMIN_TOKEN_HEADER] == TOKEN
     for url in (
-        "http://localhost:9101/admin/trust-peers",       # not a launched agent
-        "http://localhost:9100/.well-known/aitp-manifest",  # not /admin
+        "https://localhost:9101/admin/trust-peers",       # not a launched agent
+        "https://localhost:9100/.well-known/aitp-manifest",  # not /admin
         "https://org-b.aitp.test:9100/admin/invoke",     # never off-box
-        "http://localhost:9100/administrator",
+        "https://localhost:9100/administrator",
     ):
         assert ADMIN_TOKEN_HEADER not in _send(auth, url).headers, url
 
 
 def test_supervisor_forgets_token_on_kill() -> None:
-    sup = AgentSupervisor()
+    sup = AgentSupervisor(AgentLoopback(Settings()))
     sup._agents["r:a"] = RunningAgent(
         run_id="r", agent_id="a", port=9100, pid=None, aid="", manifest_url="", status="ready",
     )
     sup._admin_tokens[9100] = TOKEN
     sup.kill("r", "a")
     assert 9100 not in sup._admin_tokens
-    assert ADMIN_TOKEN_HEADER not in _send(sup.admin_auth, "http://localhost:9100/admin/x").headers
+    assert ADMIN_TOKEN_HEADER not in _send(sup.admin_auth, "https://localhost:9100/admin/x").headers
 
 
 def test_token_is_not_serialized_with_running_agent() -> None:

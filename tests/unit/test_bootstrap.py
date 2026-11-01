@@ -24,11 +24,11 @@ def test_build_and_write_produces_64_char_seed(tmp_path: Path, monkeypatch) -> N
         agent_spec=agent_spec,
         resolved_manifest=manifest,
         port=8100,
-        peers={"writer": {"manifest_url": "http://localhost:8101/.well-known/aitp-manifest", "did": None}},
+        peers={"writer": {"manifest_url": "https://localhost:8101/.well-known/aitp-manifest", "did": None}},
         inputs={"topic": "AITP"},
     )
     assert len(bs["aitp"]["seed_hex"]) == 64
-    assert bs["aitp"]["handshake_endpoint"] == "http://localhost:8100/aitp/handshake/hello"
+    assert bs["aitp"]["handshake_endpoint"] == "https://localhost:8100/aitp/handshake/hello"
     assert bs["aitp"]["offered_caps"] == ["research.query"]
     assert bs["peers"]["writer"]["manifest_url"].endswith("/.well-known/aitp-manifest")
 
@@ -69,7 +69,7 @@ def test_bootstrap_carries_cp_block_when_configured() -> None:
     """With CP env configured, the bootstrap carries cp.base_url and
     cp.api_key so the agent's /admin/refresh-revocations route can call
     the CP without an explicit override."""
-    settings = Settings(cp_base_url="http://cp.test:4000", cp_api_key="k")
+    settings = Settings(cp_base_url="https://cp.test:4000", cp_api_key="k")
     svc = RegistryService(settings)
     manifest = svc.get_agent_manifest("_shared/agents/researcher")
     builder = BootstrapBuilder(settings)
@@ -82,7 +82,7 @@ def test_bootstrap_carries_cp_block_when_configured() -> None:
     # subprocess sees, so an accidental addition should fail here rather than
     # reach an agent unnoticed.
     assert bs["cp"] == {
-        "base_url": "http://cp.test:4000",
+        "base_url": "https://cp.test:4000",
         "api_key": "k",
         # Axis B policy. Agents never read Settings, so the revocation
         # freshness policy has to travel in this block or every agent

@@ -129,12 +129,12 @@ def test_mint_jwt_for_produces_a_jwt_a_real_handshake_actually_accepts() -> None
     b = aitp.AitpAgent.generate()  # pinned-key responder that accepts OIDC peers
 
     a.build_manifest(
-        "a", "http://a/aitp/handshake/hello", ["demo.x"],
+        "a", "https://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc", oidc_issuer=issuer.issuer_url, oidc_subject="alice",
         accepted_identity_types=["pinned_key", "oidc"],
     )
     b_manifest = b.build_manifest(
-        "b", "http://b/aitp/handshake/hello", ["demo.y"],
+        "b", "https://b/aitp/handshake/hello", ["demo.y"],
         accepted_identity_types=["pinned_key", "oidc"],
     )
 
@@ -163,8 +163,8 @@ def test_mint_jwt_for_produces_a_jwt_a_real_handshake_actually_accepts() -> None
 def test_peer_aid_from_hello_envelope_reads_the_manifest_aid() -> None:
     a = aitp.AitpAgent.generate()
     b = aitp.AitpAgent.generate()
-    b_manifest = b.build_manifest("b", "http://b/aitp/handshake/hello", ["demo.y"])
-    a.build_manifest("a", "http://a/aitp/handshake/hello", ["demo.x"])
+    b_manifest = b.build_manifest("b", "https://b/aitp/handshake/hello", ["demo.y"])
+    a.build_manifest("a", "https://a/aitp/handshake/hello", ["demo.x"])
 
     hello = a.new_session().build_hello(b_manifest, ["demo.y"])
     assert peer_aid_from_hello_envelope(hello) == a.aid

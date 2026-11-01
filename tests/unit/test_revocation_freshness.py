@@ -67,7 +67,7 @@ def _server(
         "aitp": {
             "seed_hex": "22" * 32,
             "display_name": "a",
-            "handshake_endpoint": "http://localhost:9/aitp/handshake/hello",
+            "handshake_endpoint": "https://localhost:9/aitp/handshake/hello",
             "offered_caps": ["demo.x"],
         },
     }
@@ -77,7 +77,7 @@ def _server(
         agent=agent,
         manifest_json=agent.build_manifest(
             display_name="a",
-            handshake_endpoint="http://localhost:9/aitp/handshake/hello",
+            handshake_endpoint="https://localhost:9/aitp/handshake/hello",
             offered_caps=["demo.x"],
         ),
         port=9,
@@ -269,7 +269,7 @@ def test_the_can_verify_inference_is_exercised_not_just_overridden() -> None:
             "aitp": {
                 "seed_hex": "33" * 32,
                 "display_name": "a",
-                "handshake_endpoint": "http://localhost:9/x",
+                "handshake_endpoint": "https://localhost:9/x",
                 "offered_caps": ["demo.x"],
             },
         }
@@ -279,7 +279,7 @@ def test_the_can_verify_inference_is_exercised_not_just_overridden() -> None:
             agent=agent,
             manifest_json=agent.build_manifest(
                 display_name="a",
-                handshake_endpoint="http://localhost:9/x",
+                handshake_endpoint="https://localhost:9/x",
                 offered_caps=["demo.x"],
             ),
             port=9,

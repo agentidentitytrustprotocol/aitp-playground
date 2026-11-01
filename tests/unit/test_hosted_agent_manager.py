@@ -69,6 +69,7 @@ class FakeSupervisor:
         self, *, run_id: str, agent_id: str, prepared: Any, port: int,
         admin_token: Optional[str] = None,
         startup_timeout_ms: int = 30_000,
+        listener_origin: Optional[str] = None,
     ) -> RunningAgent:
         self.launched.append(agent_id)
         self.admin_token = admin_token

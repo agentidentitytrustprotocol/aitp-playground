@@ -1,7 +1,7 @@
 """HostedAgentManager: bring up a single long-lived agent addressable at this
 service's *public* origin.
 
-This is the federation primitive behind the cross-domain (Level 1/2) demos.
+This is the federation primitive behind the cross-domain demos.
 A normal scenario run spawns all its agents locally and tears them down; a
 federated run needs org-B to keep one agent (the analyzer) alive at its own
 origin so org-A can resolve it via did:web and handshake across the boundary.
@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Optional
 from urllib.parse import quote
 
-from ..config import Settings
+from ..config import Settings, on_railway
 from ..registry.models import AgentSpec
 from ..registry.service import RegistryService
 from .adapters.registry import AdapterRegistry
@@ -83,6 +83,10 @@ class HostedAgentManager:
         when the caller does not override them. ``port`` pins the container
         listen port so it can match an advertised (proxied or literal) public
         origin; when omitted the dedicated allocator picks one."""
+        # A hosted agent listens on a routable address behind its public origin.
+        # Agents on Railway stay on loopback, and Railway routes one port anyway.
+        if on_railway():
+            raise ValueError("hosted agents are not available on Railway")
         host = public_host or self.settings.public_host
         scheme = public_scheme or self.settings.public_scheme
         if not host:
@@ -137,6 +141,7 @@ class HostedAgentManager:
                 prepared=prepared,
                 port=port,
                 admin_token=bs["admin_token"],
+                listener_origin=f"http://localhost:{port}",
                 startup_timeout_ms=int(
                     resolved_manifest.spec.host.get("startupTimeoutMs", 30_000)
                 ),

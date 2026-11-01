@@ -8,8 +8,13 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from aitp_playground.config import Settings
+from aitp_playground.hosting.loopback import AgentLoopback
 from aitp_playground.trust import resolver
 from aitp_playground.trust.resolver import encode_did_web, resolve_did_web
+
+
+LOOPBACK = AgentLoopback(Settings())
 
 
 @pytest.mark.parametrize(
@@ -38,6 +43,7 @@ def _patch_transport(monkeypatch: pytest.MonkeyPatch, handler) -> None:
 
     def _wrapper(*args, **kwargs):  # noqa: ANN001,ANN002,ANN003
         kwargs.setdefault("transport", httpx.MockTransport(handler))
+        kwargs.pop("mounts", None)
         return real_ctor(*args, **kwargs)
 
     monkeypatch.setattr(resolver.httpx, "AsyncClient", _wrapper)
@@ -45,7 +51,7 @@ def _patch_transport(monkeypatch: pytest.MonkeyPatch, handler) -> None:
 
 async def test_resolve_did_web_rejects_non_did_web() -> None:
     with pytest.raises(ValueError, match="not a did:web"):
-        await resolve_did_web("did:key:zABC")
+        await resolve_did_web("did:key:zABC", LOOPBACK)
 
 
 async def test_resolve_did_web_returns_manifest_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,27 +70,48 @@ async def test_resolve_did_web_returns_manifest_url(monkeypatch: pytest.MonkeyPa
         )
 
     _patch_transport(monkeypatch, handler)
-    url = await resolve_did_web("did:web:example.com")
+    url = await resolve_did_web("did:web:example.com", LOOPBACK)
     # A real host → https; trailing slash trimmed before the suffix is appended.
     assert captured["url"] == "https://example.com/.well-known/did.json"
     assert url == "https://example.com/.well-known/aitp-manifest"
 
 
-async def test_resolve_did_web_uses_http_for_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resolve_did_web_uses_https_for_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         return httpx.Response(
             200,
-            json={"service": [{"type": "AitpManifest", "serviceEndpoint": "http://localhost:8101"}]},
+            json={"service": [{"type": "AitpManifest", "serviceEndpoint": "https://localhost:8101"}]},
         )
 
     _patch_transport(monkeypatch, handler)
-    url = await resolve_did_web("did:web:localhost%3A8101")
-    # The %3A is unquoted back to ':' and localhost forces http (not https).
-    assert captured["url"] == "http://localhost:8101/.well-known/did.json"
-    assert url == "http://localhost:8101/.well-known/aitp-manifest"
+    url = await resolve_did_web("did:web:localhost%3A8101", LOOPBACK)
+    # The %3A is unquoted back to ':'.
+    assert captured["url"] == "https://localhost:8101/.well-known/did.json"
+    assert url == "https://localhost:8101/.well-known/aitp-manifest"
+
+
+async def test_resolve_did_web_uses_http_for_localhost_only_under_the_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return httpx.Response(
+            200, json={"service": [{"type": "AitpManifest", "serviceEndpoint": "http://x"}]},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    opted_in = AgentLoopback(Settings(insecure_localhost_dangerous=True))
+    await resolve_did_web("did:web:localhost%3A8101", opted_in)
+    await resolve_did_web("did:web:org-b.aitp.test%3A9100", opted_in)
+    assert captured == [
+        "http://localhost:8101/.well-known/did.json",
+        "https://org-b.aitp.test:9100/.well-known/did.json",
+    ]
 
 
 async def test_resolve_did_web_raises_when_no_aitp_service(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,7 +120,7 @@ async def test_resolve_did_web_raises_when_no_aitp_service(monkeypatch: pytest.M
 
     _patch_transport(monkeypatch, handler)
     with pytest.raises(ValueError, match="no AitpManifest service"):
-        await resolve_did_web("did:web:example.com")
+        await resolve_did_web("did:web:example.com", LOOPBACK)
 
 
 async def test_resolve_did_web_propagates_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,4 +129,4 @@ async def test_resolve_did_web_propagates_http_error(monkeypatch: pytest.MonkeyP
 
     _patch_transport(monkeypatch, handler)
     with pytest.raises(httpx.HTTPStatusError):
-        await resolve_did_web("did:web:example.com")
+        await resolve_did_web("did:web:example.com", LOOPBACK)

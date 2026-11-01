@@ -118,13 +118,19 @@ dependencies = [
   #     `--features experimental`; the image compiles the locked sdist, D-26).
   #     The initiator reports a HELLO_ACK from the wrong peer as
   #     `.code == "PEER_MISMATCH"`. Still `aitp/0.3`.
+  #   0.25.1 — Manifest verification enforces the RFC-AITP-0003 §5 step 2
+  #     grammar, so `handshake_endpoint` must be https://, and `build_hello`
+  #     verifies the peer Manifest and identity type before building HELLO.
+  #     Scenario agents therefore serve TLS on loopback (hosting/loopback.py);
+  #     `insecure_localhost_dangerous` is local/test config only. Still
+  #     `aitp/0.3`.
   #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md;
   #   0.20 is in ../aitp-rs/CHANGELOG.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
   # `[tool.uv.sources]` path override (requires a local Rust toolchain):
   #   [tool.uv.sources]
   #   aitp-sdk = { path = "../aitp-rs/bindings/aitp-py" }
-  "aitp-sdk>=0.24.0,<0.25",
+  "aitp-sdk>=0.25.1,<0.26",
   "fastapi>=0.140.13",
   "uvicorn[standard]>=0.51.0",
   "pydantic>=2.10",

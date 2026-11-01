@@ -399,7 +399,7 @@ a hook for repo-specific post-bump edits.
 
 See `plans/audit-2026-08-28-cleanup.md` Phase 9.
 
-## D-19 — The did:web-insecure-hosts allowlist stays out of `Settings`
+## D-19 — The did:web-insecure-hosts allowlist stays out of `Settings` (closed by D-27)
 **2026-08-28 · recorded**
 
 `config.py` declared `didweb_insecure_hosts: str = ""` (binding `DIDWEB_INSECURE_HOSTS`), and
@@ -664,3 +664,29 @@ thread, so it can interleave between the read and the write.
   `AITP_SDK_SOURCE=pypi-src` stage compiles the locked sdist, and the "Tests
   (experimental SDK)" CI job runs the suite with `AITP_EXPECT_EXPERIMENTAL=1`.
 
+
+## D-27 — Scenario agents serve TLS on loopback (aitp-sdk 0.25)
+**2026-11-01 · recorded**
+
+aitp-sdk 0.25 refuses a Manifest whose `handshake_endpoint` is not `https://`
+(RFC-AITP-0003 §5 step 2). `insecure_localhost_dangerous` admits loopback HTTP, but it is
+local/test config and production must not set it, and production scenario agents live on
+`localhost` inside one container.
+
+**Chosen: one self-signed `CA:FALSE` certificate per service process, SANs `localhost` and
+`127.0.0.1` (`hosting/loopback.py`).** It is the only root the agent clients trust, and only
+for loopback URLs, through per-client `mounts=`. Other hosts keep default trust, and nothing
+sets `SSL_CERT_FILE`. The cert and key are 0600 in a 0700 temp dir. Scenario agents bind
+`127.0.0.1`.
+
+**`INSECURE_LOCALHOST_DANGEROUS` is the only way to plain loopback HTTP.** `Settings` refuses
+it when a Railway platform variable (`RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`,
+`RAILWAY_SERVICE_ID`) is present, so the service does not start. `POST /hosted-agents` is also
+refused on Railway, because a hosted agent binds a routable address.
+
+**Rejected: a name-constrained CA.** The leaf needs its key on disk for the agents either way,
+and a `CA:FALSE` certificate can issue nothing.
+
+**Plain-HTTP federated stack removed.** Its hostnames are not loopback, so 0.25 refuses them
+with the opt-in on. TLS is the only federated path. `AITP_DIDWEB_INSECURE_HOSTS` went with it,
+which closes D-19.

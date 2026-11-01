@@ -45,7 +45,7 @@ _BOOTSTRAP = {"run_id": "test-run", "agent_id": "peer"}
 from fastapi import HTTPException  # noqa: E402
 
 
-def _mint(agent: "aitp.AitpAgent", *, endpoint: str = "http://localhost:9/aitp/handshake/hello",
+def _mint(agent: "aitp.AitpAgent", *, endpoint: str = "https://localhost:9/aitp/handshake/hello",
           ttl_secs: int | None = None) -> str:
     kwargs = {"display_name": "peer", "handshake_endpoint": endpoint, "offered_caps": ["demo.x"]}
     if ttl_secs is not None:
@@ -60,7 +60,7 @@ def peer() -> "aitp.AitpAgent":
 
 async def test_a_genuine_manifest_verifies_and_yields_its_body(peer: "aitp.AitpAgent") -> None:
     manifest = await _verify_peer_manifest(
-        _mint(peer), "http://peer/.well-known/aitp-manifest", _BOOTSTRAP
+        _mint(peer), "https://peer/.well-known/aitp-manifest", _BOOTSTRAP
     )
     assert manifest["aid"] == peer.aid
     # The fields the two call sites actually consume.
@@ -73,7 +73,7 @@ async def test_a_tampered_body_is_rejected(peer: "aitp.AitpAgent") -> None:
     envelope = json.loads(_mint(peer))
     envelope["manifest"]["display_name"] = "evil"
     with pytest.raises(HTTPException) as exc:
-        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(json.dumps(envelope), "https://peer/m", _BOOTSTRAP)
     assert exc.value.status_code == 502
     assert "failed verification" in exc.value.detail
 
@@ -90,7 +90,7 @@ async def test_a_substituted_aid_is_rejected(peer: "aitp.AitpAgent") -> None:
     envelope = json.loads(_mint(peer))
     envelope["manifest"]["aid"] = attacker.aid
     with pytest.raises(HTTPException) as exc:
-        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(json.dumps(envelope), "https://peer/m", _BOOTSTRAP)
     assert exc.value.status_code == 502
 
 
@@ -106,7 +106,7 @@ async def test_a_wholesale_attacker_manifest_is_not_confused_for_the_peer(
     the same lesson for revocation.
     """
     attacker = aitp.AitpAgent.generate()
-    manifest = await _verify_peer_manifest(_mint(attacker), "http://attacker/m", _BOOTSTRAP)
+    manifest = await _verify_peer_manifest(_mint(attacker), "https://attacker/m", _BOOTSTRAP)
     assert manifest["aid"] == attacker.aid
     assert manifest["aid"] != peer.aid
 
@@ -116,14 +116,14 @@ async def test_a_missing_manifest_body_is_rejected_not_crashed(peer: "aitp.AitpA
     signature = envelope["manifest"]["signature"]
     with pytest.raises(HTTPException) as exc:
         await _verify_peer_manifest(
-            json.dumps({"signature": signature}), "http://peer/m", _BOOTSTRAP
+            json.dumps({"signature": signature}), "https://peer/m", _BOOTSTRAP
         )
     assert exc.value.status_code == 502
 
 
 async def test_garbage_is_rejected_not_crashed() -> None:
     with pytest.raises(HTTPException) as exc:
-        await _verify_peer_manifest("not json at all", "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest("not json at all", "https://peer/m", _BOOTSTRAP)
     assert exc.value.status_code == 502
 
 
@@ -159,7 +159,7 @@ async def test_an_expired_peer_manifest_is_rejected_with_its_own_cause(
     assert int(body["expires_at"]) < time.time()
 
     with pytest.raises(HTTPException) as exc:
-        await _verify_peer_manifest(envelope_json, "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(envelope_json, "https://peer/m", _BOOTSTRAP)
 
     assert exc.value.status_code == 502
     assert events and events[0][0] == "manifest.verify_failed"
@@ -188,11 +188,11 @@ async def test_verification_failure_emits_a_named_event_distinct_from_expiry(
     envelope = json.loads(_mint(peer))
     envelope["manifest"]["display_name"] = "evil"
     with pytest.raises(HTTPException):
-        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(json.dumps(envelope), "https://peer/m", _BOOTSTRAP)
 
     assert events[0][0] == "manifest.verify_failed"
     assert events[0][1]["cause"] == "signature_invalid"
-    assert events[0][1]["source_url"] == "http://peer/m"
+    assert events[0][1]["source_url"] == "https://peer/m"
 
 
 def _corrupt(b64url: str) -> str:
@@ -223,11 +223,11 @@ async def test_a_manifest_failing_pop_and_signature_reports_pop_failed(
     body["signature"] = _corrupt(body["signature"])
     body["proof_of_possession"]["signature"] = _corrupt(body["proof_of_possession"]["signature"])
     with pytest.raises(HTTPException) as exc:
-        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(json.dumps(envelope), "https://peer/m", _BOOTSTRAP)
 
     assert exc.value.status_code == 502
     assert "(pop_failed)" in exc.value.detail
-    assert events == [("manifest.verify_failed", {"cause": "pop_failed", "source_url": "http://peer/m"})]
+    assert events == [("manifest.verify_failed", {"cause": "pop_failed", "source_url": "https://peer/m"})]
 
 
 async def test_a_broken_signature_with_a_valid_pop_is_signature_invalid(
@@ -246,7 +246,7 @@ async def test_a_broken_signature_with_a_valid_pop_is_signature_invalid(
     envelope = json.loads(_mint(peer))
     envelope["manifest"]["signature"] = _corrupt(envelope["manifest"]["signature"])
     with pytest.raises(HTTPException):
-        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(json.dumps(envelope), "https://peer/m", _BOOTSTRAP)
 
     assert events[0][1]["cause"] == "signature_invalid"
 
@@ -269,7 +269,7 @@ async def test_an_extra_manifest_member_is_classified_unknown_field(
     envelope = json.loads(_mint(peer))
     envelope["manifest"]["device_id"] = "phone-77"
     with pytest.raises(HTTPException) as exc:
-        await _verify_peer_manifest(json.dumps(envelope), "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest(json.dumps(envelope), "https://peer/m", _BOOTSTRAP)
 
     assert exc.value.status_code == 502
     assert events[0][0] == "manifest.verify_failed"
@@ -286,7 +286,7 @@ async def test_malformed_input_is_its_own_cause(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(agent_admin, "emit_event", _capture)
     with pytest.raises(HTTPException):
-        await _verify_peer_manifest("not json at all", "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest("not json at all", "https://peer/m", _BOOTSTRAP)
     assert events[0][1]["cause"] in {"signature_invalid", "malformed"}
 
 
@@ -315,14 +315,14 @@ async def test_the_cause_comes_from_the_code_not_the_message_text(
     class _Reworded(RuntimeError):
         code = "expired"
 
-    def _raise(_envelope_json):
+    def _raise(_envelope_json, **_kwargs):
         raise _Reworded("manifest verification failed: validity window elapsed")
 
     monkeypatch.setattr(agent_admin, "emit_event", _capture)
     monkeypatch.setattr(agent_admin.aitp, "verify_manifest_json", _raise)
 
     with pytest.raises(HTTPException):
-        await _verify_peer_manifest("{}", "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest("{}", "https://peer/m", _BOOTSTRAP)
 
     assert events[0][1]["cause"] == "expired", (
         "the cause was derived from the message text, not from `.code` — a "
@@ -345,14 +345,14 @@ async def test_an_untyped_non_value_error_is_unknown_not_guessed(
     async def _capture(event_type, _bootstrap, **fields):
         events.append((event_type, fields))
 
-    def _raise(_envelope_json):
+    def _raise(_envelope_json, **_kwargs):
         raise RuntimeError("something else went wrong entirely")
 
     monkeypatch.setattr(agent_admin, "emit_event", _capture)
     monkeypatch.setattr(agent_admin.aitp, "verify_manifest_json", _raise)
 
     with pytest.raises(HTTPException):
-        await _verify_peer_manifest("{}", "http://peer/m", _BOOTSTRAP)
+        await _verify_peer_manifest("{}", "https://peer/m", _BOOTSTRAP)
 
     assert events[0][1]["cause"] == "unknown"
 
@@ -427,14 +427,14 @@ def _server(ttl_secs: int = 3600):
         "aitp": {
             "seed_hex": "11" * 32,
             "display_name": "peer",
-            "handshake_endpoint": "http://localhost:9/aitp/handshake/hello",
+            "handshake_endpoint": "https://localhost:9/aitp/handshake/hello",
             "offered_caps": ["demo.x"],
             "ttl_secs": ttl_secs,
         },
     }
     manifest_json = agent.build_manifest(
         display_name="peer",
-        handshake_endpoint="http://localhost:9/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:9/aitp/handshake/hello",
         offered_caps=["demo.x"],
         ttl_secs=ttl_secs,
     )
@@ -547,7 +547,7 @@ def test_a_rotation_during_a_remint_does_not_resurrect_the_old_key() -> None:
     rotated_agent = aitp.AitpAgent.generate()
     rotated_manifest = rotated_agent.build_manifest(
         display_name="peer",
-        handshake_endpoint="http://localhost:9/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:9/aitp/handshake/hello",
         offered_caps=["demo.x"],
     )
 
