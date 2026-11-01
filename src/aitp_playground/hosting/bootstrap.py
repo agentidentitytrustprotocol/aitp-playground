@@ -11,11 +11,18 @@ from typing import Any
 from ..config import Settings
 from ..registry.models import AgentManifest, AgentSpec
 from .identity import derive_seed_hex
+from .loopback import AgentLoopback
 
 
 class BootstrapBuilder:
-    def __init__(self, settings: Settings, telemetry_token: str | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        telemetry_token: str | None = None,
+        loopback: AgentLoopback | None = None,
+    ) -> None:
         self.settings = settings
+        self.loopback = loopback or AgentLoopback(settings)
         # Bearer agents send to POST /internal/telemetry. One per playground
         # process; create_app() shares it with the route via app.state.
         self.telemetry_token = telemetry_token or secrets.token_urlsafe(32)
@@ -37,8 +44,10 @@ class BootstrapBuilder:
         # A federated/hosted agent advertises its *public* origin so a peer on
         # another service resolves and dials a real cross-origin URL. Without a
         # public origin the agent stays reachable only at localhost — the
-        # default for in-process scenario runs.
-        base_origin = public_origin.rstrip("/") if public_origin else f"http://localhost:{port}"
+        # default for in-process scenario runs, which serve TLS there and bind
+        # loopback only. A public origin's TLS terminates in front of the agent
+        # (federated/Caddyfile.org-*), which has to accept that proxy's traffic.
+        base_origin = public_origin.rstrip("/") if public_origin else self.loopback.origin(port)
         handshake_ep = f"{base_origin}/aitp/handshake/hello"
         did_web_scheme = base_origin.split("://", 1)[0]
 
@@ -91,7 +100,10 @@ class BootstrapBuilder:
                 ),
                 "oidc_issuer": resolved_manifest.spec.aitp.oidc_issuer,
                 "oidc_subject": resolved_manifest.spec.aitp.oidc_subject,
+                "insecure_localhost_dangerous": self.settings.insecure_localhost_dangerous,
             },
+            "listen_host": "0.0.0.0" if public_origin else "127.0.0.1",
+            "loopback_tls": None if public_origin else self.loopback.agent_tls(),
             "peers": peers,
             "playground": {
                 "telemetry_url": f"{self.settings.playground_base_url}/internal/telemetry",

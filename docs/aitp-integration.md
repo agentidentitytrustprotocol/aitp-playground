@@ -199,9 +199,7 @@ prove that AID is the peer you meant. Two consequences worth keeping straight:
 
 - For `did:web`, the DID document supplies the manifest **endpoint**
   (`serviceEndpoint`), not a key or an AID (`trust/resolver.py`). So the chain
-  is DID → endpoint → whatever manifest that endpoint serves; and the federated
-  stack resolves that first hop over plain HTTP under
-  `AITP_DIDWEB_INSECURE_HOSTS`.
+  is DID → endpoint → whatever manifest that endpoint serves.
 - At the runner's CP trust-anchor site the expected AID **is** known — the
   runner launched the agent — and the site uses it: after
   `verify_manifest_json` passes, `runner/engine.py` compares the manifest's

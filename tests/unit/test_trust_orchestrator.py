@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from aitp_playground.hosting.loopback import AgentLoopback
 from aitp_playground.config import Settings
 from aitp_playground.trust import orchestrator as orch_mod
 from aitp_playground.trust.orchestrator import TrustOrchestrator
@@ -47,7 +48,7 @@ class _FakeCp:
 
 
 def _orch(cp: _FakeCp) -> TrustOrchestrator:
-    return TrustOrchestrator(cp, Settings())  # type: ignore[arg-type]
+    return TrustOrchestrator(cp, Settings(), AgentLoopback(Settings()))  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -63,11 +64,11 @@ async def test_static_discovery_builds_localhost_manifest_urls() -> None:
     peers = await _orch(cp).resolve_peers(scenario, running)
 
     assert peers["alice"] == {
-        "manifest_url": "http://localhost:8101/.well-known/aitp-manifest",
+        "manifest_url": "https://localhost:8101/.well-known/aitp-manifest",
         "did": None,
         "source": "static",
     }
-    assert peers["bob"]["manifest_url"] == "http://localhost:8102/.well-known/aitp-manifest"
+    assert peers["bob"]["manifest_url"] == "https://localhost:8102/.well-known/aitp-manifest"
     assert cp.calls == []  # static never touches the CP
 
 
@@ -84,7 +85,7 @@ async def test_static_discovery_tolerates_missing_running_agent() -> None:
 
 
 async def test_did_web_resolves_via_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_resolve(did: str) -> str:
+    async def fake_resolve(did: str, _loopback=None) -> str:
         assert did == "did:web:peer.example.com"
         return "https://peer.example.com/.well-known/aitp-manifest"
 
@@ -106,7 +107,7 @@ async def test_did_web_resolves_via_resolver(monkeypatch: pytest.MonkeyPatch) ->
 async def test_did_web_encodes_colon_in_host(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict = {}
 
-    async def fake_resolve(did: str) -> str:
+    async def fake_resolve(did: str, _loopback=None) -> str:
         seen["did"] = did
         return "http://localhost:9000/.well-known/aitp-manifest"
 
@@ -133,7 +134,7 @@ async def test_did_web_falls_back_to_localhost_on_resolve_failure(
     peers = await _orch(cp).resolve_peers(scenario, {"ext": _running("ext", 8201)})
 
     # Falls back to the local manifest URL but keeps the did label.
-    assert peers["ext"]["manifest_url"] == "http://localhost:8201/.well-known/aitp-manifest"
+    assert peers["ext"]["manifest_url"] == "https://localhost:8201/.well-known/aitp-manifest"
     assert peers["ext"]["did"] == "did:web:peer.example.com"
 
 
@@ -179,7 +180,7 @@ async def test_cp_registry_falls_back_when_no_agents_discovered() -> None:
     )
     peers = await _orch(cp).resolve_peers(scenario, {"ext": _running("ext", 8301)})
 
-    assert peers["ext"]["manifest_url"] == "http://localhost:8301/.well-known/aitp-manifest"
+    assert peers["ext"]["manifest_url"] == "https://localhost:8301/.well-known/aitp-manifest"
     assert peers["ext"]["source"] == "static_fallback"
 
 

@@ -242,7 +242,7 @@ match the DID host; `502` spawn, `did:web` resolution, Manifest
 verification, trust-peer push, handshake or invoke failed. These routes raise plain FastAPI errors (`{"detail": "..."}`), unlike
 the envelope below.
 
-This is what the Level 1 / Level 2 federated e2e stack
+This is what the federated e2e stack
 [`federated/`](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/federated/README.md)
 (compose files, certs, test knobs)
 drives against two real origins; the intra-org `/runs` flow never touches it.

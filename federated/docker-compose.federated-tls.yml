@@ -1,14 +1,14 @@
-# Level 2 — two playground services on distinct domains over real HTTPS.
+# Two playground services on distinct domains over real HTTPS.
 #
-# Same flow as Level 1, but each domain is fronted by a Caddy TLS terminator
-# using a local CA (see gen-ca.sh). This exercises the *https* branch of
+# org-A hosts the researcher; org-B hosts the analyzer. Each domain is fronted
+# by a Caddy TLS terminator using a local CA (see gen-ca.sh). This exercises
 # did:web resolution and real certificate validation: org-A fetches
 # https://org-b.aitp.test/.well-known/did.json, validates the chain against the
 # mounted CA bundle, and handshakes over TLS.
 #
 #   ./federated/gen-ca.sh
 #   docker compose -f federated/docker-compose.federated-tls.yml up --build -d
-#   AITP_FEDERATED_E2E=1 uv run pytest tests/e2e_federated/ -v
+#   PLAYGROUND_API_KEY=federated-e2e-key-do-not-use-in-prod AITP_FEDERATED_E2E=1 uv run pytest tests/e2e_federated/ -v
 #   docker compose -f federated/docker-compose.federated-tls.yml down
 #
 # The control API is still plain http on published host ports (18000 / 18001);

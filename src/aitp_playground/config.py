@@ -1,8 +1,19 @@
 """Service configuration loaded from environment."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Self
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Set by Railway itself on every deployment; this repo never sets them.
+RAILWAY_PLATFORM_VARS = ("RAILWAY_PROJECT_ID", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_SERVICE_ID")
+
+
+def on_railway() -> bool:
+    return any(os.environ.get(name) for name in RAILWAY_PLATFORM_VARS)
 
 
 class Settings(BaseSettings):
@@ -20,17 +31,13 @@ class Settings(BaseSettings):
     # advertise their handshake_endpoint + did:web serviceEndpoint at
     # ``{public_scheme}://{public_host}`` instead of ``http://localhost:{port}``,
     # so a peer on another service resolves and dials a real cross-origin URL.
-    # Empty (the default) means "no public origin" — behaves exactly as before.
+    # Empty (the default) means "no public origin".
     public_host: str = ""
-    public_scheme: str = "http"
-    # NOTE: the did:web-over-http allowlist (test-only escape hatch for the
-    # Level 1 federated stack) is deliberately NOT a Settings field.
-    # `trust/resolver.py` reads `AITP_DIDWEB_INSECURE_HOSTS` directly from
-    # `os.environ` — a raw read, not through pydantic — because `resolve_did_web`
-    # is a module-level coroutine with no Settings access, called from both
-    # `api/hosted.py` and `trust/orchestrator.py`. Threading Settings into it
-    # for a test-only value would be more machinery than the feature deserves.
-    # See DECISIONS.md D-19.
+    public_scheme: str = "https"
+    # Local/test only: scenario agents serve plain http://localhost and every
+    # SDK call passes aitp-sdk's `insecure_localhost_dangerous`. The default is
+    # TLS on loopback (hosting/loopback.py), which is what production runs.
+    insecure_localhost_dangerous: bool = False
     cp_base_url: str = ""
     cp_api_key: str = ""
     # ── Axis B: what to do about the ABSENCE of a fresh snapshot ─────────
@@ -103,6 +110,15 @@ class Settings(BaseSettings):
     # survive a service restart. Empty (the default) keeps the in-memory
     # RunStore — fast, ephemeral, no I/O.
     run_history_db: str = ""
+
+    @model_validator(mode="after")
+    def _refuse_insecure_localhost_on_railway(self) -> Self:
+        if self.insecure_localhost_dangerous and on_railway():
+            raise ValueError(
+                "INSECURE_LOCALHOST_DANGEROUS is local/test config and cannot be "
+                "set on a Railway deployment"
+            )
+        return self
 
     @property
     def scenarios_path(self) -> Path:

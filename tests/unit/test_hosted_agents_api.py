@@ -54,6 +54,8 @@ class FakeHostedManager:
         self.host_calls: list[dict[str, Any]] = []
         self._hosted: dict[str, HostedAgent] = {}
         self.admin_tokens: dict[int, str] = {}
+        self.settings = SimpleNamespace(insecure_localhost_dangerous=False)
+        self.bootstrap_builder = SimpleNamespace(loopback=None)
         self.supervisor = SimpleNamespace(admin_auth=AdminTokenAuth(self.admin_tokens))
 
     async def host(self, **kwargs: Any) -> HostedAgent:
@@ -286,7 +288,7 @@ def test_resolve_and_handshake_404_for_an_unknown_hosted_id() -> None:
 
 
 def test_resolve_and_handshake_success_returns_established_trust(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         return "https://org-c.aitp.test/.well-known/aitp-manifest"
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
@@ -321,7 +323,7 @@ def test_resolve_and_handshake_success_returns_established_trust(monkeypatch) ->
 
 
 def test_resolve_and_handshake_502_when_did_web_resolution_raises(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         raise RuntimeError("DNS lookup failed")
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
@@ -337,7 +339,7 @@ def test_resolve_and_handshake_502_when_did_web_resolution_raises(monkeypatch) -
 
 
 def test_resolve_and_handshake_502_when_the_admin_dial_returns_an_http_error(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         return "https://org-c.aitp.test/.well-known/aitp-manifest"
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
@@ -358,7 +360,7 @@ def test_resolve_and_handshake_502_when_the_admin_dial_returns_an_http_error(mon
 
 
 def test_resolve_and_handshake_502_when_the_admin_dial_raises(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         return "https://org-c.aitp.test/.well-known/aitp-manifest"
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
@@ -412,7 +414,7 @@ def _trust_peer_handler(manifest: str, pushed: list[dict[str, Any]]):
 
 
 def test_trust_peer_pins_the_aid_of_the_verified_manifest(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         return "https://org-c.aitp.test/.well-known/aitp-manifest"
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
@@ -434,7 +436,7 @@ def test_trust_peer_pins_the_aid_of_the_verified_manifest(monkeypatch) -> None:
 
 
 def test_trust_peer_refuses_a_manifest_that_does_not_verify(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         return "https://org-c.aitp.test/.well-known/aitp-manifest"
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)
@@ -461,7 +463,7 @@ def test_trust_peer_404_for_an_unknown_hosted_id() -> None:
 
 
 def test_trust_peer_502_when_the_agent_refuses_the_push(monkeypatch) -> None:
-    async def _fake_resolve(peer_did: str) -> str:
+    async def _fake_resolve(peer_did: str, _loopback=None) -> str:
         return "https://org-c.aitp.test/.well-known/aitp-manifest"
 
     monkeypatch.setattr(hosted_api_mod, "resolve_did_web", _fake_resolve)

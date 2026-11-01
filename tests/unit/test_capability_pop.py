@@ -124,7 +124,7 @@ async def _issuer_and_holder() -> tuple[AitpServer, httpx.AsyncClient, "aitp.Ait
         "run_id": "r", "agent_id": "b",
         "aitp": {
             "seed_hex": uuid.uuid4().hex * 2, "display_name": "b",
-            "handshake_endpoint": "http://b/aitp/handshake/hello",
+            "handshake_endpoint": "https://b/aitp/handshake/hello",
             "offered_caps": [GRANT],
         },
     }
@@ -147,7 +147,7 @@ async def _issuer_and_holder() -> tuple[AitpServer, httpx.AsyncClient, "aitp.Ait
     b = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://b")
 
     holder = aitp.AitpAgent.generate()
-    holder.build_manifest(display_name="a", handshake_endpoint="http://a/x", offered_caps=["demo.read"])
+    holder.build_manifest(display_name="a", handshake_endpoint="https://a/x", offered_caps=["demo.read"])
     server.trusted_peer_aids.add(holder.aid)
     session = holder.new_session(pinned_keys=[agent.aid])
     ack = await b.post("/aitp/handshake/hello", content=session.build_hello(server.manifest_json, [GRANT]))

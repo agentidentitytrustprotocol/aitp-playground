@@ -24,6 +24,7 @@ from .errors import install_handlers
 from .hosting.adapters.registry import build_default_adapter_registry
 from .hosting.bootstrap import BootstrapBuilder
 from .hosting.hosted import HostedAgentManager
+from .hosting.loopback import AgentLoopback
 from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
 from .limits import SpendLimits
@@ -77,12 +78,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     registry = RegistryService(settings)
     port_alloc = PortAllocator(start=settings.agent_base_port)
-    supervisor = AgentSupervisor()
+    loopback = AgentLoopback(settings)
+    supervisor = AgentSupervisor(loopback)
     telemetry_token = secrets.token_urlsafe(32)
-    bootstrap_builder = BootstrapBuilder(settings, telemetry_token=telemetry_token)
+    bootstrap_builder = BootstrapBuilder(
+        settings, telemetry_token=telemetry_token, loopback=loopback
+    )
     adapters = build_default_adapter_registry()
     cp = CpClient(settings)
-    trust = TrustOrchestrator(cp, settings)
+    trust = TrustOrchestrator(cp, settings, loopback)
     run_store = build_run_store(settings.run_history_db or None)
     hosted = HostedAgentManager(
         registry=registry,

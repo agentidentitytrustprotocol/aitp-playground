@@ -129,8 +129,8 @@ def test_an_sdk_envelope_verifies_under_the_independent_v2_input(agent, sdk_enve
 def test_a_real_hello_verifies_under_the_independent_v2_input(agent) -> None:
     """Not just `sign_envelope`: the handshake path signs the same way."""
     responder = aitp.AitpAgent.generate()
-    manifest = responder.build_manifest("r", "http://r/aitp/handshake/hello", ["demo.x"])
-    agent.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
+    manifest = responder.build_manifest("r", "https://r/aitp/handshake/hello", ["demo.x"])
+    agent.build_manifest("i", "https://i/aitp/handshake/hello", ["demo.y"])
     hello = json.loads(
         agent.new_session(pinned_keys=[responder.aid]).build_hello(manifest, ["demo.x"])
     )

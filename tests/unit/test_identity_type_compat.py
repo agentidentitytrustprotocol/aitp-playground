@@ -45,7 +45,7 @@ def _oidc_initiator(issuer: RunOidcIssuer, accepted: list[str] | None = MIXED) -
     a = aitp.AitpAgent.generate()
     kwargs: dict[str, Any] = {} if accepted is None else {"accepted_identity_types": accepted}
     a.build_manifest(
-        "a", "http://a/aitp/handshake/hello", ["demo.x"],
+        "a", "https://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc", oidc_issuer=issuer.issuer_url, oidc_subject="alice", **kwargs,
     )
     return a
@@ -65,7 +65,14 @@ def _hello(issuer: RunOidcIssuer, a: "aitp.AitpAgent", b: "aitp.AitpAgent", b_ma
 def test_a_pinned_only_responder_refuses_an_oidc_initiator() -> None:
     issuer = RunOidcIssuer.generate()
     a, b = _oidc_initiator(issuer), aitp.AitpAgent.generate()
-    _session, responder, hello = _hello(issuer, a, b, b.build_manifest("b", "http://b/x", ["demo.y"]))
+    # build_hello refuses a peer whose Manifest does not accept this type, so
+    # reach the responder's own check with a Manifest that does, then have the
+    # responder publish its pinned-only one.
+    b_mixed = b.build_manifest("b", "https://b/x", ["demo.y"], accepted_identity_types=MIXED)
+    _session, _responder, hello = _hello(issuer, a, b, b_mixed)
+    b.build_manifest("b", "https://b/x", ["demo.y"])
+    ctx = OidcContext(_oidc_bootstrap(issuer, subject="alice"))
+    responder = b.new_responder(jwks=ctx.jwks, trust_anchors=ctx.trust_anchors, pinned_keys=[a.aid])
 
     with pytest.raises(RuntimeError) as exc:
         responder.process_hello(hello)
@@ -75,7 +82,7 @@ def test_a_pinned_only_responder_refuses_an_oidc_initiator() -> None:
 def test_an_oidc_only_initiator_refuses_a_pinned_responder() -> None:
     issuer = RunOidcIssuer.generate()
     a, b = _oidc_initiator(issuer, accepted=None), aitp.AitpAgent.generate()
-    b_manifest = b.build_manifest("b", "http://b/x", ["demo.y"], accepted_identity_types=MIXED)
+    b_manifest = b.build_manifest("b", "https://b/x", ["demo.y"], accepted_identity_types=MIXED)
     session, responder, hello = _hello(issuer, a, b, b_manifest)
     ack, session_id = responder.process_hello(hello)
 
@@ -87,7 +94,7 @@ def test_an_oidc_only_initiator_refuses_a_pinned_responder() -> None:
 def test_a_mixed_pair_listing_both_types_completes() -> None:
     issuer = RunOidcIssuer.generate()
     a, b = _oidc_initiator(issuer), aitp.AitpAgent.generate()
-    b_manifest = b.build_manifest("b", "http://b/x", ["demo.y"], accepted_identity_types=MIXED)
+    b_manifest = b.build_manifest("b", "https://b/x", ["demo.y"], accepted_identity_types=MIXED)
     session, responder, hello = _hello(issuer, a, b, b_manifest)
 
     ack, session_id = responder.process_hello(hello)
@@ -111,7 +118,7 @@ def _agent_bootstrap(**aitp_overrides: Any) -> dict[str, Any]:
         "run_id": "r", "agent_id": "b",
         "aitp": {
             "seed_hex": uuid.uuid4().hex * 2, "display_name": "b",
-            "handshake_endpoint": "http://b/aitp/handshake/hello",
+            "handshake_endpoint": "https://b/aitp/handshake/hello",
             "offered_caps": ["demo.y"], **aitp_overrides,
         },
     }
@@ -139,13 +146,18 @@ async def test_a_pinned_only_agent_answers_an_oidc_hello_with_a_400() -> None:
     issuer = RunOidcIssuer.generate()
     bootstrap = {**_agent_bootstrap(), "oidc": _oidc_bootstrap(issuer)["oidc"]}
     agent = agent_bootstrap.create_agent(bootstrap)
+    a = _oidc_initiator(issuer)
+    # build_hello refuses a peer whose Manifest does not accept this type, so
+    # the HELLO is built against one that does; the server then publishes its own.
+    mixed = agent_bootstrap.get_manifest_json(
+        agent, {**bootstrap, "aitp": {**bootstrap["aitp"], "accepted_identity_types": MIXED}},
+    )
+    _session, _responder, hello = _hello(issuer, a, agent, mixed)
     server = AitpServer(
         agent=agent, manifest_json=agent_bootstrap.get_manifest_json(agent, bootstrap),
         port=9, bootstrap=bootstrap, revocation=RevocationState(),
     )
-    a = _oidc_initiator(issuer)
     server.trusted_peer_aids.add(a.aid)
-    _session, _responder, hello = _hello(issuer, a, agent, server.manifest_json)
     app = FastAPI()
     app.include_router(server.router)
 

@@ -37,7 +37,7 @@ def _server(**kwargs: Any) -> AitpServer:
     agent = aitp.AitpAgent.generate()
     manifest = agent.build_manifest(
         display_name="responder",
-        handshake_endpoint="http://localhost:9/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:9/aitp/handshake/hello",
         offered_caps=["demo.write"],
     )
     bootstrap = {
@@ -46,7 +46,7 @@ def _server(**kwargs: Any) -> AitpServer:
         "aitp": {
             "seed_hex": "55" * 32,
             "display_name": "responder",
-            "handshake_endpoint": "http://localhost:9/aitp/handshake/hello",
+            "handshake_endpoint": "https://localhost:9/aitp/handshake/hello",
             "offered_caps": ["demo.write"],
         },
     }
@@ -76,7 +76,7 @@ def _initiator_hello(server: AitpServer, *, grants: list[str] | None = None):
     initiator = aitp.AitpAgent.generate()
     initiator.build_manifest(
         display_name="initiator",
-        handshake_endpoint="http://localhost:10/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:10/aitp/handshake/hello",
         offered_caps=["demo.read"],
     )
     session = initiator.new_session(pinned_keys=[server.agent.aid])
@@ -366,9 +366,9 @@ def test_an_initiator_refuses_a_hello_ack_from_another_agent() -> None:
     handshake with that agent) is refused even when that agent is in the
     initiator's store too: the ACK's identity must be the intended peer's."""
     initiator, intended, other = (aitp.AitpAgent.generate() for _ in range(3))
-    initiator.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.read"])
-    intended_m = intended.build_manifest("x", "http://x/aitp/handshake/hello", ["demo.write"])
-    other_m = other.build_manifest("y", "http://x/aitp/handshake/hello", ["demo.write"])
+    initiator.build_manifest("i", "https://i/aitp/handshake/hello", ["demo.read"])
+    intended_m = intended.build_manifest("x", "https://x/aitp/handshake/hello", ["demo.write"])
+    other_m = other.build_manifest("y", "https://x/aitp/handshake/hello", ["demo.write"])
     trusted = [intended.aid, other.aid]
 
     session = initiator.new_session(pinned_keys=trusted)
