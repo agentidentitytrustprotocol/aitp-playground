@@ -235,6 +235,13 @@ routes of its own. All seven routes live under the `/hosted-agents` prefix:
 - `POST /hosted-agents/{hosted_id}/invoke` — invoke a capability on a peer
   using the TCT this hosted agent obtained during the handshake.
 
+**Not available on Railway.** `POST /hosted-agents` returns `400` with
+`hosted agents are not available on Railway`. A hosted agent binds a routable
+address, while agents on Railway stay on loopback, and Railway routes only one
+port, so it couldn't be reached from outside anyway. Federation runs through the
+TLS stack, `federated/docker-compose.federated-tls.yml` (see
+[federated/README.md](../federated/README.md)).
+
 Status codes: `400` invalid request or a non-`did:web` peer; `404` unknown
 hosted id; `409` the peer resolved to a loopback origin (unless
 `AITP_FEDERATION_ALLOW_LOOPBACK` is set — tests only) or its origin doesn't
