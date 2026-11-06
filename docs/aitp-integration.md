@@ -566,13 +566,18 @@ These are optional SDK features rather than part of the minimal handshake/TCT
 path. Some ride on core RFCs (OIDC identity, manifest rotation, the TCT
 verification cache); others are outside the v0.2 core conformance set — the RFC
 index marks [RFC-AITP-0010 and 0011 as Draft/opt-in and 0013 as Planned](https://github.com/agentidentitytrustprotocol/agentidentitytrustprotocol/blob/main/rfcs/README.md).
-The published `aitp-sdk` wheel enables all of them by default (feature flags:
-[aitp-py README § Cargo features](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/README.md#cargo-features));
-each is still
-probed and reported by `GET /capabilities`, and scenarios degrade cleanly when
-a wheel lacks one ([capabilities.md](capabilities.md)). The SDK mechanics for
-all of these are in
-[sdk-python.md § Additional capabilities](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#additional-capabilities-on-by-default);
+The published `aitp-sdk` wheel includes OIDC identity, the TCT verification
+cache and SPKI pinning. TCT renewal, session bundles and multi-hop delegation
+are `experimental-*` features, available only in a source build
+(`maturin develop --features experimental`; feature flags:
+[aitp-py README § Cargo features](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/bindings/aitp-py/README.md#cargo-features)).
+The playground's image and compose stacks build the SDK from the locked sdist
+with `AITP_SDK_SOURCE=pypi-src` and `AITP_SDK_FEATURES=experimental`, so all of
+them are on there. A native `uv sync` installs the published wheel, where
+`GET /capabilities` reports those three as `false` and their scenarios degrade
+cleanly ([capabilities.md](capabilities.md)). The SDK mechanics are in
+[sdk-python.md § OIDC identity](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#oidc-identity-rfc-aitp-0002)
+and [§ Experimental (build from source)](https://github.com/agentidentitytrustprotocol/aitp-rs/blob/main/docs/sdk-python.md#experimental-build-from-source);
 below is only **what the playground wires up** and **which scenario shows
 it**.
 
