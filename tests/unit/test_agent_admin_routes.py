@@ -76,7 +76,7 @@ def test_delegate_without_a_held_voucher_is_412() -> None:
         "/admin/delegate",
         json={
             "held_tct_peer_port": 9999,
-            "delegatee_manifest_url": "http://localhost:9998/.well-known/aitp-manifest",
+            "delegatee_manifest_url": "https://localhost:9998/.well-known/aitp-manifest",
             "scope": ["demo.x"],
         },
     )
@@ -108,7 +108,7 @@ def test_enroll_with_cp_with_no_manifest_provider_wired_is_500() -> None:
     is exactly why this is 500 and the base-url case above is 412."""
     app, _agent = _app(manifest_provider=None)
     resp = _client(app).post(
-        "/admin/enroll-with-cp", json={"cp_base_url": "http://cp.test"},
+        "/admin/enroll-with-cp", json={"cp_base_url": "https://cp.test"},
     )
     assert resp.status_code == 500, resp.text
     assert "manifest_provider" in resp.text
@@ -144,9 +144,9 @@ def _bundle_parties():
     coord = aitp.AitpAgent.generate()
     participant = aitp.AitpAgent.generate()
     coord_manifest = coord.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     )
-    participant.build_manifest("p", "http://p/aitp/handshake/hello", ["x"])
+    participant.build_manifest("p", "https://p/aitp/handshake/hello", ["x"])
     tct = _participant_handshake(participant, coord, coord_manifest)
     builder = aitp.SessionBundleBuilder(coord)
     builder.session_id(str(uuid.uuid4()))
@@ -190,7 +190,7 @@ def test_verify_session_bundle_with_a_tampered_signature_is_403(monkeypatch) -> 
         "/admin/verify-session-bundle",
         json={
             "bundle_envelope": json.dumps(doc),
-            "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+            "coordinator_manifest_url": "https://coord/.well-known/aitp-manifest",
         },
     )
     assert resp.status_code == 403, resp.text
@@ -203,14 +203,14 @@ def test_verify_session_bundle_under_the_wrong_coordinator_is_403(monkeypatch) -
     _coord, _coord_manifest, participant, envelope = _bundle_parties()
     impostor = aitp.AitpAgent.generate()
     _serve_manifest(monkeypatch, impostor.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     ))
 
     resp = _client(_verifier_app(participant)).post(
         "/admin/verify-session-bundle",
         json={
             "bundle_envelope": envelope,
-            "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+            "coordinator_manifest_url": "https://coord/.well-known/aitp-manifest",
         },
     )
     assert resp.status_code == 403, resp.text
@@ -236,7 +236,7 @@ def test_a_grantor_refusing_a_redemption_is_relayed_as_its_403(monkeypatch) -> N
     reason, e.g. that a CP snapshot revoked the source TCT."""
     grantor = aitp.AitpAgent.generate()
     grantor_manifest = grantor.build_manifest(
-        "g", "http://g/aitp/handshake/hello", ["x"],
+        "g", "https://g/aitp/handshake/hello", ["x"],
     )
     reason = "delegation rejected: … (source revoked (issuer-list): src_jti=j)"
 
@@ -256,10 +256,10 @@ def test_a_grantor_refusing_a_redemption_is_relayed_as_its_403(monkeypatch) -> N
     )
     app, _agent = _app()
     resp = _client(app).post("/admin/redeem-delegation", json={
-        "redeem_url": "http://g/aitp/delegation/redeem",
+        "redeem_url": "https://g/aitp/delegation/redeem",
         "delegation_token": "a.b.c",
         "peer_port": 9,
-        "issuer_manifest_urls": ["http://g/.well-known/aitp-manifest"],
+        "issuer_manifest_urls": ["https://g/.well-known/aitp-manifest"],
     })
     assert resp.status_code == 403, resp.text
     # The grantor's reason, unwrapped — not its JSON body as a string.

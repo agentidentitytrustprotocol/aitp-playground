@@ -166,7 +166,8 @@ async def research_deep(request: Request) -> dict[str, Any]:
 if __name__ == "__main__":
     run_agent(
         app,
-        host="0.0.0.0",
+        host=bootstrap["listen_host"],
+        tls=bootstrap.get("loopback_tls"),
         port=PORT,
         admin_token=bootstrap.get("admin_token"),
         log_level="warning",

@@ -47,7 +47,7 @@ from agent_admin import build_admin_router  # noqa: E402
 from aitp_server import AitpServer  # noqa: E402
 from revocation_state import RevocationState  # noqa: E402
 
-B_ORIGIN = "http://b:9"
+B_ORIGIN = "https://b:9"
 GRANT = "demo.write"
 POLL_SECS = 0.25
 LIST_TTL_SECS = 60
@@ -142,8 +142,8 @@ def _agent_a() -> tuple["aitp.AitpAgent", FastAPI]:
     """The holder: an initiator with only the admin router."""
     agent = aitp.AitpAgent.generate()
     agent.build_manifest(
-        display_name="a", handshake_endpoint="http://a/aitp/handshake/hello",
-        offered_caps=["demo.read"], revocation_list_uri=f"http://a{aitp.REVOCATION_LIST_PATH}",
+        display_name="a", handshake_endpoint="https://a/aitp/handshake/hello",
+        offered_caps=["demo.read"], revocation_list_uri=f"https://a{aitp.REVOCATION_LIST_PATH}",
     )
     bootstrap = {"run_id": "r", "agent_id": "a", "aitp": {}}
     app = FastAPI()

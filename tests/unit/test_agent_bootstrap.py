@@ -32,7 +32,7 @@ def _bootstrap(**aitp_overrides) -> dict:
     cfg = {
         "seed_hex": "42" * 32,
         "display_name": "researcher",
-        "handshake_endpoint": "http://localhost:8100/aitp/handshake/hello",
+        "handshake_endpoint": "https://localhost:8100/aitp/handshake/hello",
         "offered_caps": ["research.query"],
     }
     cfg.update(aitp_overrides)
@@ -82,7 +82,7 @@ def test_get_manifest_json_builds_a_self_signed_manifest_that_verifies() -> None
     body = json.loads(manifest_json)["manifest"]
     assert body["aid"] == agent.aid
     assert body["display_name"] == "researcher"
-    assert body["handshake_endpoint"] == "http://localhost:8100/aitp/handshake/hello"
+    assert body["handshake_endpoint"] == "https://localhost:8100/aitp/handshake/hello"
     assert body["offered_capabilities"] == ["research.query"]
     assert body["identity_hint"]["type"] == "pinned_key"
 

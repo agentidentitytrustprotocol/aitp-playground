@@ -28,6 +28,7 @@ from aitp_playground.errors import ScenarioNotFoundError
 from aitp_playground.hosting.adapters.base import ManifestValidation
 from aitp_playground.hosting.bootstrap import BootstrapBuilder
 from aitp_playground.hosting.port_allocator import PortAllocator
+from aitp_playground.hosting.loopback import AgentLoopback
 from aitp_playground.hosting.supervisor import AdminTokenAuth, RunningAgent
 from aitp_playground.registry.models import AgentManifest, ScenarioVersion, StepFault
 from aitp_playground.runner import engine as engine_mod
@@ -68,7 +69,7 @@ def _fake_agent_manifest(port: int) -> str:
         agent = aitp.AitpAgent.generate()
         cached = agent.build_manifest(
             display_name=f"fake-{port}",
-            handshake_endpoint=f"http://localhost:{port}/aitp/handshake/hello",
+            handshake_endpoint=f"https://localhost:{port}/aitp/handshake/hello",
             offered_caps=["cap.a"],
         )
         _FAKE_AGENT_MANIFESTS[port] = cached
@@ -226,7 +227,7 @@ class FakeSupervisor:
             # manifest endpoint serves, so the two agree by construction —
             # cp_provision_trust_anchor now asserts exactly that.
             aid=json.loads(_fake_agent_manifest(port))["manifest"]["aid"],
-            manifest_url=f"http://localhost:{port}/.well-known/aitp-manifest",
+            manifest_url=f"https://localhost:{port}/.well-known/aitp-manifest",
             status="ready",
         )
         self.launched.append(agent_id)
@@ -393,7 +394,7 @@ def make_env(
         supervisor=supervisor,
         bootstrap_builder=BootstrapBuilder(settings),
         adapters=adapters or FakeAdapters(),
-        trust=TrustOrchestrator(cp, settings),
+        trust=TrustOrchestrator(cp, settings, AgentLoopback(settings)),
         cp=cp,
         port_alloc=ports,
         config=settings,
@@ -791,7 +792,7 @@ async def test_delegate_then_redeem_flow(agent_http) -> None:
     assert redeem_body["peer_port"] == 9501
     # The redeemer needs the delegator's Manifest (aitp-sdk >= 0.16).
     assert redeem_body["issuer_manifest_urls"] == [
-        "http://localhost:9500/.well-known/aitp-manifest",
+        "https://localhost:9500/.well-known/aitp-manifest",
     ]
 
     types = _event_types(result)
@@ -822,9 +823,9 @@ async def test_a_second_hop_forwards_every_issuer_manifest(agent_http) -> None:
         if r.url.path == "/admin/redeem-delegation"
     ]
     assert [b["issuer_manifest_urls"] for b in redeems] == [
-        ["http://localhost:9500/.well-known/aitp-manifest"],
-        ["http://localhost:9500/.well-known/aitp-manifest",
-         "http://localhost:9502/.well-known/aitp-manifest"],
+        ["https://localhost:9500/.well-known/aitp-manifest"],
+        ["https://localhost:9500/.well-known/aitp-manifest",
+         "https://localhost:9502/.well-known/aitp-manifest"],
     ]
 
 
@@ -1323,7 +1324,7 @@ async def test_session_bundle_export_then_verify(agent_http) -> None:
     # ...with the coordinator's Manifest URL (aitp-sdk >= 0.16 requires it).
     assert verify_body == {
         "bundle_envelope": {"payload": "bundle"},
-        "coordinator_manifest_url": "http://localhost:9500/.well-known/aitp-manifest",
+        "coordinator_manifest_url": "https://localhost:9500/.well-known/aitp-manifest",
     }
     assert result.outputs["verify"]["kind"] == "session_bundle"
     types = _event_types(result)

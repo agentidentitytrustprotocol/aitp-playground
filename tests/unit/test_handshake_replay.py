@@ -170,7 +170,7 @@ def _responder() -> tuple[AitpServer, httpx.AsyncClient]:
         "run_id": "r", "agent_id": "b",
         "aitp": {
             "seed_hex": uuid.uuid4().hex * 2, "display_name": "b",
-            "handshake_endpoint": "http://b/aitp/handshake/hello",
+            "handshake_endpoint": "https://b/aitp/handshake/hello",
             "offered_caps": [GRANT],
         },
     }
@@ -187,7 +187,7 @@ def _responder() -> tuple[AitpServer, httpx.AsyncClient]:
 
 def _initiator(server: AitpServer) -> "aitp.InitiatorSession":
     a = aitp.AitpAgent.generate()
-    a.build_manifest(display_name="a", handshake_endpoint="http://a/x", offered_caps=["demo.read"])
+    a.build_manifest(display_name="a", handshake_endpoint="https://a/x", offered_caps=["demo.read"])
     server.trusted_peer_aids.add(a.aid)
     return a.new_session(pinned_keys=[server.agent.aid])
 

@@ -91,6 +91,7 @@ class ScenarioRunner:
         self.registry = registry
         self.supervisor = supervisor
         self.bootstrap_builder = bootstrap_builder
+        self.loopback = bootstrap_builder.loopback
         self.adapters = adapters
         self.trust = trust
         self.cp = cp
@@ -212,7 +213,7 @@ class ScenarioRunner:
             for agent_spec in scenario.spec.agents:
                 placeholder_peers = {
                     other.id: {
-                        "manifest_url": f"http://localhost:{ports[other.id]}/.well-known/aitp-manifest",
+                        "manifest_url": f"{self.loopback.origin(ports[other.id])}/.well-known/aitp-manifest",
                         "did": None,
                     }
                     for other in scenario.spec.agents if other.id != agent_spec.id
@@ -348,6 +349,12 @@ class ScenarioRunner:
             return RunResult(run_id=run_id, status="cancelled", outputs=step_outputs,
                              events=ctx.events)
         return RunResult.success(run_id, step_outputs, ctx.events)
+
+    def _agent_client(self, timeout: float) -> httpx.AsyncClient:
+        """A client for this run's agents: their admin token and loopback TLS."""
+        return httpx.AsyncClient(
+            timeout=timeout, auth=self.supervisor.admin_auth, mounts=self.loopback.mounts(),
+        )
 
     def _cleanup_run(
         self,
@@ -523,9 +530,9 @@ class ScenarioRunner:
                 initiator=step.delegator, target=step.delegatee,
                 grants=scope,
             ))
-            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(15.0) as client:
                 r = await client.post(
-                    f"http://localhost:{delegator_ra.port}/admin/delegate",
+                    f"{self.loopback.origin(delegator_ra.port)}/admin/delegate",
                     json={
                         "held_tct_peer_port": via_ra.port,
                         "delegatee_manifest_url": delegatee_manifest_url,
@@ -570,9 +577,9 @@ class ScenarioRunner:
                 type="delegation.redeeming",
                 initiator=step.delegatee, target=step.target,
             ))
-            async with httpx.AsyncClient(timeout=20.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(20.0) as client:
                 r = await client.post(
-                    f"http://localhost:{delegatee_ra.port}/admin/redeem-delegation",
+                    f"{self.loopback.origin(delegatee_ra.port)}/admin/redeem-delegation",
                     json={
                         "redeem_url": redeem_url,
                         "delegation_token": prior["delegation_token"],
@@ -644,9 +651,9 @@ class ScenarioRunner:
                 return
             if local_revoke:
                 issuer_ra = running[step.issuer]
-                async with httpx.AsyncClient(timeout=5.0, auth=self.supervisor.admin_auth) as client:
+                async with self._agent_client(5.0) as client:
                     r = await client.post(
-                        f"http://localhost:{issuer_ra.port}/admin/revoke-tct",
+                        f"{self.loopback.origin(issuer_ra.port)}/admin/revoke-tct",
                         json={"jti": jti},
                     )
                     r.raise_for_status()
@@ -667,9 +674,9 @@ class ScenarioRunner:
                 )
                 # The issuer re-signs its own list now rather than at its next
                 # poll, so a verifier fetching it straight after sees the jti.
-                async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+                async with self._agent_client(10.0) as client:
                     pr = await client.post(
-                        f"http://localhost:{running[step.issuer].port}"
+                        f"{self.loopback.origin(running[step.issuer].port)}"
                         "/admin/publish-revocations",
                     )
                 issuer_list = pr.json() if pr.is_success else {"published": False}
@@ -679,9 +686,9 @@ class ScenarioRunner:
                     result={"to_cp": published_to_cp, "reason": step.reason},
                 ))
                 for agent_id in step.refresh_agents or [step.issuer]:
-                    async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+                    async with self._agent_client(10.0) as client:
                         rr = await client.post(
-                            f"http://localhost:{running[agent_id].port}"
+                            f"{self.loopback.origin(running[agent_id].port)}"
                             "/admin/refresh-revocations",
                         )
                     # Graceful: if an agent can't reach CP, the step still
@@ -724,9 +731,9 @@ class ScenarioRunner:
             ctx.emit(RunEvent(
                 type="cp.enroll_started", step_id=step.id, agent_id=step.agent,
             ))
-            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(15.0) as client:
                 r = await client.post(
-                    f"http://localhost:{ra.port}/admin/enroll-with-cp",
+                    f"{self.loopback.origin(ra.port)}/admin/enroll-with-cp",
                     json={},
                 )
                 r.raise_for_status()
@@ -807,7 +814,7 @@ class ScenarioRunner:
                 return
             ra = running[step.agent]
             namespace = step.namespace or scenario.metadata.pack
-            async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(10.0) as client:
                 mr = await client.get(ra.manifest_url)
                 mr.raise_for_status()
                 # Verify before reading key material out of the envelope. This
@@ -818,7 +825,10 @@ class ScenarioRunner:
                 # the peer-manifest sites we can check identity too, not just
                 # authenticity.
                 try:
-                    aitp.verify_manifest_json(mr.text)
+                    aitp.verify_manifest_json(
+                        mr.text,
+                        insecure_localhost_dangerous=self.config.insecure_localhost_dangerous,
+                    )
                 except Exception as exc:  # noqa: BLE001 — SDK raises RuntimeError/ValueError
                     cause = _classify_manifest_verify_failure(exc)
                     ctx.emit(RunEvent(
@@ -938,9 +948,9 @@ class ScenarioRunner:
                 )
             holder_ra = running[step.agent]
             issuer_ra = running[step.via_peer]
-            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(15.0) as client:
                 r = await client.post(
-                    f"http://localhost:{holder_ra.port}/admin/renew-tct",
+                    f"{self.loopback.origin(holder_ra.port)}/admin/renew-tct",
                     json={"peer_port": issuer_ra.port},
                 )
                 r.raise_for_status()
@@ -968,9 +978,9 @@ class ScenarioRunner:
                     f"step {step.id}: tct_cache_stats requires agent"
                 )
             target_ra = running[step.agent]
-            async with httpx.AsyncClient(timeout=5.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(5.0) as client:
                 r = await client.get(
-                    f"http://localhost:{target_ra.port}/admin/tct-cache-stats"
+                    f"{self.loopback.origin(target_ra.port)}/admin/tct-cache-stats"
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -998,12 +1008,12 @@ class ScenarioRunner:
             # issued token back from the SDK — each participant holds it. So we
             # collect each participant's held (coordinator-issued) token and
             # hand them to the coordinator to sign into the bundle.
-            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(15.0) as client:
                 participant_tcts: list[dict[str, Any]] = []
                 for p_id in step.participants:
                     p_ra = running[p_id]
                     held = await client.get(
-                        f"http://localhost:{p_ra.port}/admin/held-tct",
+                        f"{self.loopback.origin(p_ra.port)}/admin/held-tct",
                         params={"peer_port": coord_ra.port},
                     )
                     held.raise_for_status()
@@ -1012,7 +1022,7 @@ class ScenarioRunner:
                         {"aid": h["aid"], "tct_token": h["tct_token"]}
                     )
                 r = await client.post(
-                    f"http://localhost:{coord_ra.port}/admin/export-session-bundle",
+                    f"{self.loopback.origin(coord_ra.port)}/admin/export-session-bundle",
                     json={"participant_tcts": participant_tcts},
                 )
                 r.raise_for_status()
@@ -1049,9 +1059,9 @@ class ScenarioRunner:
                     f"produce a bundle_envelope"
                 )
             verifier_ra = running[step.verifier]
-            async with httpx.AsyncClient(timeout=15.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(15.0) as client:
                 r = await client.post(
-                    f"http://localhost:{verifier_ra.port}/admin/verify-session-bundle",
+                    f"{self.loopback.origin(verifier_ra.port)}/admin/verify-session-bundle",
                     json={
                         "bundle_envelope": bundle_envelope,
                         "coordinator_manifest_url": prior.get("coordinator_manifest_url"),
@@ -1124,9 +1134,9 @@ class ScenarioRunner:
                 )
             ra = running[step.agent]
             old_aid = ra.aid
-            async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+            async with self._agent_client(10.0) as client:
                 r = await client.post(
-                    f"http://localhost:{ra.port}/admin/rotate-keys",
+                    f"{self.loopback.origin(ra.port)}/admin/rotate-keys",
                     json={},
                 )
                 r.raise_for_status()
@@ -1335,9 +1345,9 @@ class ScenarioRunner:
             initiator=caller.agent_id, target=target.agent_id,
             capability=capability,
         ))
-        async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+        async with self._agent_client(10.0) as client:
             r = await client.post(
-                f"http://localhost:{target.port}/capabilities/{capability}",
+                f"{self.loopback.origin(target.port)}/capabilities/{capability}",
                 content="{}",
                 headers={"Content-Type": "application/json"},
             )
@@ -1380,9 +1390,9 @@ class ScenarioRunner:
             initiator=caller.agent_id, target=target.agent_id,
             capability=capability,
         ))
-        async with httpx.AsyncClient(timeout=30.0, auth=self.supervisor.admin_auth) as client:
+        async with self._agent_client(30.0) as client:
             r = await client.post(
-                f"http://localhost:{caller.port}/admin/invoke",
+                f"{self.loopback.origin(caller.port)}/admin/invoke",
                 json={
                     "peer_port": target.port,
                     "capability": capability,
@@ -1490,9 +1500,9 @@ class ScenarioRunner:
             type="trust.establishing",
             initiator=initiator.agent_id, target=target.agent_id,
         ))
-        async with httpx.AsyncClient(timeout=20.0, auth=self.supervisor.admin_auth) as client:
+        async with self._agent_client(20.0) as client:
             r = await client.post(
-                f"http://localhost:{initiator.port}/admin/initiate-handshake",
+                f"{self.loopback.origin(initiator.port)}/admin/initiate-handshake",
                 json={
                     "peer_manifest_url": peer_info["manifest_url"],
                     # Pass an empty list to request every capability the peer offers.
@@ -1522,14 +1532,14 @@ class ScenarioRunner:
         response after a rotation. Never from a HELLO: a peer's self-asserted
         AID is exactly what the trust store exists to check.
         """
-        async with httpx.AsyncClient(timeout=10.0, auth=self.supervisor.admin_auth) as client:
+        async with self._agent_client(10.0) as client:
             for agent_id, ra in running.items():
                 aids = sorted(
                     other.aid for other_id, other in running.items()
                     if other_id != agent_id and other.aid
                 )
                 r = await client.post(
-                    f"http://localhost:{ra.port}/admin/trust-peers",
+                    f"{self.loopback.origin(ra.port)}/admin/trust-peers",
                     json={"aids": aids, "replace": True},
                 )
                 r.raise_for_status()
@@ -1566,9 +1576,9 @@ class ScenarioRunner:
         payload: Any,
         ctx: RunContext,
     ) -> Any:
-        async with httpx.AsyncClient(timeout=180.0, auth=self.supervisor.admin_auth) as client:
+        async with self._agent_client(180.0) as client:
             r = await client.post(
-                f"http://localhost:{caller.port}/admin/invoke",
+                f"{self.loopback.origin(caller.port)}/admin/invoke",
                 json={
                     "peer_port": target.port,
                     "capability": capability,
@@ -1596,9 +1606,9 @@ class ScenarioRunner:
         capability: str,
         payload: Any,
     ) -> Any:
-        async with httpx.AsyncClient(timeout=180.0, auth=self.supervisor.admin_auth) as client:
+        async with self._agent_client(180.0) as client:
             r = await client.post(
-                f"http://localhost:{runner_agent.port}/admin/self-execute",
+                f"{self.loopback.origin(runner_agent.port)}/admin/self-execute",
                 json={"capability": capability, "payload": payload},
             )
             # Mirror _invoke_capability's body-surfacing rather than a blind

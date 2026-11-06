@@ -184,9 +184,9 @@ def test_issuer_501_reaches_the_holder_unchanged(monkeypatch) -> None:
     coord = aitp.AitpAgent.generate()
     holder = aitp.AitpAgent.generate()
     coord_manifest = coord.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     )
-    holder.build_manifest("h", "http://h/aitp/handshake/hello", ["x"])
+    holder.build_manifest("h", "https://h/aitp/handshake/hello", ["x"])
     tct = _participant_handshake(holder, coord, coord_manifest)
 
     issuer_body = {
@@ -208,9 +208,9 @@ def test_other_issuer_errors_still_raise(monkeypatch) -> None:
     coord = aitp.AitpAgent.generate()
     holder = aitp.AitpAgent.generate()
     coord_manifest = coord.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     )
-    holder.build_manifest("h", "http://h/aitp/handshake/hello", ["x"])
+    holder.build_manifest("h", "https://h/aitp/handshake/hello", ["x"])
     tct = _participant_handshake(holder, coord, coord_manifest)
     _spy_httpx(monkeypatch, lambda _r: httpx.Response(409, json={"detail": "replay"}))
     app, _ = _app(agent=holder, held_tcts={9999: tct})
@@ -254,7 +254,7 @@ def test_verify_session_bundle_without_bundles_is_501_and_fetches_nothing(monkey
     app, _ = _app()
     resp = _client(app).post("/admin/verify-session-bundle", json={
         "bundle_envelope": "{}",
-        "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+        "coordinator_manifest_url": "https://coord/.well-known/aitp-manifest",
     })
     _assert_501(resp, "session_bundle")
     assert calls == []
@@ -308,9 +308,9 @@ def test_an_uncoded_issuer_501_is_not_relayed(monkeypatch, issuer) -> None:
     coord = aitp.AitpAgent.generate()
     holder = aitp.AitpAgent.generate()
     coord_manifest = coord.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     )
-    holder.build_manifest("h", "http://h/aitp/handshake/hello", ["x"])
+    holder.build_manifest("h", "https://h/aitp/handshake/hello", ["x"])
     tct = _participant_handshake(holder, coord, coord_manifest)
     _spy_httpx(monkeypatch, lambda _r: issuer)
     app, _ = _app(agent=holder, held_tcts={9999: tct})

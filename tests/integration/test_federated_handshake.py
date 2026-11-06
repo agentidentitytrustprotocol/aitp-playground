@@ -1,4 +1,4 @@
-"""Cross-domain federated handshake — the in-process fidelity of the Level 1/2
+"""Cross-domain federated handshake — the in-process fidelity of the
 Docker stack, runnable without Docker.
 
 Two agents are hosted at *distinct origins* (two real sockets on 127.0.0.1),
@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from tests._auth import AUTH
 
+from aitp_playground import config  # noqa: E402
 from aitp_playground.main import create_app  # noqa: E402
 
 
@@ -61,6 +62,10 @@ def _host(client: TestClient, ref: str, port: int) -> dict:
 
 def test_cross_domain_handshake_and_capability(monkeypatch) -> None:
     monkeypatch.setenv("AITP_FEDERATION_ALLOW_LOOPBACK", "1")
+    # Two plain sockets on 127.0.0.1: the local/test opt-in. create_app() reads
+    # the cached Settings, so drop them for this test.
+    monkeypatch.setenv("INSECURE_LOCALHOST_DANGEROUS", "1")
+    monkeypatch.setattr(config, "_settings", None)
 
     port_a = _free_port()  # researcher (org-A / initiator)
     port_b = _free_port()  # analyzer  (org-B / responder)

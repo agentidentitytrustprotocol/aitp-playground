@@ -54,6 +54,9 @@ a peer hosted by a different instance of this service — see
 [architecture.md](docs/architecture.md#hosted-agents-srcaitp_playgroundapihostedpy)
 for the full route list.
 
+Hosted agents aren't available on Railway: `POST /hosted-agents` returns 400 there. Federation
+runs through the TLS stack in [federated/](federated/README.md).
+
 Everything is optional and degrades cleanly: no LLM key → deterministic
 stubs (handshakes still run); no Control Plane → static fallback. The
 published SDK wheel enables the full surface (renewal, session bundles, SPKI

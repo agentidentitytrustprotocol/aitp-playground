@@ -46,10 +46,10 @@ def test_delegation_round_trip() -> None:
     C = _agent(b"C")
 
     manifest_A = A.build_manifest(
-        "A", "http://localhost:1/aitp/handshake/hello", ["write.content"],
+        "A", "https://localhost:1/aitp/handshake/hello", ["write.content"],
     )
-    manifest_B = B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
-    C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
+    manifest_B = B.build_manifest("B", "https://localhost:2/aitp/handshake/hello", ["x"])
+    C.build_manifest("C", "https://localhost:3/aitp/handshake/hello", ["x"])
 
     # B initiates with A; A issues B a TCT + grant voucher for write.content.
     completed_b = _handshake(B, A, manifest_A, ["write.content"])
@@ -85,10 +85,10 @@ def test_delegation_scope_exceeds_held_grants() -> None:
     C = _agent(b"C2")
 
     manifest_A = A.build_manifest(
-        "A", "http://localhost:1/aitp/handshake/hello", ["write.content"],
+        "A", "https://localhost:1/aitp/handshake/hello", ["write.content"],
     )
-    B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
-    C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
+    B.build_manifest("B", "https://localhost:2/aitp/handshake/hello", ["x"])
+    C.build_manifest("C", "https://localhost:3/aitp/handshake/hello", ["x"])
 
     voucher_b = _handshake(B, A, manifest_A, ["write.content"])["grant_voucher"]
     with pytest.raises(RuntimeError, match="exceeds"):
@@ -103,11 +103,11 @@ def test_verify_delegation_wrong_verifier_rejected() -> None:
     D = _agent(b"D3")  # stranger
 
     manifest_A = A.build_manifest(
-        "A", "http://localhost:1/aitp/handshake/hello", ["x"],
+        "A", "https://localhost:1/aitp/handshake/hello", ["x"],
     )
-    manifest_B = B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
-    C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
-    D.build_manifest("D", "http://localhost:4/aitp/handshake/hello", ["x"])
+    manifest_B = B.build_manifest("B", "https://localhost:2/aitp/handshake/hello", ["x"])
+    C.build_manifest("C", "https://localhost:3/aitp/handshake/hello", ["x"])
+    D.build_manifest("D", "https://localhost:4/aitp/handshake/hello", ["x"])
 
     voucher_b = _handshake(B, A, manifest_A, ["x"])["grant_voucher"]
     delegation = B.build_delegation(voucher_b, C.aid, ["x"], 600)
@@ -123,9 +123,9 @@ def test_verify_delegation_without_the_delegator_manifest_is_rejected() -> None:
     B = _agent(b"B4")
     C = _agent(b"C4")
 
-    manifest_A = A.build_manifest("A", "http://localhost:1/aitp/handshake/hello", ["x"])
-    B.build_manifest("B", "http://localhost:2/aitp/handshake/hello", ["x"])
-    manifest_C = C.build_manifest("C", "http://localhost:3/aitp/handshake/hello", ["x"])
+    manifest_A = A.build_manifest("A", "https://localhost:1/aitp/handshake/hello", ["x"])
+    B.build_manifest("B", "https://localhost:2/aitp/handshake/hello", ["x"])
+    manifest_C = C.build_manifest("C", "https://localhost:3/aitp/handshake/hello", ["x"])
 
     voucher_b = _handshake(B, A, manifest_A, ["x"])["grant_voucher"]
     delegation = B.build_delegation(voucher_b, C.aid, ["x"], 600)

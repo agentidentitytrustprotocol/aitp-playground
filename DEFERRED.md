@@ -1,0 +1,1 @@
+- `cross-cloud/distributed-review` hardcodes `did_web_host: localhost:8101/8102` while agent ports move, so a run can log a did:web fallback to localhost and still report success. Confirmed pre-existing: b590758 and 733017b behave the same over three local runs on the same ports.

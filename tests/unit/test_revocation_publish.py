@@ -49,7 +49,7 @@ def _bootstrap(*, cp: bool = True, ttl: int = 3600) -> dict[str, Any]:
         "aitp": {
             "seed_hex": "66" * 32,
             "display_name": "issuer",
-            "handshake_endpoint": "http://localhost:9/aitp/handshake/hello",
+            "handshake_endpoint": "https://localhost:9/aitp/handshake/hello",
             "offered_caps": ["demo.write"],
         },
     }
@@ -62,7 +62,7 @@ def _server(**bootstrap_kwargs: Any) -> AitpServer:
     agent = aitp.AitpAgent.generate()
     manifest = agent.build_manifest(
         display_name="issuer",
-        handshake_endpoint="http://localhost:9/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:9/aitp/handshake/hello",
         offered_caps=["demo.write"],
     )
     return AitpServer(

@@ -6,6 +6,7 @@ from typing import Any
 
 from ..config import Settings
 from ..cp_client.client import CpClient
+from ..hosting.loopback import AgentLoopback
 from ..hosting.supervisor import RunningAgent
 from ..registry.models import ScenarioVersion
 from .resolver import resolve_did_web
@@ -14,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 class TrustOrchestrator:
-    def __init__(self, cp: CpClient, settings: Settings) -> None:
+    def __init__(self, cp: CpClient, settings: Settings, loopback: AgentLoopback) -> None:
         self.cp = cp
         self.settings = settings
+        self.loopback = loopback
 
     async def resolve_peers(
         self,
@@ -30,16 +32,16 @@ class TrustOrchestrator:
         for agent_spec in scenario.spec.agents:
             ra = running.get(agent_spec.id)
             local_manifest = (
-                f"http://localhost:{ra.port}/.well-known/aitp-manifest" if ra else None
+                f"{self.loopback.origin(ra.port)}/.well-known/aitp-manifest" if ra else None
             )
             local_handshake = (
-                f"http://localhost:{ra.port}/aitp/handshake/hello" if ra else None
+                f"{self.loopback.origin(ra.port)}/aitp/handshake/hello" if ra else None
             )
 
             if discovery == "did_web" and agent_spec.did_web_host:
                 did = f"did:web:{agent_spec.did_web_host.replace(':', '%3A')}"
                 try:
-                    manifest_url = await resolve_did_web(did)
+                    manifest_url = await resolve_did_web(did, self.loopback)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "did:web resolve failed for %s (%s); falling back to localhost",

@@ -10,6 +10,8 @@ from typing import Optional
 
 import httpx
 
+from .loopback import AgentLoopback
+
 logger = logging.getLogger(__name__)
 
 #: Header an agent's AdminAuthMiddleware checks (agents/base/admin_auth.py).
@@ -51,7 +53,8 @@ class RunningAgent:
 
 
 class AgentSupervisor:
-    def __init__(self) -> None:
+    def __init__(self, loopback: AgentLoopback) -> None:
+        self.loopback = loopback
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._agents: dict[str, RunningAgent] = {}
         # Admin tokens by port — kept off RunningAgent, which /agents
@@ -72,7 +75,10 @@ class AgentSupervisor:
         port: int,
         admin_token: Optional[str] = None,
         startup_timeout_ms: int = 30_000,
+        listener_origin: Optional[str] = None,
     ) -> RunningAgent:
+        """``listener_origin`` is where this process dials the agent, when that
+        is not the default loopback origin (a hosted agent's plain listener)."""
         key = self._key(run_id, agent_id)
         if admin_token:
             self._admin_tokens[port] = admin_token
@@ -92,7 +98,9 @@ class AgentSupervisor:
             port=port,
             pid=proc.pid,
             aid="",
-            manifest_url=f"http://localhost:{port}/.well-known/aitp-manifest",
+            manifest_url=(
+                f"{listener_origin or self.loopback.origin(port)}/.well-known/aitp-manifest"
+            ),
         )
         self._processes[key] = proc
         self._agents[key] = agent

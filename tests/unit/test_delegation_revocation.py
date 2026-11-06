@@ -59,7 +59,7 @@ def _server(revocation: RevocationState):
     agent = aitp.AitpAgent.generate()
     manifest = agent.build_manifest(
         display_name="A",
-        handshake_endpoint="http://localhost:9/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:9/aitp/handshake/hello",
         offered_caps=["demo.write"],
     )
     server = AitpServer(
@@ -72,7 +72,7 @@ def _server(revocation: RevocationState):
             "aitp": {
                 "seed_hex": "33" * 32,
                 "display_name": "A",
-                "handshake_endpoint": "http://localhost:9/aitp/handshake/hello",
+                "handshake_endpoint": "https://localhost:9/aitp/handshake/hello",
                 "offered_caps": ["demo.write"],
             },
         },
@@ -97,7 +97,7 @@ def _delegation_for(server, manifest_json: str):
     for agent, name, port in ((b, "B", 10), (c, "C", 11)):
         manifests[name] = agent.build_manifest(
             display_name=name,
-            handshake_endpoint=f"http://localhost:{port}/aitp/handshake/hello",
+            handshake_endpoint=f"https://localhost:{port}/aitp/handshake/hello",
             offered_caps=["demo.write"],
         )
 
@@ -336,12 +336,12 @@ def test_capability_tct_issuer_mismatch_is_refused_before_signature_verification
     holder = aitp.AitpAgent.generate()
     other_manifest = other_issuer.build_manifest(
         display_name="other-issuer",
-        handshake_endpoint="http://localhost:12/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:12/aitp/handshake/hello",
         offered_caps=["demo.write"],
     )
     holder.build_manifest(
         display_name="holder",
-        handshake_endpoint="http://localhost:13/aitp/handshake/hello",
+        handshake_endpoint="https://localhost:13/aitp/handshake/hello",
         offered_caps=["demo.write"],
     )
     sess = holder.new_session(pinned_keys=[other_issuer.aid])

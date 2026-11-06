@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from aitp_playground import capabilities as caps
 from aitp_playground import cli
+from aitp_playground.hosting.loopback import AgentLoopback
 from aitp_playground.config import Settings
 from aitp_playground.errors import SdkFeatureUnavailableError
 from aitp_playground.observability.metrics import metrics
@@ -198,7 +199,7 @@ def _real_runner(capabilities_provider) -> tuple[ScenarioRunner, FakeSupervisor]
         supervisor=supervisor,
         bootstrap_builder=BootstrapBuilder(settings),
         adapters=FakeAdapters(),
-        trust=TrustOrchestrator(cp, settings),
+        trust=TrustOrchestrator(cp, settings, AgentLoopback(settings)),
         cp=cp,
         port_alloc=PortAllocator(start=9600),
         config=settings,

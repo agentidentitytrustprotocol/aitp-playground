@@ -2,19 +2,16 @@
 distinct domains and proves a real cross-origin AITP handshake + capability
 call between agents each hosted by a different service.
 
-This is the true "two services, two domains" test. It's transport-agnostic:
-the same assertions run against the Level 1 (http, ``.aitp.test`` hostnames)
-and Level 2 (https via Caddy + local CA) stacks — only the compose file and
-the agent-facing scheme differ. The control API (``/hosted-agents``) is reached
-over the published host ports in both cases.
+This is the true "two services, two domains" test, over https via Caddy and a
+local CA. The control API (``/hosted-agents``) is reached over the published
+host ports.
 
-Prereqs — bring up a stack from ``federated/`` first, e.g. Level 1:
+Prereqs — bring up the stack from ``federated/`` first:
 
-    docker compose -f federated/docker-compose.federated.yml up --build -d
-    AITP_FEDERATED_E2E=1 uv run pytest tests/e2e_federated/ -v
-    docker compose -f federated/docker-compose.federated.yml down
-
-Level 2 is identical with ``docker-compose.federated-tls.yml``.
+    ./federated/gen-ca.sh
+    docker compose -f federated/docker-compose.federated-tls.yml up --build -d
+    PLAYGROUND_API_KEY=federated-e2e-key-do-not-use-in-prod AITP_FEDERATED_E2E=1 uv run pytest tests/e2e_federated/ -v
+    docker compose -f federated/docker-compose.federated-tls.yml down
 
 Env knobs (all optional; defaults match the compose files):
     ORG_A_URL   control API of org-A          (default http://localhost:18000)
@@ -36,7 +33,7 @@ pytestmark = pytest.mark.skipif(
 ORG_A_URL = os.environ.get("ORG_A_URL", "http://localhost:18000")
 ORG_B_URL = os.environ.get("ORG_B_URL", "http://localhost:18001")
 AGENT_PORT = int(os.environ.get("FEDERATED_AGENT_PORT", "9100"))
-# Same default as federated/docker-compose.federated*.yml.
+# Same default as federated/docker-compose.federated-tls.yml.
 PLAYGROUND_API_KEY = os.environ.get("PLAYGROUND_API_KEY", "federated-e2e-key-do-not-use-in-prod")
 _AUTH = {"Authorization": f"Bearer {PLAYGROUND_API_KEY}"}
 

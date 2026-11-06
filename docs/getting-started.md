@@ -108,8 +108,8 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `REVOCATION_MAX_STALENESS_SECS` | `300` | Axis B: how long since the last successful pull before the posture is "degraded" |
 | `REVOCATION_POLL_SECS` | `60` | Cadence for the background pull, re-sign and verify of each agent's own revocation list |
 | `REVOCATION_LIST_TTL_SECS` | `3600` | Lifetime (`expires_at`) of each agent's own signed revocation list. Re-signed every poll; if the CP is unreachable the agent serves its last list until this runs out, then answers 503 rather than an empty list |
-| `PUBLIC_HOST` / `PUBLIC_SCHEME` | _(empty)_ / `http` | Public origin this service advertises for agents it hosts via `POST /hosted-agents` (federated/cross-domain demos). Empty `PUBLIC_HOST` means "no public origin" — hosted agents advertise `http://localhost:{port}` as before. |
-| `AITP_DIDWEB_INSECURE_HOSTS` | _(empty)_ | Comma-separated host (or `.suffix`) allowlist for which `did:web` hosts may be resolved over plain `http` instead of `https`. Test-only escape hatch for the Level 1 federated stack; production leaves this empty. **Not** a `Settings` field — read directly from the environment by `trust/resolver.py`, so a value in `.env` reaches it only if the process also exports it (`Settings`' `.env` loader does not set raw `os.environ`). |
+| `PUBLIC_HOST` / `PUBLIC_SCHEME` | _(empty)_ / `https` | Public origin this service advertises for agents it hosts via `POST /hosted-agents` (federated/cross-domain demos). Empty `PUBLIC_HOST` means "no public origin", and `POST /hosted-agents` needs one in its body. |
+| `INSECURE_LOCALHOST_DANGEROUS` | `false` | Local/test only. Scenario agents serve plain `http://localhost` instead of TLS on loopback, and SDK calls pass `insecure_localhost_dangerous`. Any non-loopback `http://` endpoint is refused either way. The service refuses to start with this on a Railway deployment. |
 | `LLM_PROVIDER` | `openai` | `openai` or `anthropic` |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | _(empty)_ | Required for real LLM output |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |

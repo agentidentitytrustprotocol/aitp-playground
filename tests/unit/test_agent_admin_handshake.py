@@ -81,7 +81,7 @@ def _peer(offered_caps: list[str], *, port: int = 9):
     router (process-renewal) mounted together, exactly as
     `agents/writer/main.py` et al. wire them for real."""
     agent = aitp.AitpAgent.generate()
-    endpoint = f"http://peer:{port}/aitp/handshake/hello"
+    endpoint = f"https://peer:{port}/aitp/handshake/hello"
     manifest_json = agent.build_manifest(
         display_name="peer", handshake_endpoint=endpoint, offered_caps=offered_caps,
     )
@@ -118,7 +118,7 @@ def _initiator(*, held_tcts: dict[int, str] | None = None):
     agent = aitp.AitpAgent.generate()
     agent.build_manifest(
         display_name="initiator",
-        handshake_endpoint="http://initiator/aitp/handshake/hello",
+        handshake_endpoint="https://initiator/aitp/handshake/hello",
         offered_caps=["demo.read"],
     )
     bootstrap = {"run_id": "r", "agent_id": "initiator", "aitp": {}}
@@ -145,7 +145,7 @@ def test_initiate_handshake_success_stores_a_held_tct_and_emits_complete(
     _pin(peer_app, initiator_agent.aid)
     resp = client.post(
         "/admin/initiate-handshake",
-        json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
+        json={"peer_manifest_url": "https://peer:9/.well-known/aitp-manifest"},
     )
 
     assert resp.status_code == 200, resp.text
@@ -179,7 +179,7 @@ def test_initiate_handshake_with_explicit_requested_grants_subsets_offered(
     resp = client.post(
         "/admin/initiate-handshake",
         json={
-            "peer_manifest_url": "http://peer:9/.well-known/aitp-manifest",
+            "peer_manifest_url": "https://peer:9/.well-known/aitp-manifest",
             "requested_grants": ["demo.write"],
         },
     )
@@ -201,7 +201,7 @@ def test_a_peer_refuses_an_initiator_nobody_pinned(
     _initiator_agent, client, held = _initiator()  # deliberately not pinned
     resp = client.post(
         "/admin/initiate-handshake",
-        json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
+        json={"peer_manifest_url": "https://peer:9/.well-known/aitp-manifest"},
     )
     # The peer's 400 reason is passed through, not lost in an opaque 500.
     assert resp.status_code == 502, resp.text
@@ -220,7 +220,7 @@ def test_initiate_handshake_rejects_an_unverifiable_peer_manifest(
     `test_manifest_verification.py` does)."""
     peer_agent = aitp.AitpAgent.generate()
     envelope = json.loads(peer_agent.build_manifest(
-        display_name="peer", handshake_endpoint="http://peer:9/aitp/handshake/hello",
+        display_name="peer", handshake_endpoint="https://peer:9/aitp/handshake/hello",
         offered_caps=["demo.write"],
     ))
     envelope["manifest"]["display_name"] = "evil"  # tamper after signing
@@ -242,7 +242,7 @@ def test_initiate_handshake_rejects_an_unverifiable_peer_manifest(
     _initiator_agent, client, held = _initiator()
     resp = client.post(
         "/admin/initiate-handshake",
-        json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
+        json={"peer_manifest_url": "https://peer:9/.well-known/aitp-manifest"},
     )
 
     assert resp.status_code == 502, resp.text
@@ -412,7 +412,7 @@ def test_renew_tct_success_swaps_the_held_tct_for_a_fresh_one(
     _pin(peer_app, initiator_agent.aid)
     handshake = client.post(
         "/admin/initiate-handshake",
-        json={"peer_manifest_url": "http://peer:9/.well-known/aitp-manifest"},
+        json={"peer_manifest_url": "https://peer:9/.well-known/aitp-manifest"},
     ).json()
     peer_port = handshake["peer_port"]
     original_jti = handshake["jti"]
@@ -455,10 +455,10 @@ def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatc
 
     coordinator = aitp.AitpAgent.generate()
     coord_manifest = coordinator.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     )
     participant = aitp.AitpAgent.generate()
-    participant.build_manifest("p", "http://p/aitp/handshake/hello", ["x"])
+    participant.build_manifest("p", "https://p/aitp/handshake/hello", ["x"])
 
     # A real handshake, so the TCT the bundle carries is genuine.
     sess = participant.new_session(pinned_keys=[coordinator.aid])
@@ -503,7 +503,7 @@ def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatc
     # The participant fetches and verifies the coordinator's Manifest itself
     # (aitp-sdk >= 0.16 checks the bundle signature against it).
     def serve_coord_manifest(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "http://coord/.well-known/aitp-manifest"
+        assert str(request.url) == "https://coord/.well-known/aitp-manifest"
         return httpx.Response(200, text=coord_manifest)
 
     monkeypatch.setattr(
@@ -519,7 +519,7 @@ def test_export_and_verify_session_bundle_success(monkeypatch: pytest.MonkeyPatc
         "/admin/verify-session-bundle",
         json={
             "bundle_envelope": body["bundle_envelope"],
-            "coordinator_manifest_url": "http://coord/.well-known/aitp-manifest",
+            "coordinator_manifest_url": "https://coord/.well-known/aitp-manifest",
         },
     )
     assert verify_resp.status_code == 200, verify_resp.text

@@ -2,7 +2,7 @@
 
 Stands up long-lived agents at this service's public origin and drives
 cross-domain trust against peers hosted on *other* services. Used by the
-Level 1 / Level 2 federated e2e stack, where org-A hosts the researcher and
+federated e2e stack, where org-A hosts the researcher and
 org-B hosts the analyzer and the researcher resolves + handshakes the analyzer
 across a real origin boundary.
 
@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..hosting.hosted import HostedAgentManager
+from ..hosting.loopback import AgentLoopback
 from ..trust.resolver import resolve_did_web
 from ._deps import enforce_spend_limits, get_hosted_manager, require_api_key
 
@@ -108,14 +109,14 @@ def stop_agent(
     return {"stopped": hosted_id}
 
 
-async def _resolve_peer_did(peer_did: str) -> tuple[str, str]:
+async def _resolve_peer_did(peer_did: str, loopback: AgentLoopback) -> tuple[str, str]:
     """Resolve a did:web peer to ``(manifest_url, origin)``, fail-closed."""
     if not peer_did.startswith("did:web:"):
         raise HTTPException(
             status_code=400, detail=f"only did:web peers supported, got {peer_did}"
         )
     try:
-        peer_manifest_url = await resolve_did_web(peer_did)
+        peer_manifest_url = await resolve_did_web(peer_did, loopback)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
@@ -175,13 +176,16 @@ async def trust_peer(
     hosted = mgr.get(hosted_id)
     if hosted is None:
         raise HTTPException(status_code=404, detail=f"no hosted agent {hosted_id}")
-    peer_manifest_url, _ = await _resolve_peer_did(body.peer_did)
+    peer_manifest_url, _ = await _resolve_peer_did(body.peer_did, mgr.bootstrap_builder.loopback)
     try:
         async with httpx.AsyncClient(timeout=15.0, auth=mgr.supervisor.admin_auth) as client:
             mr = await client.get(peer_manifest_url)
             mr.raise_for_status()
             try:
-                aitp.verify_manifest_json(mr.text)
+                aitp.verify_manifest_json(
+                    mr.text,
+                    insecure_localhost_dangerous=mgr.settings.insecure_localhost_dangerous,
+                )
             except Exception as exc:  # noqa: BLE001 — SDK raises RuntimeError/ValueError
                 raise HTTPException(
                     status_code=502,
@@ -210,7 +214,7 @@ async def resolve_and_handshake(
     if hosted is None:
         raise HTTPException(status_code=404, detail=f"no hosted agent {hosted_id}")
 
-    peer_manifest_url, peer_origin = await _resolve_peer_did(body.peer_did)
+    peer_manifest_url, peer_origin = await _resolve_peer_did(body.peer_did, mgr.bootstrap_builder.loopback)
 
     admin = f"http://localhost:{hosted.port}/admin/initiate-handshake"
     try:

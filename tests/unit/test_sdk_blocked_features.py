@@ -79,8 +79,8 @@ def test_tct_renewal_round_trip() -> None:
     envelope has a different jti but identical subject + grants."""
     holder = aitp.AitpAgent.generate()
     issuer = aitp.AitpAgent.generate()
-    _h_m = holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
-    i_m = issuer.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
+    _h_m = holder.build_manifest("h", "https://h/aitp/handshake/hello", ["demo.x"])
+    i_m = issuer.build_manifest("i", "https://i/aitp/handshake/hello", ["demo.y"])
     sh = holder.new_session(pinned_keys=[issuer.aid])
     si = issuer.new_responder(pinned_keys=[holder.aid])
     hello = sh.build_hello(i_m, ["demo.y"])
@@ -115,8 +115,8 @@ def test_tct_cache_hit_miss_len_delta() -> None:
     the real SDK so the heuristic in verify_capability_tct stays valid."""
     holder = aitp.AitpAgent.generate()
     issuer = aitp.AitpAgent.generate()
-    holder.build_manifest("h", "http://h/aitp/handshake/hello", ["demo.x"])
-    i_m = issuer.build_manifest("i", "http://i/aitp/handshake/hello", ["demo.y"])
+    holder.build_manifest("h", "https://h/aitp/handshake/hello", ["demo.x"])
+    i_m = issuer.build_manifest("i", "https://i/aitp/handshake/hello", ["demo.y"])
     sh = holder.new_session(pinned_keys=[issuer.aid])
     si = issuer.new_responder(pinned_keys=[holder.aid])
     hello = sh.build_hello(i_m, ["demo.y"])
@@ -163,10 +163,10 @@ def test_session_bundle_export_and_verify() -> None:
     a = aitp.AitpAgent.generate()
     b = aitp.AitpAgent.generate()
     coord_m = coord.build_manifest(
-        "coord", "http://coord/aitp/handshake/hello", ["session.member"],
+        "coord", "https://coord/aitp/handshake/hello", ["session.member"],
     )
-    a.build_manifest("a", "http://a/aitp/handshake/hello", ["x"])
-    b.build_manifest("b", "http://b/aitp/handshake/hello", ["x"])
+    a.build_manifest("a", "https://a/aitp/handshake/hello", ["x"])
+    b.build_manifest("b", "https://b/aitp/handshake/hello", ["x"])
 
     a_tct = _participant_handshake(a, coord, coord_m)
     b_tct = _participant_handshake(b, coord, coord_m)
@@ -244,14 +244,14 @@ def test_oidc_handshake_p256_initiator() -> None:
     b = aitp.AitpAgent.generate()        # Ed25519 + pinned-key
     assert a.aid.startswith("aid:pubkey:p256:")
     _a_m = a.build_manifest(
-        "a", "http://a/aitp/handshake/hello", ["demo.x"],
+        "a", "https://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc",
         oidc_issuer=issuer.issuer_url,
         oidc_subject="alice",
         accepted_identity_types=MIXED,
     )
     b_m = b.build_manifest(
-        "b", "http://b/aitp/handshake/hello", ["demo.y"], accepted_identity_types=MIXED,
+        "b", "https://b/aitp/handshake/hello", ["demo.y"], accepted_identity_types=MIXED,
     )
     provider = aitp.JwksProvider({issuer.issuer_url: [issuer.public_jwk]})
     a_jkt = aitp.compute_aid_jkt(a.aid)
@@ -289,14 +289,14 @@ def test_oidc_handshake_initiator_oidc_responder_pinned() -> None:
     a = aitp.AitpAgent.generate()  # OIDC
     b = aitp.AitpAgent.generate()  # pinned-key
     _a_m = a.build_manifest(
-        "a", "http://a/aitp/handshake/hello", ["demo.x"],
+        "a", "https://a/aitp/handshake/hello", ["demo.x"],
         identity_type="oidc",
         oidc_issuer=issuer.issuer_url,
         oidc_subject="alice",
         accepted_identity_types=MIXED,
     )
     b_m = b.build_manifest(
-        "b", "http://b/aitp/handshake/hello", ["demo.y"], accepted_identity_types=MIXED,
+        "b", "https://b/aitp/handshake/hello", ["demo.y"], accepted_identity_types=MIXED,
     )
     provider = aitp.JwksProvider({issuer.issuer_url: [issuer.public_jwk]})
 

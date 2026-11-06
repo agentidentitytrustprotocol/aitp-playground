@@ -83,13 +83,13 @@ reads it.
   "aitp": {
     "seed_hex": "<sha256 of org:run_id:agent_id>",
     "display_name": "Research Analyst",
-    "handshake_endpoint": "http://localhost:8100/aitp/handshake/hello",
+    "handshake_endpoint": "https://localhost:8100/aitp/handshake/hello",
     "offered_caps": ["research.query"],
     "did_web_host": null,
     "ttl_secs": 3600
   },
   "peers": {
-    "<other_agent_id>": { "manifest_url": "http://localhost:8101/.well-known/aitp-manifest", "did": null }
+    "<other_agent_id>": { "manifest_url": "https://localhost:8101/.well-known/aitp-manifest", "did": null }
   },
   "playground": {
     "telemetry_url": "http://localhost:8000/internal/telemetry",

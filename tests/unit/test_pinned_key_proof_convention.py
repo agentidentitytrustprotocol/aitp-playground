@@ -213,7 +213,7 @@ def test_the_sdk_exposes_the_handshake_surface_this_module_interlocks() -> None:
         "than a pass"
     )
     probe = aitp.AitpAgent.generate(suite="ed25519")
-    probe.build_manifest("probe", "http://localhost:9/aitp/handshake/hello", ["x"])
+    probe.build_manifest("probe", "https://localhost:9/aitp/handshake/hello", ["x"])
     session_cls = type(probe.new_session())
     assert hasattr(session_cls, "build_hello"), (
         "the session object returned by AitpAgent.new_session() has no "
@@ -298,10 +298,10 @@ def minted_hello() -> dict:
     responder = aitp.AitpAgent.generate(suite="ed25519")
 
     initiator.build_manifest(
-        "initiator", "http://localhost:1/aitp/handshake/hello", ["probe"]
+        "initiator", "https://localhost:1/aitp/handshake/hello", ["probe"]
     )
     responder_manifest_json = responder.build_manifest(
-        "responder", "http://localhost:2/aitp/handshake/hello", ["probe"]
+        "responder", "https://localhost:2/aitp/handshake/hello", ["probe"]
     )
 
     session = initiator.new_session()

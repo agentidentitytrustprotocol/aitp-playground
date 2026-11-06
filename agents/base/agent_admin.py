@@ -19,6 +19,7 @@ import aitp
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from loopback import LoopbackClients, insecure_localhost
 from oidc import OidcContext
 from pop_challenges import CHALLENGE_HEADER, RESPONSE_HEADER, decode_header, encode_header
 import sdk_features
@@ -104,8 +105,7 @@ async def _verify_peer_manifest(
     `aid`. AITP AIDs are self-certifying, so that proves the manifest was
     minted by the holder of that AID. It does **not** prove that AID is the
     peer you meant — for `did:web` that binding comes from the DID document
-    (`trust/resolver.py`), which the federated stack resolves over plain HTTP
-    under `AITP_DIDWEB_INSECURE_HOSTS`. Verification here closes substitution
+    (`trust/resolver.py`). Verification here closes substitution
     by anything that cannot produce a self-consistent envelope; it is not a
     trust anchor.
 
@@ -135,7 +135,9 @@ async def _verify_peer_manifest(
         raise HTTPException(status_code=502, detail=detail)
 
     try:
-        aitp.verify_manifest_json(envelope_json)
+        aitp.verify_manifest_json(
+            envelope_json, insecure_localhost_dangerous=insecure_localhost(bootstrap),
+        )
     except Exception as exc:  # noqa: BLE001 — the SDK raises RuntimeError/ValueError
         message = str(exc)
         # This previously read `"expired" in message.lower()`, which pinned
@@ -204,6 +206,7 @@ def build_admin_router(
     router = APIRouter(prefix="/admin")
     caps: dict[str, CapabilityHandler] = dict(capabilities or {})
     oidc = OidcContext(bootstrap)
+    loopback = LoopbackClients(bootstrap)
     # v0.2 grant vouchers, keyed by the same peer_port as ``held_tcts``. A
     # delegation is built from the voucher the handshake (or a redemption)
     # handed us, not from the TCT. Router-local by default so the worker
@@ -221,8 +224,12 @@ def build_admin_router(
             return agent.new_session(
                 jwks=oidc.jwks, trust_anchors=oidc.trust_anchors,
                 pinned_keys=[peer_aid],
+                insecure_localhost_dangerous=insecure_localhost(bootstrap),
             )
-        return agent.new_session(pinned_keys=[peer_aid])
+        return agent.new_session(
+            pinned_keys=[peer_aid],
+            insecure_localhost_dangerous=insecure_localhost(bootstrap),
+        )
 
     async def _raise_if_peer_refused(r: httpx.Response, step: str) -> None:
         # A peer's refusal (e.g. "pinned_key not in local trust store") is the
@@ -245,7 +252,7 @@ def build_admin_router(
         peer_manifest_url: str = body["peer_manifest_url"]
         requested_grants: Optional[list[str]] = body.get("requested_grants")
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, mounts=loopback.mounts()) as client:
             manifest_res = await client.get(peer_manifest_url)
             manifest_res.raise_for_status()
             peer_manifest_json = manifest_res.text
@@ -349,7 +356,7 @@ def build_admin_router(
         # Cross-origin (federated) callers pass the peer's public base URL
         # (e.g. https://org-b.aitp.test) so the call actually crosses the
         # domain boundary instead of dialing our own loopback.
-        peer_base_url: str = (body.get("peer_base_url") or f"http://localhost:{peer_port}").rstrip("/")
+        peer_base_url: str = (body.get("peer_base_url") or loopback.origin(peer_port)).rstrip("/")
 
         tct_json = held_tcts.get(peer_port)
         if not tct_json:
@@ -365,7 +372,7 @@ def build_admin_router(
 
         url = f"{peer_base_url}/capabilities/{capability}"
         headers = {"Content-Type": "application/json", "X-AITP-TCT": tct_json}
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=120.0, mounts=loopback.mounts()) as client:
             r = await client.post(url, content=content, headers=headers)
             # The issuer asks us to prove we hold the TCT's `sub` key
             # (RFC-AITP-0005 §6.1, §10.5): answer its challenge once and
@@ -438,9 +445,9 @@ def build_admin_router(
             return sdk_features.unavailable(sdk_features.TCT_RENEWAL)
         request_payload = agent.build_renewal_request(current_tct_token)
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, mounts=loopback.mounts()) as client:
             r = await client.post(
-                f"http://localhost:{peer_port}/admin/process-renewal",
+                f"{loopback.origin(peer_port)}/admin/process-renewal",
                 content=request_payload,
                 headers={"Content-Type": "application/json"},
             )
@@ -569,12 +576,15 @@ def build_admin_router(
         # Before the manifest fetch: a refused call does no network I/O.
         if not sdk_features.has(sdk_features.SESSION_BUNDLE):
             return sdk_features.unavailable(sdk_features.SESSION_BUNDLE)
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, mounts=loopback.mounts()) as client:
             mr = await client.get(coordinator_manifest_url)
             mr.raise_for_status()
         await _verify_peer_manifest(mr.text, coordinator_manifest_url, bootstrap)
         try:
-            outcome = aitp.verify_session_bundle(envelope, agent.aid, mr.text)
+            outcome = aitp.verify_session_bundle(
+                envelope, agent.aid, mr.text,
+                insecure_localhost_dangerous=insecure_localhost(bootstrap),
+            )
         except (RuntimeError, ValueError) as exc:
             await emit_event(
                 "session.bundle.rejected", bootstrap, error=str(exc),
@@ -677,7 +687,7 @@ def build_admin_router(
                 ),
             )
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, mounts=loopback.mounts()) as client:
             r = await client.get(delegatee_manifest_url)
             r.raise_for_status()
         # Verify BEFORE reading the AID: this value is the delegation's
@@ -736,7 +746,7 @@ def build_admin_router(
                 detail="issuer_manifest_urls is required to redeem a delegation",
             )
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, mounts=loopback.mounts()) as client:
             issuer_manifests: list[str] = []
             for url in issuer_manifest_urls:
                 mr = await client.get(url)

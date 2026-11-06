@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate a throwaway local CA and server certs for the Level 2 (TLS)
+# Generate a throwaway local CA and server certs for the TLS
 # federated stack. The CA root is trusted by the playground services (via
 # SSL_CERT_FILE) so real did:web resolution over https validates the chain.
 #
