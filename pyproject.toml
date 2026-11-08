@@ -181,6 +181,9 @@ packages = ["src/aitp_playground"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "agents/base"]
+markers = [
+  "live_llm(live_flag=True): spends real LLM calls; skipped under CI, without the selected provider's key, or (by default) without AITP_LIVE_LLM=1 (tests/integration/conftest.py)",
+]
 
 [dependency-groups]
 dev = [

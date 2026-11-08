@@ -90,21 +90,49 @@ that runs the integration suites against it. The tests container waits for
 the playground **and** the Control Plane healthchecks before starting, and
 volume-mounts `./tests` read-only so test edits don't require a rebuild.
 
-This stack needs sibling checkouts next to this repo: `../aitp-cp` (the
-`aitp-control-plane` repo — `aitp-cp` is the local directory alias the
-compose file expects) and `../aitp-rs` (the CP image compiles its native
-binding from `aitp-rs` source even though the playground image itself
-compiles the locked `aitp-sdk` sdist from PyPI).
+This stack needs two sibling checkouts: the `aitp-control-plane` repo at
+`${AITP_CP_DIR:-../aitp-cp}` (CI checks it out as `../aitp-cp`; with a
+`../aitp-control-plane` checkout, export `AITP_CP_DIR=../aitp-control-plane`)
+and `../aitp-rs` (the CP image compiles its native binding from `aitp-rs`
+source even though the playground image itself compiles the locked
+`aitp-sdk` sdist from PyPI). The CP source reaches `Dockerfile.cp-e2e` as the
+named build context `cpsrc` (`build.additional_contexts`), so Compose 2.17 or
+newer is required.
 
 ```bash
-cp .env.example .env
-$EDITOR .env                # set OPENAI_API_KEY=sk-...
+cp .env.example .env        # no provider key: agents run their stubs
+export AITP_CP_DIR=../aitp-control-plane   # only if there is no ../aitp-cp
 
 docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 # exit code of the `tests` container = suite result
 
-docker compose -f docker-compose.test.yml down
+docker compose -f docker-compose.test.yml down -v
 ```
+
+### `docker-compose.live.yml` — the same suite against a real LLM (local only)
+
+An override for `docker-compose.test.yml`, run only through
+`scripts/live-integration.sh`. It spends real money, so it is never used in CI
+(the script refuses when `CI` is set, and CI has no provider key).
+
+```bash
+scripts/live-integration.sh                          # OpenAI (gpt-4o-mini)
+LIVE_PROVIDER=anthropic scripts/live-integration.sh  # Anthropic (claude-haiku-4-5)
+LIVE_MAX_CALLS=60 scripts/live-integration.sh        # tighter call ceiling
+```
+
+The script checks that `.env` is gitignored and holds the selected provider's
+key (by name; it never prints a value), finds the CP checkout and
+`../aitp-rs`, and runs the stack under a per-run project
+`aitp-live-<epoch>-<pid>` that is torn down on exit, Ctrl-C included. The
+override caps spend: the global daily LLM quota (`LIVE_MAX_CALLS`, default
+120) is the ceiling on provider call units, each call is capped at 512 output
+tokens, and the model is the provider's cheapest. It also turns the backend
+lockdown on and sets a per-IP quota of 4 for the quota test. The `tests`
+container runs `test_live_quota_e2e.py` first, then `test_llm_e2e.py` and
+`test_protocol_e2e.py`. The log (scrubbed of `sk-…` and `Bearer …`) is written
+to `$LIVE_LOG_DIR` (default `$TMPDIR`). The script's header comment lists
+every knob.
 
 ### `docker-compose.host-ports.yml` — publish ports to the host
 
@@ -119,9 +147,10 @@ docker compose -f docker-compose.test.yml -f docker-compose.host-ports.yml up -d
 The cross-domain federated stack has its own compose files under
 `federated/` — see [federated/README.md](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/federated/README.md).
 
-To run against Anthropic instead, set `LLM_PROVIDER=anthropic` and provide
-`ANTHROPIC_API_KEY` in `.env` (model override: `ANTHROPIC_MODEL`, default
-`claude-sonnet-4-6`). See [getting-started.md § Development & testing](getting-started.md#development--testing)
+With a provider key in `.env`, the plain test stack calls that provider
+(`LLM_PROVIDER=openai|anthropic`; model overrides `OPENAI_MODEL`,
+`ANTHROPIC_MODEL`) without the live script's cost guards; prefer the live
+script. See [getting-started.md § Development & testing](getting-started.md#development--testing)
 for what this stack actually runs.
 
 ## Common pitfalls

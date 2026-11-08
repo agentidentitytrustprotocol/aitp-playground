@@ -264,18 +264,14 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Materialize .env for compose
-        # docker-compose.test.yml reads aitp-playground/.env for OPENAI_API_KEY
-        # and a couple of provider knobs. Without the key the LLM tests
-        # self-skip (see tests/integration/test_llm_e2e.py:95); the protocol
-        # e2e tests run either way.
+        # docker-compose.test.yml reads aitp-playground/.env. CI never spends
+        # money on an LLM: .env is .env.example as is, with no provider key,
+        # so the agents run their deterministic stubs, test_llm_e2e.py skips
+        # (tests/integration/conftest.py) and the protocol e2e tests run.
+        # Never inject a provider key here; live runs are local only
+        # (scripts/live-integration.sh, which refuses under CI).
         working-directory: aitp-playground
-        run: |
-          cp .env.example .env
-          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
-            printf '\nOPENAI_API_KEY=%s\n' '${{ secrets.OPENAI_API_KEY }}' >> .env
-          else
-            echo "::warning::OPENAI_API_KEY secret not set — LLM e2e assertions will be skipped (protocol e2e still runs)."
-          fi
+        run: cp .env.example .env
 
       - name: Bring up the stack and run tests
         working-directory: aitp-playground

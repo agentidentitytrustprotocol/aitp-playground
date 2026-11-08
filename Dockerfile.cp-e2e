@@ -25,9 +25,15 @@
 #   stage 4 — runner       — slim runtime, identical to the upstream CP
 #             runner stage.
 #
-# Build context expectation: the parent directory of this repo, so the
-# sibling aitp-cp/ and aitp-rs/ checkouts are both visible. docker-
-# compose.test.yml sets `context: ..` accordingly.
+# Build contexts: the main context is the parent directory of this repo, so
+# the sibling aitp-rs/ checkout is visible (docker-compose.test.yml sets
+# `context: ..`). The control plane comes from the named context `cpsrc`
+# (`additional_contexts: cpsrc: ${AITP_CP_DIR:-../aitp-cp}`), so its checkout
+# may live anywhere: CI checks it out as ../aitp-cp, a workspace may have
+# ../aitp-control-plane (scripts/live-integration.sh exports AITP_CP_DIR).
+# A named context does not use the CP's own .dockerignore, so the COPYs below
+# exclude what it excludes (host node_modules, .next, .git, .env files, agent
+# worktrees) explicitly.
 
 # ============================================================================
 # Stage 1 — build the aitp napi binding from Rust source.
@@ -75,7 +81,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ============================================================================
 FROM node:24-slim AS deps
 WORKDIR /workspace/aitp-cp
-COPY aitp-cp/package.json aitp-cp/package-lock.json* ./
+COPY --from=cpsrc package.json package-lock.json* ./
 # Bring the aitp-rs binding source over, but skip the 800MB Rust target/
 # and the host's node_modules (which can carry a darwin-only .node).
 COPY --exclude=**/target --exclude=**/node_modules \
@@ -93,7 +99,10 @@ FROM node:24-slim AS builder
 WORKDIR /workspace/aitp-cp
 COPY --from=deps /workspace/aitp-rs/bindings/aitp-node /workspace/aitp-rs/bindings/aitp-node
 COPY --from=deps /workspace/aitp-cp/node_modules ./node_modules
-COPY aitp-cp/ ./
+COPY --from=cpsrc --exclude=**/node_modules --exclude=.next --exclude=.git \
+     --exclude=.env --exclude=.env.* --exclude=.claude --exclude=coverage \
+     --exclude=temp --exclude=tsconfig.tsbuildinfo \
+     . ./
 ENV NEXT_TELEMETRY_DISABLED=1
 # Build-time env: Next.js evaluates route modules during "Collecting page
 # data", and a few of those modules touch config defaults. Provide minimal

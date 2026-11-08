@@ -7,8 +7,8 @@ run inside the ``tests`` container of ``docker-compose.test.yml``, which sets:
     AITP_LLM_E2E=1
     PLAYGROUND_URL=http://playground:8000
     CP_URL=http://aitp-cp:4000
-    OPENAI_API_KEY=...           (from .env)
-    LLM_PROVIDER=openai
+    OPENAI_API_KEY / ANTHROPIC_API_KEY=...  (from .env; the one LLM_PROVIDER selects)
+    LLM_PROVIDER=openai          (or anthropic)
 
 Each scenario exercise:
   1. Launches real agent subprocesses (CrewAI / LangChain / LangGraph).
@@ -28,10 +28,17 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("AITP_LLM_E2E"),
-    reason="Live LLM e2e — set AITP_LLM_E2E=1 (and OPENAI_API_KEY) to enable",
-)
+# AITP_LLM_E2E=1 (docker-compose.test.yml) is this module's own gate. The
+# live_llm marker adds the shared ones (tests/integration/conftest.py): never
+# under CI, and a key for the provider LLM_PROVIDER selects — not always
+# OPENAI_API_KEY. live_flag=False: AITP_LIVE_LLM is not required here.
+pytestmark = [
+    pytest.mark.skipif(
+        not os.environ.get("AITP_LLM_E2E"),
+        reason="Live LLM e2e — set AITP_LLM_E2E=1 (and the selected provider's key) to enable",
+    ),
+    pytest.mark.live_llm(live_flag=False),
+]
 
 PLAYGROUND_URL = os.environ.get("PLAYGROUND_URL", "http://localhost:8000")
 CP_URL = os.environ.get("CP_URL", "http://localhost:4000")
@@ -95,8 +102,6 @@ SCENARIOS = [
 
 @pytest.fixture(scope="module")
 def client() -> httpx.Client:
-    if not os.environ.get("OPENAI_API_KEY"):
-        pytest.skip("OPENAI_API_KEY not set — cannot exercise real LLM path")
     with httpx.Client(base_url=PLAYGROUND_URL, timeout=30.0, headers=_PG_HEADERS) as c:
         # Pre-flight: the playground must be reachable and healthy.
         try:

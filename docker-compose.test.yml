@@ -1,17 +1,19 @@
-# End-to-end test stack: real CrewAI / LangChain / LangGraph agents calling
-# OpenAI, exercising AITP identity + trust against a real Control Plane.
-# One command, no host prereqs beyond Docker.
+# End-to-end test stack: real CrewAI / LangChain / LangGraph agents,
+# exercising AITP identity + trust against a real Control Plane. Without a
+# provider key in .env (CI) the agents run their deterministic stubs and the
+# LLM e2e tests skip. With a real LLM, use scripts/live-integration.sh: it
+# adds docker-compose.live.yml (cost guards), a per-run project and teardown.
 #
-#   cp .env.example .env && $EDITOR .env   # set OPENAI_API_KEY
+#   cp .env.example .env
 #   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 #
 # Exit code of the `tests` container is the suite result.
 #
 # Topology:
-#   cp-postgres  → Postgres 18 (ephemeral data, no volume; aitp-cp/drizzle/
+#   cp-postgres  → Postgres 18 (ephemeral data, no volume; <CP>/drizzle/
 #                  mounted at /docker-entrypoint-initdb.d so the schema is
 #                  applied automatically on first boot)
-#   aitp-cp      → Next.js control plane (built from sibling ../aitp-cp)
+#   aitp-cp      → Next.js control plane (built from ${AITP_CP_DIR:-../aitp-cp})
 #   playground   → FastAPI scenario runner (built from this repo)
 #   tests        → pytest container running tests/integration/test_*_e2e.py
 #
@@ -41,7 +43,11 @@ services:
       #
       # Subdirs (drizzle/manual/, drizzle/meta/) and the README are
       # skipped by the entrypoint's "*.sql" glob.
-      - ../aitp-cp/drizzle:/docker-entrypoint-initdb.d:ro
+      #
+      # AITP_CP_DIR is the control-plane checkout; the default is CI's path
+      # (docker.yml checks it out as ../aitp-cp). scripts/live-integration.sh
+      # exports it for a workspace that has ../aitp-control-plane instead.
+      - ${AITP_CP_DIR:-../aitp-cp}/drizzle:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # pg_isready flips green AFTER the initdb scripts have all applied,
       # so dependents can rely on the schema being live.
@@ -59,6 +65,9 @@ services:
       # platform, and the only checked-in .node is darwin-arm64.
       context: ..
       dockerfile: aitp-playground/Dockerfile.cp-e2e
+      # The CP source, as the named context `cpsrc` (needs Compose >= 2.17).
+      additional_contexts:
+        cpsrc: ${AITP_CP_DIR:-../aitp-cp}
     image: aitp-cp:e2e
     depends_on:
       cp-postgres:

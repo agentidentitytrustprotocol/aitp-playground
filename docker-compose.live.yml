@@ -1,0 +1,58 @@
+# Live-LLM override for docker-compose.test.yml. Spends real money, so it is
+# used only through scripts/live-integration.sh (per-run project name, trap
+# teardown, CI refusal, key presence checked by name). Never in CI: no
+# workflow references this file, and CI has no provider key.
+#
+#   scripts/live-integration.sh              # openai (default)
+#   LIVE_PROVIDER=anthropic scripts/live-integration.sh
+#
+# Cost guard. The global daily LLM quota is the hard ceiling on provider call
+# units for the whole stack (one script run = one fresh stack, in-memory
+# counters): LIVE_MAX_CALLS, default 120. Each call is capped at 512 output
+# tokens on the cheapest model. Worst case on gpt-4o-mini: 120 x 512 output
+# tokens plus prompts, well under $0.10.
+#
+# This file sets AITP_LIVE_LLM=1 (the gate for live-only tests); the base
+# file keeps AITP_LLM_E2E=1 for test_llm_e2e.py.
+
+x-live-provider: &live-provider
+  LLM_PROVIDER: "${LIVE_PROVIDER:-openai}"
+  OPENAI_MODEL: "${LIVE_OPENAI_MODEL:-gpt-4o-mini}"
+  ANTHROPIC_MODEL: "${LIVE_ANTHROPIC_MODEL:-claude-haiku-4-5}"
+
+services:
+  playground:
+    environment:
+      <<: *live-provider
+      LLM_MAX_TOKENS_PER_CALL: "512"
+      # Split evenly across a run's agents, and a researcher reserves
+      # 4 calls x 512 tokens per capability: 24000 leaves a 4-agent scenario
+      # (delegation-multihop) 6000 per agent. The quota below is the ceiling.
+      RUN_TOKEN_BUDGET: "24000"
+      LLM_QUOTA_STORE: "memory"
+      LLM_QUOTA_GLOBAL_PER_DAY: "${LIVE_MAX_CALLS:-120}"
+      LLM_QUOTA_GLOBAL_PER_MONTH: "${LIVE_MAX_CALLS:-120}"
+      # Admits the researcher (4 units) and refuses the writer (1 more) for
+      # one subject IP: test_live_quota_e2e.py. Header-less keyed traffic
+      # (every other test) has no subject IP and charges only the global
+      # counters.
+      LLM_QUOTA_PER_IP_PER_DAY: "4"
+      LLM_QUOTA_PER_IP_PER_MONTH: "1000"
+      # Exercise the backend lockdown on the live stack too.
+      AITP_PLAYGROUND_REQUIRE_API_KEY: "true"
+
+  tests:
+    environment:
+      <<: *live-provider
+      AITP_LIVE_LLM: "1"
+      LIVE_LLM_QUOTA_PER_IP_PER_DAY: "4"
+    # The quota test first: it must see an unspent global counter, so its
+    # denial can only come from the per-IP limit.
+    command:
+      - pytest
+      - -v
+      - -s
+      - -ra
+      - tests/integration/test_live_quota_e2e.py
+      - tests/integration/test_llm_e2e.py
+      - tests/integration/test_protocol_e2e.py
