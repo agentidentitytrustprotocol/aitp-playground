@@ -99,8 +99,10 @@ AITP_CP_DIR="$(cd "$AITP_CP_DIR" && pwd)"
 export AITP_CP_DIR LIVE_PROVIDER LIVE_MAX_CALLS
 
 # --- stale projects from crashed runs -------------------------------------
-stale="$(docker ps -a --filter label=com.docker.compose.project \
-  --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null \
+stale="$( { docker ps -a --filter label=com.docker.compose.project \
+    --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null
+  docker volume ls --filter label=com.docker.compose.project \
+    --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null; } \
   | grep '^aitp-live-' | sort -u || true)"
 if [ -n "$stale" ]; then
   note "WARNING: stale live projects from earlier runs (not touched):"
@@ -126,10 +128,14 @@ scrub() {
 }
 
 UP_PID=""
+SCRUB_PID=""
+FIFO_DIR=""
 TORN_DOWN=0
 # shellcheck disable=SC2329 # invoked by the EXIT trap
 teardown() {
   local rc=$?
+  # Best effort from here on: one failing docker call must not skip the rest.
+  set +e
   trap - EXIT INT TERM
   [ "$TORN_DOWN" = 1 ] && exit "$rc"
   TORN_DOWN=1
@@ -139,6 +145,9 @@ teardown() {
     for _ in $(seq 1 30); do kill -0 "$UP_PID" 2>/dev/null || break; sleep 1; done
     kill -KILL "$UP_PID" 2>/dev/null || true
   fi
+  # Let the scrubber drain the FIFO into the log before anything reads the log.
+  [ -z "$SCRUB_PID" ] || wait "$SCRUB_PID" 2>/dev/null
+  [ -z "$FIFO_DIR" ] || rm -rf "$FIFO_DIR"
   if [ "$rc" -ne 0 ]; then
     { echo "=== container logs (tail 300, scrubbed) ==="
       "${COMPOSE[@]}" logs --no-color --tail=300 2>&1 || true; } | scrub >>"$LOG"
@@ -165,15 +174,23 @@ note "project $P, provider $LIVE_PROVIDER, call ceiling $LIVE_MAX_CALLS, CP $AIT
 note "log: $LOG"
 
 # In the background so a signal to this script interrupts `wait` at once (a
-# foreground child would delay the trap until it exits).
+# foreground child would delay the trap until it exits). Output goes through a
+# FIFO, not a process substitution, so the scrubber can be waited for: the
+# summary grep below must read a complete log.
+FIFO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aitp-live-fifo.XXXXXX")"
+mkfifo "$FIFO_DIR/out"
+scrub <"$FIFO_DIR/out" | tee -a "$LOG" &
+SCRUB_PID=$!
 "${COMPOSE[@]}" up --build --abort-on-container-exit --exit-code-from tests \
-  > >(scrub | tee -a "$LOG") 2>&1 &
+  >"$FIFO_DIR/out" 2>&1 &
 UP_PID=$!
 set +e
 wait "$UP_PID"
 rc=$?
+wait "$SCRUB_PID"
 set -e
 UP_PID=""
+SCRUB_PID=""
 
 echo "=== pytest summary ==="
 grep -E '\| (FAILED|ERROR|SKIPPED) |\| =+ .*(passed|failed|error|skipped)' "$LOG" | tail -40 || true
