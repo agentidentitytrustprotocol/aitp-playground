@@ -849,3 +849,27 @@ reversible; Q1–Q3 are UNCONFIRMED in ASSUMPTIONS.md until `/reconcile`.
 - **Until the first release (P5):** `:latest` stays at bf9be6a, the image prod runs today, so a redeploy in
   the meantime changes nothing. Whether a plain redeploy re-resolves the tag (evidence says yes, CLI help says
   only `--from-source`) is recorded in P5; under promotion either is safe.
+
+## D-34 — Reconciled assumptions of wave4-latest-local-railway (2026-11-08)
+All nine entries were reversible; a fresh Opus analysis checked each against the code and Opus settled them
+(no owner input needed). Each is `CONFIRMED (2026-11-08)` in ASSUMPTIONS.md.
+- **Release promotion (D-33):** confirmed. Owner goal 6 asks for "the latest release"; `:latest` moves only
+  through release.yml, which retags the main-built digest. One commit reverses it. This is the entry that
+  defines what prod runs, so it is named in the wave report.
+- **Token name and home:** confirmed. `RAILWAY_PLAYGROUND_TOKEN`, scoped to the `production` environment,
+  avoids shadowing the org `RAILWAY_TOKEN` and stays off the Doppler sync allowlist.
+- **v0.3.0, tag-only versioning:** confirmed. The preflight gate enforces increasing versions. The DEFERRED
+  entry now also names the stale `0.1.0` in `__init__.py` and `main.py`.
+- **Tag push also creates the GitHub release:** confirmed. Without it, check-latest reports MISMATCH after
+  a tag-push release.
+- **RUN_TOKEN_BUDGET 24000:** confirmed. At 8000, a 4-agent run gives 2000 per agent, which is below one
+  researcher reservation of 2048. Spend is still capped by the global daily quota.
+- **`live_llm(live_flag=False)` on test_llm_e2e:** confirmed. The plain compose stack could already spend
+  money with a key in `.env` before this work; the marker does not change that.
+- **cpsrc excludes:** confirmed. They keep a local CP `.env` and `.claude` out of the e2e image whether or
+  not BuildKit applies the CP `.dockerignore` to a named context.
+- **Live Anthropic model claude-haiku-4-5:** default confirmed and the reasoning corrected. It is not the
+  cheapest model, but thinking is off by default, so it fits the 512-token cap. Moving to haiku-5-5 is in
+  DEFERRED.md.
+- **Socket test through the token bucket:** confirmed. FastAPI 0.162.0 solves dependencies before it
+  validates the body (`fastapi/dependencies/utils.py`), and reordering would fail the test loudly.

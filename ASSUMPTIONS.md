@@ -265,7 +265,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** `:latest` moves only through `release.yml`, which retags the main-built `sha-<short>` digest and redeploys; `docker.yml` stops tagging `latest` and stops rebuilding on `v*` tags (DECISIONS D-33).
 - **Alternatives:** ACDP's model (rebuild `latest` and redeploy on every merge to main); rebuild on the tag.
 - **Blast radius if wrong:** merged code waits for a release before it reaches prod. Reversible in one commit: restore `type=raw,value=latest,enable={{is_default_branch}}` in docker.yml.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — release token name and home
 - **Plan:** plans/wave4-latest-local-railway.md (P1/P2, Q2)
@@ -273,7 +273,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** project token `gha-aitp-playground-release` (aitp-runner / production), Doppler `aitp-playground/prd` `RAILWAY_PLAYGROUND_TOKEN` (not on the sync allowlist), mirrored into the GitHub Environment `production` secret of the same name; ids in repo variables.
 - **Alternatives:** reuse the org `RAILWAY_TOKEN`; name the secret `RAILWAY_TOKEN` at repo level (would shadow the org secret).
 - **Blast radius if wrong:** a rename in release.yml, setup-release-credentials.sh and docs/deployment.md; the token is revocable.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — first release is v0.3.0; pyproject version stays out of the release
 - **Plan:** plans/wave4-latest-local-railway.md (P1/P5, Q3)
@@ -281,7 +281,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** release `v0.3.0` in P5; the release version comes only from the tag, and the stale pyproject version is recorded in DEFERRED.md.
 - **Alternatives:** v1.0.0; couple the release to pyproject (bump it in a release commit).
 - **Blast radius if wrong:** a tag name; tags are cheap to supersede with a higher version.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — a human-pushed tag also gets a GitHub release
 - **Plan:** plans/wave4-latest-local-railway.md (P1 step 5 creates the tag and release on the dispatch path only)
@@ -289,7 +289,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** on a tag push, release.yml creates the GitHub release (`--verify-tag --latest`) when the tag has none, so both entry points end in the same state. The gate also accepts a dispatch whose tag already points at the commit, so a failed run can be re-run.
 - **Alternatives:** leave tag pushes without a release (check-latest would then report MISMATCH after a tag-push release).
 - **Blast radius if wrong:** one step in release.yml.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — live run token budget is 24000, not 8000
 - **Plan:** plans/wave4-latest-local-railway.md (P3 cost guard: `RUN_TOKEN_BUDGET=8000`)
@@ -297,7 +297,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** `RUN_TOKEN_BUDGET=24000` in docker-compose.live.yml. The hard spend ceiling stays the global daily quota (`LIVE_MAX_CALLS`, default 120) x 512 output tokens.
 - **Alternatives:** 8000 and drop the 4-agent scenario from the live run; lower `LLM_MAX_TOKENS_PER_CALL` further.
 - **Blast radius if wrong:** one value in docker-compose.live.yml; worst-case spend is bounded by the call ceiling either way.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — test_llm_e2e is marked live_llm but keeps AITP_LLM_E2E as its gate
 - **Plan:** plans/wave4-latest-local-railway.md (P3 acceptance 2 "every real-LLM test marked"; round-2 note "AITP_LLM_E2E kept, AITP_LIVE_LLM for new tests only")
@@ -305,7 +305,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** `@pytest.mark.live_llm(live_flag=False)` on test_llm_e2e.py: it gets the CI skip and the provider-aware key check from tests/integration/conftest.py, and does not require `AITP_LIVE_LLM`. New live tests use the bare marker, which does. test_protocol_e2e.py is not marked: it must keep running in CI without a key (its LLM use is incidental).
 - **Alternatives:** require `AITP_LIVE_LLM` for test_llm_e2e too (the plain compose stack would then never run it, even with a key in .env).
 - **Blast radius if wrong:** one marker argument.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — the cpsrc COPY excludes more than the plan listed
 - **Plan:** plans/wave4-latest-local-railway.md (P3: `COPY --from=cpsrc --exclude=node_modules --exclude=.next --exclude=.git . ./`)
@@ -313,15 +313,15 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** also exclude `**/node_modules`, `.env`, `.env.*`, `.claude`, `coverage`, `temp`, `tsconfig.tsbuildinfo`, mirroring the CP's `.dockerignore`.
 - **Alternatives:** the plan's three excludes (a local `.env` would be baked into the e2e CP image).
 - **Blast radius if wrong:** Dockerfile.cp-e2e excludes; the image is test-only.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — live Anthropic model is claude-haiku-4-5
 - **Plan:** plans/wave4-latest-local-railway.md (P3 "Anthropic uses the cheapest current model id")
-- **Assumed:** `claude-haiku-4-5` is the cheapest current Anthropic model the LangChain/CrewAI clients accept; `agents/base/llm.py` defaults to `claude-sonnet-4-6`.
+- **Assumed:** `claude-haiku-4-5` is a current Anthropic model the LangChain/CrewAI clients accept, with thinking off by default so it fits the 512-token per-call cap (it is not the cheapest: `claude-haiku-5-5` is, but thinks by default); `agents/base/llm.py` defaults to `claude-sonnet-4-6`.
 - **Chose:** `ANTHROPIC_MODEL=${LIVE_ANTHROPIC_MODEL:-claude-haiku-4-5}` in docker-compose.live.yml (overridable). The live run in P3 used OpenAI; the Anthropic path was not exercised live.
 - **Alternatives:** the agents' default sonnet model.
 - **Blast radius if wrong:** one default; override with `LIVE_ANTHROPIC_MODEL`.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
 
 ## wave4-latest-local-railway — the socket test sees X-AITP-Client-IP through the token bucket
 - **Plan:** plans/wave4-latest-local-railway.md (P3 test_lockdown_socket_e2e: "X-AITP-Client-IP honoured only with a key", free)
@@ -329,4 +329,4 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** `RATE_LIMIT_BURST=1` and `POST /runs` with an invalid body: the spend limits (a dependency) run before body validation, so a keyed request from a subject IP is 422, the second from the same IP is 429, a different IP is 422 again, and a keyless or wrong-key request with the header is 401 and charges no bucket.
 - **Alternatives:** launch real stub runs and read the per-IP run window.
 - **Blast radius if wrong:** if FastAPI ever validated the body before dependencies, the test would fail loudly (all 422), not pass falsely.
-- **Status:** UNCONFIRMED
+- **Status:** CONFIRMED (2026-11-08, Opus; DECISIONS D-34)
