@@ -9,13 +9,15 @@ Auth model (GHSA-v4gm-5727-qpq6):
   public allowlist.
 * ``enforce_spend_limits`` adds the rate limit and the global hourly cap on
   the two routes that spend LLM credit (run create, hosted invoke).
+* With ``AITP_PLAYGROUND_REQUIRE_API_KEY=true``, :class:`~aitp_playground.security.ApiKeyMiddleware`
+  additionally gates every path (public listings, docs, unknown paths) except
+  ``/healthz``, the HMAC webhook and loopback ``/internal/*``.
 * ``require_telemetry_token`` guards ``/internal/telemetry``, which the
   playground's own agent subprocesses call with a per-process token from
   their bootstrap file — they never hold the API key.
 """
 from __future__ import annotations
 
-import hashlib
 import hmac
 
 from fastapi import Depends, HTTPException, Request
@@ -27,6 +29,7 @@ from ..limits import SpendLimits
 from ..registry.service import RegistryService
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
+from ..security import configured_keys, normalize_client_ip, resolve_client
 
 
 def get_registry(request: Request) -> RegistryService:
@@ -57,10 +60,6 @@ def _settings(request: Request) -> Settings:
     return getattr(request.app.state, "settings", None) or get_settings()
 
 
-def _configured_keys(settings: Settings) -> list[bytes]:
-    return [k.strip().encode("utf-8") for k in settings.playground_api_key.split(",") if k.strip()]
-
-
 def _bearer(request: Request) -> bytes | None:
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     token = token.strip()
@@ -78,40 +77,40 @@ def _unauthorized() -> HTTPException:
 
 
 def require_api_key(request: Request) -> str:
-    """Check ``Authorization: Bearer <key>`` against ``PLAYGROUND_API_KEY``.
+    """Check the presented key against ``PLAYGROUND_API_KEY``.
 
-    Returns a short fingerprint of the matched key (never the key itself) so
-    downstream limits can key on the caller. No key configured → 503: the
-    service fails closed instead of treating a missing secret as open.
+    The key may come as ``x-api-key: <key>`` or ``Authorization: Bearer
+    <key>``; both go through the one matcher in :mod:`aitp_playground.security`
+    (constant time, every configured key compared). Returns a short
+    fingerprint of the matched key (never the key itself) so downstream limits
+    can key on the caller. No key configured → 503: the service fails closed
+    instead of treating a missing secret as open.
     """
-    keys = _configured_keys(_settings(request))
-    if not keys:
+    settings = _settings(request)
+    if not configured_keys(settings.playground_api_key):
         raise HTTPException(status_code=503, detail="API key not configured on this service")
-    presented = _bearer(request)
-    if presented is None:
+    key_fp = resolve_client(request).key_fp
+    if key_fp is None:
         raise _unauthorized()
-    # Compare against every configured key without short-circuiting, so the
-    # response time does not reveal which (or whether an earlier) key matched.
-    matched = False
-    for key in keys:
-        matched |= hmac.compare_digest(presented, key)
-    if not matched:
-        raise _unauthorized()
-    return hashlib.sha256(presented).hexdigest()[:16]
+    return key_fp
 
 
 def client_ip(request: Request) -> str:
-    """The caller's IP for rate limiting.
+    """The caller's network address, for logs and the per-IP token bucket.
 
     Railway's edge proxy appends the connecting address to
     ``X-Forwarded-For``; the right-most entry is the one that proxy wrote, so
     a client cannot pick its own bucket by sending the header itself. Off
-    Railway (no header) the socket peer is used.
+    Railway (no header) the socket peer is used. Normalised to one IPv4
+    address or one IPv6 /64.
+
+    This is NOT the subject of per-IP run limits or LLM quotas: that is
+    ``resolve_client(request).subject_ip``, which only a keyed caller can set.
     """
     xff = request.headers.get("x-forwarded-for", "")
     if xff.strip():
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
+        return normalize_client_ip(xff.split(",")[-1])
+    return normalize_client_ip(request.client.host) if request.client else "unknown"
 
 
 def get_spend_limits(request: Request) -> SpendLimits:

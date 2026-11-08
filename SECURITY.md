@@ -7,10 +7,42 @@ this repository. Please do not open a public issue for a security problem.
 
 ## Authentication
 
+The playground key is accepted as `x-api-key: <PLAYGROUND_API_KEY>` (canonical)
+or `Authorization: Bearer <PLAYGROUND_API_KEY>` (compatibility). Both go
+through one matcher (`src/aitp_playground/security.py`).
+
+### Backend lockdown: `AITP_PLAYGROUND_REQUIRE_API_KEY`
+
+The lockdown is staged by one flag, off by default:
+
+- **`false`** (default): today's per-route auth, in the table below. The
+  static listings stay public.
+- **`true`**: `ApiKeyMiddleware` answers `401` (`WWW-Authenticate: ApiKey
+  header="x-api-key"`) to every request without a valid key before routing,
+  including the static listings, the OpenAPI docs, SSE streams, unknown paths
+  and any route added later. A websocket is closed with `1008`. The only
+  exceptions are:
+  - `GET /healthz`;
+  - `POST /webhooks/cp/{run_id}`, which has its own HMAC check;
+  - `/internal/*`, but only from a direct loopback peer with no
+    `X-Forwarded-For` or `Forwarded` header. Agents reach it over
+    `PLAYGROUND_INTERNAL_URL` (default `http://127.0.0.1:8000`) with their own
+    token;
+  - `OPTIONS`.
+
+  With the flag on and no `PLAYGROUND_API_KEY`, the service **refuses to
+  start**.
+
+Rollout: callers (the console) send the key while the flag is off, and the
+flag is turned on only after that's verified. A wrong key presented while the
+flag is off is logged (never its value) and otherwise ignored on public routes.
+
+### Per-route auth (flag off)
+
 | Route | How it is authenticated |
 | --- | --- |
-| `GET /healthz`, `/capabilities`, `/packs`, `/scenarios*`, `/dashboard` (HTML shell), `/docs`, `/redoc`, `/openapi.json` | Public: static content only |
-| Every other route (runs, run detail and SSE streams, hosted agents, `/cp/*`, `/agents`, `/metrics`) | `Authorization: Bearer <PLAYGROUND_API_KEY>` |
+| `GET /healthz`, `/capabilities`, `/packs`, `/scenarios*`, `/dashboard` (HTML shell), `/docs`, `/redoc`, `/openapi.json` | Public: static content only (gated when the flag is on) |
+| Every other route (runs, run detail and SSE streams, hosted agents, `/cp/*`, `/agents`, `/metrics`) | The playground key, `x-api-key` or Bearer |
 | `POST /webhooks/cp/{run_id}` | HMAC-SHA256 of the body under the per-webhook secret CP issued (`X-Aitp-Signature`). The signed `enqueuedAt` must be within 5 minutes of now, and a `deliveryId` already recorded on the run is not recorded again |
 | `POST /internal/telemetry` | A per-process token the playground writes into each agent's bootstrap file. Agents never receive the API key |
 
@@ -22,7 +54,25 @@ this repository. Please do not open a public issue for a security problem.
   They never fall back to open.
 - `tests/unit/test_route_auth.py` walks `app.routes` and fails if any route
   is neither guarded nor on the public allowlist above. A new route is
-  private until someone adds it to that list on purpose.
+  private until someone adds it to that list on purpose. The same walk checks
+  that every route except the exemptions answers the gate's `401` with the
+  flag on.
+
+### Client IP
+
+A caller holding the key (the console) may send the visitor's address in
+`X-AITP-Client-IP`. It is trusted **only** on a request carrying a valid key;
+without one the header is ignored, so nobody can choose their own rate-limit
+bucket. The first comma-separated value is used and normalised to one IPv4
+address or one IPv6 /64 (`2001:db8:1:2::/64`); an IPv4-mapped address counts as
+its IPv4 address, and a value that isn't a bare IP (`host:port`, `[v6]`, a
+hostname) is ignored. This is the same normalisation as `aitp-docs`'
+`normalizeClientIp`.
+
+That trusted address is the subject of the per-IP limits and quotas. A keyless
+request, or a keyed one without the header, has no subject IP: on Railway every
+keyless caller appears as the edge proxy, so a per-IP limit there would throttle
+every visitor together.
 
 ## Spend limits
 
@@ -48,8 +98,8 @@ replica**: N replicas multiply every limit by N, and a restart resets them.
 The Railway service is deployed with one replica. Before scaling out, move
 this state to a shared store such as Postgres or Redis.
 
-The per-IP bucket keys on the right-most `X-Forwarded-For` entry, which is
-the one Railway's edge proxy appends, so a client cannot choose its own
+The per-IP token bucket keys on the right-most `X-Forwarded-For` entry
+(normalised as above), which is the one Railway's edge proxy appends, so a client cannot choose its own
 bucket by sending that header. Requests the console proxies share the
 console's egress IP, so the per-key bucket and the hourly cap are what bound
 them.

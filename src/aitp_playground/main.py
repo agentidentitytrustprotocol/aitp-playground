@@ -31,6 +31,7 @@ from .limits import SpendLimits
 from .registry.service import RegistryService
 from .runner.engine import ScenarioRunner
 from .runner.store import build_run_store
+from .security import ApiKeyMiddleware, is_loopback_url
 from .trust.orchestrator import TrustOrchestrator
 
 
@@ -74,6 +75,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logging.getLogger(__name__).warning(
             "PLAYGROUND_API_KEY is not set: every authenticated route "
             "(run create/read/stream, hosted agents, CP views) answers 503"
+        )
+    logging.getLogger(__name__).info(
+        "backend lockdown: AITP_PLAYGROUND_REQUIRE_API_KEY=%s",
+        "true (every route but /healthz, the CP webhook and loopback /internal/* "
+        "needs the key)" if settings.require_api_key else "false (per-route auth)",
+    )
+    if not is_loopback_url(settings.playground_internal_url):
+        logging.getLogger(__name__).warning(
+            "PLAYGROUND_INTERNAL_URL is not a loopback URL: agent telemetry goes "
+            "over the network and, with AITP_PLAYGROUND_REQUIRE_API_KEY=true, is "
+            "rejected by the gate (only direct-loopback /internal/* is exempt)"
         )
 
     registry = RegistryService(settings)
@@ -129,6 +141,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.telemetry_token = telemetry_token
 
     install_handlers(app)
+    # Outermost: rejects before routing when the key is required, and always
+    # records who the caller is (key fingerprint, trusted client IP).
+    app.add_middleware(ApiKeyMiddleware, settings=settings)
 
     app.include_router(health_api.router)
     app.include_router(registry_api.router)

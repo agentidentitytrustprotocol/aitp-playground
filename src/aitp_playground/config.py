@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     agent_base_port: int = 8100
     agent_python: str = "python3"
     playground_base_url: str = "http://localhost:8000"
+    # Where this service's own agent subprocesses reach it (telemetry, LLM
+    # quota). Always loopback: /internal/* trusts only direct loopback peers.
+    # Port 8000 matches the Dockerfile CMD.
+    playground_internal_url: str = "http://127.0.0.1:8000"
     # Public origin this service advertises for agents it hosts (federated /
     # cross-domain demos). When set, agents hosted via POST /hosted-agents
     # advertise their handshake_endpoint + did:web serviceEndpoint at
@@ -87,6 +91,11 @@ class Settings(BaseSettings):
     # one. Empty means "not configured" and those routes fail closed with 503
     # rather than open — a missing secret must never read as "no auth".
     playground_api_key: str = ""
+    # Staged rollout of the backend lockdown (SECURITY.md). false: today's
+    # per-route auth, static listings public. true: every path except
+    # /healthz, the HMAC webhook and loopback /internal/* needs the key, and
+    # the service refuses to start without PLAYGROUND_API_KEY.
+    aitp_playground_require_api_key: bool = False
     # Token bucket on run creation and hosted-agent invoke, applied twice:
     # once per client IP and once per API key. `rate_limit_burst` requests
     # may go at once; the bucket refills at `rate_limit_per_minute`.
@@ -119,6 +128,21 @@ class Settings(BaseSettings):
                 "set on a Railway deployment"
             )
         return self
+
+    @model_validator(mode="after")
+    def _refuse_lockdown_without_key(self) -> Self:
+        if self.require_api_key and not any(
+            k.strip() for k in self.playground_api_key.split(",")
+        ):
+            raise ValueError(
+                "AITP_PLAYGROUND_REQUIRE_API_KEY=true requires PLAYGROUND_API_KEY; "
+                "refusing to start with every route locked and no key to open it"
+            )
+        return self
+
+    @property
+    def require_api_key(self) -> bool:
+        return self.aitp_playground_require_api_key
 
     @property
     def scenarios_path(self) -> Path:

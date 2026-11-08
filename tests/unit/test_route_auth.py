@@ -157,6 +157,24 @@ def test_any_key_in_the_rotation_list_is_accepted() -> None:
     assert r.status_code == 401
 
 
+#: With AITP_PLAYGROUND_REQUIRE_API_KEY=true the middleware gates everything
+#: except these (security.py ``_exempt``): health, the HMAC webhook, and the
+#: agents' loopback-only /internal/* (exercised in test_backend_lockdown.py).
+LOCKED_EXEMPT = {("GET", "/healthz"), ("POST", "/webhooks/cp/{run_id}")}
+
+
+@pytest.mark.parametrize("method,path", sorted({
+    (m, r.path) for r in _api_routes() for m in r.methods if (m, r.path) not in LOCKED_EXEMPT
+}))
+def test_locked_every_route_without_key_is_401_from_the_gate(method: str, path: str) -> None:
+    """Flag true: every route, public listings and /internal/* from a
+    non-loopback peer included, answers the gate's 401 before routing."""
+    client = TestClient(create_app(Settings(aitp_playground_require_api_key=True)), client=("203.0.113.5", 1))
+    r = client.request(method, _concrete(path))
+    assert r.status_code == 401, (method, path)
+    assert r.headers["www-authenticate"] == 'ApiKey header="x-api-key"'
+
+
 def test_public_listings_need_no_key() -> None:
     client = TestClient(create_app())
     for path in ("/healthz", "/capabilities", "/packs", "/scenarios", "/dashboard"):

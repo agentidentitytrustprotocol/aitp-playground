@@ -111,7 +111,8 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `REGISTRY_CACHE_TTL_MS` | `0` | `0` = reload every lookup (hot reload while authoring) |
 | `AGENT_BASE_PORT` | `8100` | First port handed to spawned agents |
 | `AGENT_PYTHON` | `python3` | Interpreter for agent subprocesses |
-| `PLAYGROUND_BASE_URL` | `http://localhost:8000` | Where agents POST telemetry |
+| `PLAYGROUND_BASE_URL` | `http://localhost:8000` | This service's public origin: the CP webhook URL it subscribes and the CLI's default target |
+| `PLAYGROUND_INTERNAL_URL` | `http://127.0.0.1:8000` | Where this service's own agents reach it (telemetry, LLM quota). Must be loopback: `/internal/*` only trusts direct loopback peers |
 | `CP_BASE_URL` | _(empty)_ | Optional Control Plane base URL ([control-plane.md](control-plane.md)) |
 | `CP_API_KEY` | _(empty)_ | Optional CP bearer |
 | `CP_TIMEOUT_MS` | `5000` | Per-request timeout for CP calls |
@@ -127,7 +128,8 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Override |
 | `RUN_HISTORY_DB` | _(empty)_ | When set, persist runs + events to this SQLite file so they survive a restart. Empty = in-memory only. |
-| `PLAYGROUND_API_KEY` | _(empty)_ | Bearer key(s) for every authenticated route (see the endpoint table). Comma-separated to overlap a rotation. **Empty fails closed:** those routes answer `503`. |
+| `PLAYGROUND_API_KEY` | _(empty)_ | Key(s) for every authenticated route (see the endpoint table), sent as `x-api-key` or `Authorization: Bearer`. Comma-separated to overlap a rotation. **Empty fails closed:** those routes answer `503`. |
+| `AITP_PLAYGROUND_REQUIRE_API_KEY` | `false` | `true` puts every path except `/healthz`, the CP webhook and loopback `/internal/*` behind the key, static listings included. The service refuses to start if this is `true` and `PLAYGROUND_API_KEY` is empty. See [SECURITY.md](../SECURITY.md) |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `10` / `5` | Token bucket on `POST /runs` and `POST /hosted-agents/{id}/invoke`, applied per client IP and per API key |
 | `MAX_RUNS_PER_HOUR` | `30` | Global cap on run creations plus hosted invokes in any rolling hour; the next one gets `429` before any agent starts |
 | `RUN_TOKEN_BUDGET` | `40000` | Output-token budget per run, split across the run's agents and enforced in each agent before every provider call (`429` once spent). A hosted agent gets the whole budget for its lifetime. |
@@ -191,8 +193,10 @@ curl -s -X POST -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:
 
 Only the static routes are public: `/healthz`, `/capabilities`, `/packs`,
 `/scenarios*`, the `/dashboard` HTML shell and the OpenAPI docs. Every other
-route needs `Authorization: Bearer $PLAYGROUND_API_KEY` (`401` without it,
-`503` when the service has no key configured). `POST /webhooks/cp/{run_id}`
+route needs the key, as `x-api-key: $PLAYGROUND_API_KEY` or
+`Authorization: Bearer $PLAYGROUND_API_KEY` (`401` without it, `503` when the
+service has no key configured). With `AITP_PLAYGROUND_REQUIRE_API_KEY=true`
+the static routes need it too; only `/healthz` stays open. `POST /webhooks/cp/{run_id}`
 is verified by the CP's HMAC instead, and `POST /internal/telemetry` by a
 per-process token only the playground's own agents hold. See
 [SECURITY.md](../SECURITY.md).

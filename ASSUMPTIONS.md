@@ -181,3 +181,18 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** leave both without keys of their own.
 - **Blast radius if wrong:** none until a staging service exists; populate `stg` then.
 - **Status:** **DECIDED (Opus, 2026-11-07)**: recorded in DECISIONS.md D-28.
+
+## playground-lockdown-quotas — Bearer kept as a compatibility key header
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 1)
+- **Assumed:** the console (and any script) may still send `Authorization: Bearer <key>`; wave 3 makes `x-api-key` canonical.
+- **Chose:** the gate accepts either header; a valid key in either is enough.
+- **Alternatives:** x-api-key only (breaks today's console calls when the flag flips).
+- **Blast radius if wrong:** none for security (same key, same constant-time match); drop Bearer later in one commit.
+- **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — PLAYGROUND_INTERNAL_URL defaults to http://127.0.0.1:8000
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 1)
+- **Assumed:** the service listens on 8000 in the container (Dockerfile/Railway `PORT`), so agents report telemetry over loopback where the gate exempts `/internal/*`.
+- **Chose:** a separate internal URL instead of `PLAYGROUND_BASE_URL` (public, through the edge proxy, which the gate would reject once locked).
+- **Blast radius if wrong:** telemetry posts fail (fire-and-forget; runs unaffected) and startup warns; set `PLAYGROUND_INTERNAL_URL`.
+- **Status:** UNCONFIRMED
