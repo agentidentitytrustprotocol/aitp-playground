@@ -237,7 +237,7 @@ per-process token only the playground's own agents hold. See
 | `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified, including the signed `X-Aitp-Timestamp`, which must be within 5 minutes; a repeated `deliveryId` is not recorded twice) |
 | `POST /runs/{id}/cancel` | Mark cancelled, then kill agent subprocesses (this order closes the D-16 race: a concurrent dispatch failure that lands after the mark sees `status=cancelled` already, never a stale `running`) |
 | `GET  /agents` | List currently-running agent processes |
-| `GET  /metrics` | Prometheus metrics ([observability.md](observability.md#llm-quota)) |
+| `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |
 | `GET  /dashboard` | Single-page trust console (HTML). The shell is public; its data calls need the key, so it is a local-dev view |
 | `GET  /cp/*` | Read-only Control Plane observability projections ([control-plane.md](control-plane.md)) |
 | `GET  /cp-proxy/*` | Key-gated passthrough to an allowlist of Control Plane reads, for the console ([control-plane.md](control-plane.md#console-passthrough-cp-proxy)) |
