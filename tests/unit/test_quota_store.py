@@ -315,15 +315,18 @@ async def test_pg_charge_after_aclose_denies_without_reopening():
 
 async def test_pg_aclose_during_connect_terminates_the_new_pool():
     f = Factory()
-    gate = asyncio.Event()
+    gate, entered = asyncio.Event(), asyncio.Event()
 
     async def slow(dsn):
+        entered.set()
         await gate.wait()
         return await f(dsn)
 
     store = pg(limits(), factory=slow)
     charge = asyncio.create_task(store.charge(None))
-    await asyncio.sleep(0)
+    # Wait until the connect is really in flight; how many loop turns that
+    # takes differs between Python versions.
+    await asyncio.wait_for(entered.wait(), 5)
     await store.aclose()
     gate.set()
     d = await charge
