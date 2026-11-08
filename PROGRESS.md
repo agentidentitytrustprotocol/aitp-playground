@@ -27,3 +27,8 @@ Risk: P1 complex (prod Doppler write), P2 complex (network script), P3+P4 simple
   - stg: 0 keys. dev_personal: branch config of dev, inherits its 16 keys, no overrides.
   - Railway: no write, no redeploy (latest deployment `4ba5e131-…` unchanged).
   - Files: plans/doppler-and-ci-cost.md, PROGRESS.md. Next: P2.
+- 2026-11-07 P2 DONE — verdict PASS, 2 rounds, Opus verifier (network script on the prod path = complex, gated solo).
+  - Round 1 GAPS: value here-strings could spool to disk on bash <5.1 (medium); untested failure paths (GraphQL errors, service not found, Doppler failure, curl HTTP failure, missing allowlist); partial apply had no summary; Doppler re-read per key; auth header untested; newline values undocumented; help range and derived-from nits.
+  - Round 2 PASS; its two low nits (no summary when the post-apply read or the redeploy fails) closed with explicit `die` messages and a redeploy-failure test.
+  - Files: deploy/doppler-sync.sh, deploy/doppler-keys/playground.txt, tests/unit/test_doppler_sync.py (32 tests, pass under bash 5.3 and /bin/bash 3.2). shellcheck clean. Live dry run: 8 unchanged, ANTHROPIC_API_KEY/ANTHROPIC_MODEL absent, hash 690a601691b49038 match, exit 0. --apply never run (nothing to change).
+  - Next: P3+P4 batched gate (both simple).
