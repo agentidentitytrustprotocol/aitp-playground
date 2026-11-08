@@ -207,6 +207,18 @@ def test_dry_run_unchanged_matches(env: Env) -> None:
     _no_leak(env, p)
 
 
+def test_reads_railway_unrendered(env: Env) -> None:
+    # Without unrendered: true Railway resolves ${{...}} references, so the
+    # railway-reference refusal could never fire.
+    env.setup(list(BASE), dict(BASE), dict(BASE))
+    p = env.run()
+    assert p.returncode == 0, p.stderr
+    reads = env.ops("variables(")
+    assert reads
+    for r in reads:
+        assert "unrendered: true" in json.loads(r["body"])["query"].replace("unrendered:true", "unrendered: true")
+
+
 def test_dry_run_reports_change_without_writing(env: Env) -> None:
     env.setup(list(BASE), dict(BASE), {**BASE, "LLM_PROVIDER": "anthropic"})
     p = env.run()
