@@ -32,3 +32,8 @@ Risk: P1 complex (prod Doppler write), P2 complex (network script), P3+P4 simple
   - Round 2 PASS; its two low nits (no summary when the post-apply read or the redeploy fails) closed with explicit `die` messages and a redeploy-failure test.
   - Files: deploy/doppler-sync.sh, deploy/doppler-keys/playground.txt, tests/unit/test_doppler_sync.py (32 tests, pass under bash 5.3 and /bin/bash 3.2). shellcheck clean. Live dry run: 8 unchanged, ANTHROPIC_API_KEY/ANTHROPIC_MODEL absent, hash 690a601691b49038 match, exit 0. --apply never run (nothing to change).
   - Next: P3+P4 batched gate (both simple).
+- 2026-11-07 P3+P4 DONE — verdict PASS (both), 2 rounds, Opus verifier (simple phases, batched gate, separate verdicts).
+  - Round 1 GAPS: P3 Medium, Doppler offered as a .env alternative though compose needs `env_file: .env`; Low: dev described as all keys, `shasum` not listed, D-28 here-string wording, pbpaste. P4 Low: cancellation evidence misattributed, savings not net of weekly runs (−19% → −17%), "never cancelled"/"every push" wording ignores pending-run replacement, `dependabot` event label, jq -r.
+  - Round 2 PASS; leftover nits (ASSUMPTIONS numbers, README/docker.yml "every push", script header shasum) fixed too.
+  - Files: docs/deployment.md (new), docs/README.md, docs/getting-started.md, README.md, .env.example, DECISIONS.md (D-28, D-29), ASSUMPTIONS.md, .github/workflows/ci.yml, .github/workflows/docker.yml, internal_docs/ci-cost.md (new), internal_docs/testing.md, internal_docs/README.md, deploy/doppler-sync.sh (header comment).
+  - Next: finalization.

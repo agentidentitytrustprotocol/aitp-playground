@@ -39,9 +39,13 @@ on:
     branches: [main]
 
 concurrency:
-  # Cancel superseded runs on the same ref to keep the queue tidy.
-  group: docker-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs to keep the queue tidy. Never cancel on push:
+  # a newer merge must not kill an in-flight image publish or the main e2e.
+  # GitHub keeps one running + one pending run per group, so main runs
+  # serialize, a newer run replaces a pending one, and the newest image is
+  # tagged last (DECISIONS.md D-29).
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGISTRY: ghcr.io
@@ -119,9 +123,12 @@ jobs:
 
   changes:
     name: Detect SDK pin changes
-    # Cheap (~10s) gate for the expensive e2e job below. Runs on every event
-    # so the `e2e` job has a definite input rather than a skipped dependency.
+    # Cheap (~10s) gate for the expensive e2e job below. PR-only: its outputs
+    # are read only by the pull_request branch of e2e's `if:`; on push, e2e
+    # runs unconditionally on main (via `always()`) and needs no filter.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -177,7 +184,7 @@ jobs:
     needs: changes
     # Two triggers, for two different questions:
     #
-    #   * every push to main — the standing regression check.
+    #   * push to main — the standing regression check.
     #   * any PR that moves the SDK pin, or changes the Dockerfiles/compose
     #     file the stack is built from — the cross-implementation check,
     #     BEFORE it merges.
@@ -202,11 +209,10 @@ jobs:
     # flip has not shipped yet, that is the design working — sequence the
     # rollout, do not disable the job.
     #
-    # `always()` so a failure in the cheap `changes` job cannot starve the
-    # push-to-main run. Without it, `needs: changes` silently converts any
-    # transient failure of the filter step into "e2e did not run on main" —
-    # a new way for the standing regression check to go quiet, introduced by
-    # the job that was supposed to make it fire *more* often.
+    # `always()` because `changes` is skipped on push (it is PR-only) and can
+    # fail transiently on a PR. Without it, `needs: changes` would skip e2e on
+    # every push to main, silencing the standing regression check that the
+    # filter was added to make fire *more* often.
     if: >-
       always() && (
         (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -216,6 +222,7 @@ jobs:
         ))
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:

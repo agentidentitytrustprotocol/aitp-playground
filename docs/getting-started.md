@@ -76,7 +76,19 @@ fast iteration on the runner.
 
 ## Configure
 
-Copy `.env.example` → `.env` and edit. The only key the service strictly
+If you have access to the Doppler project `aitp-playground`, use its `dev`
+config instead of a `.env` file. Run `doppler setup -p aitp-playground -c dev`
+once in the repo, then start things under `doppler run --`, for example
+`doppler run -- uv run uvicorn aitp_playground.main:app --reload --port 8000`.
+That puts every variable in the real process environment, so agent
+subprocesses see the LLM keys too (see the note below). The hosted
+deployment's values live in the `prd` config; [deployment.md](deployment.md)
+covers how they reach Railway. `dev` holds a subset of `.env.example`'s keys and
+no `PLAYGROUND_API_KEY`, so set that one yourself (with `doppler run`, export it or
+add a personal override in `dev_personal`). Doppler covers native runs only: docker
+compose reads `.env` (`env_file: .env`), so a compose run still needs the file.
+
+Without Doppler, copy `.env.example` → `.env` and edit. The only key the service strictly
 needs for real LLM output is `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY` if
 you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 
@@ -279,7 +291,7 @@ uv run ruff check src agents tests     # what CI runs
 
 How CI maps onto these (`.github/workflows/`):
 
-- **`ci.yml`** — on every PR/push: a ruff lint job; the unit + scenario
+- **`ci.yml`** — on every PR to `main` (plus a weekly scheduled run; not on push, because strict branch protection means a PR run already tested the merged tree): a ruff lint job; the unit + scenario
   suites with two separate coverage gates (`src/*` ≥88%, `agents/base/*`
   ≥54% — kept separate so a regression in one can't hide behind the
   other's floor) on a Python 3.11/3.13 matrix, run against

@@ -145,7 +145,7 @@ visible when needed. Images use Python 3.13 (the full e2e stack also
 uses Node 24 and Postgres 18) — see [docs/docker.md](docs/docker.md).
 
 ```bash
-cp .env.example .env
+cp .env.example .env                  # compose reads .env (Doppler covers native runs)
 $EDITOR .env                          # set OPENAI_API_KEY=sk-... (optional for stub runs)
 
 # Just run the service:
@@ -165,12 +165,13 @@ PyPI wheel takes a minute or two. The e2e stack
 also builds the Control Plane image from the sibling `aitp-cp` /
 `aitp-rs` checkouts.
 
-A prebuilt image is published on every push to `main`:
+A prebuilt image is published on push to `main`:
 `ghcr.io/agentidentitytrustprotocol/aitp-playground:latest`. It is built
 with the `all-agents` LLM extras baked in, so the deployed container
 calls a real provider whenever `LLM_PROVIDER` and the matching
 `*_API_KEY` are set at runtime (and falls back to deterministic stubs
-otherwise).
+otherwise). The hosted service's variables come from Doppler; see
+[docs/deployment.md](docs/deployment.md).
 
 ### Native (Python only — the SDK comes from PyPI)
 
@@ -262,7 +263,7 @@ AITP_LLM_E2E=1 uv run pytest tests/integration/test_llm_e2e.py -v
 uv run ruff check src agents tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs ruff lint, the unit + scenario
+CI (`.github/workflows/ci.yml`, on PRs and weekly) runs ruff lint, the unit + scenario
 suites with a coverage floor on Python 3.11 and 3.13 (installing
 `aitp-sdk` from PyPI via `uv sync --locked`, so the SDK-dependent tests
 run too), and the `AITP_E2E=1` subprocess integration suite.

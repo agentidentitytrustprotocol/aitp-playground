@@ -1,14 +1,22 @@
 name: CI
 
+# No `push: main` trigger (DECISIONS.md D-29). Branch protection is strict, so
+# the tree a PR run tests is the tree that merges; a push run re-tested it.
+# The weekly schedule keeps the two signals a push run gave beyond PRs: a
+# direct admin push, and upstream drift of aitp-verifier-py that the JCS
+# drift guard below clones at HEAD.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR runs are cancelled. Other runs are never cancelled once running;
+  # a newer run still replaces a pending one in the same group.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # WARNING: every job `name:` in this file (and docker.yml's `e2e` job) is a
@@ -21,6 +29,7 @@ jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -37,6 +46,7 @@ jobs:
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     strategy:
@@ -105,6 +115,7 @@ jobs:
     # Not a required check yet (D-13): it compiles aitp-sdk from source.
     name: Tests (experimental SDK)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -148,6 +159,7 @@ jobs:
   integration:
     name: Integration (agent subprocess e2e)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

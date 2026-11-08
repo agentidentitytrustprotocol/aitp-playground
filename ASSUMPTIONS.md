@@ -166,3 +166,18 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Alternatives:** ship the default wheel and let the two scenarios refuse cleanly (safe after Phases 1–3, but removes two public demos).
 - **Blast radius if wrong:** minutes added per image build; reversible with one build argument.
 - **Status:** **CONFIRMED (2026-10-30)**: see DECISIONS.md D-26. Applied in Phase 4 with the aitp-sdk 0.24.0 bump.
+
+## doppler-and-ci-cost — CI on main: no push run, no cancelling
+- **Plan:** plans/doppler-and-ci-cost.md (Phase 4)
+- **Assumed:** nothing consumes `ci.yml` results on `main` (grep found no badge, no `workflow_run` consumer; Railway deploys the GHCR image), and serialized, non-cancelling runs on `main` are preferable to a newer merge cancelling an in-flight publish.
+- **Chose:** `ci.yml` on PR + weekly schedule + dispatch; concurrency cancels PR runs only, in both `ci.yml` and `docker.yml`.
+- **Alternatives:** keep push CI (≈178 min/30 d more, net of the weekly runs); keep `cancel-in-progress: true` on main (cheaper by a few minutes, but can cancel a publish).
+- **Blast radius if wrong:** a regression from a direct admin push is caught up to a week late, or in a burst of merges a middle commit's pending image build is replaced; both reversible by restoring two lines.
+- **Status:** **DECIDED (Opus, 2026-11-07)**: reversible in one commit; recorded in DECISIONS.md D-29.
+
+## doppler-and-ci-cost — Doppler stg and dev_personal left empty
+- **Plan:** plans/doppler-and-ci-cost.md (Phase 1)
+- **Assumed:** there is no Railway staging environment, so Doppler `stg` has nothing to mirror; `dev_personal` inherits `dev`.
+- **Chose:** leave both without keys of their own.
+- **Blast radius if wrong:** none until a staging service exists; populate `stg` then.
+- **Status:** **DECIDED (Opus, 2026-11-07)**: recorded in DECISIONS.md D-28.

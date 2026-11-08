@@ -27,7 +27,7 @@
 # redeploy happens only when at least one value changed and the post-apply
 # hash matches.
 #
-# Needs git, jq, curl and the doppler CLI logged in, plus a Railway token: the
+# Needs git, jq, curl, shasum and the doppler CLI logged in, plus a Railway token: the
 # railway CLI login (~/.railway/config.json) or RAILWAY_API_TOKEN (an account
 # or workspace token; a project token cannot use these GraphQL calls).
 # --apply refuses to run on a dirty tree, so the allowlist it applies is the
