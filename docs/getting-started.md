@@ -115,6 +115,8 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `PLAYGROUND_INTERNAL_URL` | `http://127.0.0.1:8000` | Where this service's own agents reach it (telemetry, LLM quota). Must be loopback: `/internal/*` only trusts direct loopback peers |
 | `CP_BASE_URL` | _(empty)_ | Optional Control Plane base URL ([control-plane.md](control-plane.md)) |
 | `CP_API_KEY` | _(empty)_ | Optional CP bearer |
+| `CP_READ_API_KEY` | _(empty)_ | Optional CP bearer used only by `GET /cp-proxy/*` (a read-only CP key). Falls back to `CP_API_KEY` |
+| `CP_PROXY_TIMEOUT_SECONDS` | `10` | Per-request timeout for `GET /cp-proxy/*` (connect and each read; the event stream has no read timeout) |
 | `CP_TIMEOUT_MS` | `5000` | Per-request timeout for CP calls |
 | `CP_WEBHOOK_TEARDOWN_GRACE_SECS` | `120` | How long after a run ends (and its events are ingested) its CP webhook subscription is deleted |
 | `REVOCATION_FAIL_MODE` | `fail_closed` | Axis B: what to do about the *absence* of a fresh verified list. With `CP_BASE_URL` set, each agent verifies its own signed list against its own AID. `fail_closed` refuses capability calls while degraded (the spec's own default); `soft_fail` serves on the last verified deny-set. Never governs authenticity — an unverifiable list is discarded either way. |

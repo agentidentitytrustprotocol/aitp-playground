@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     insecure_localhost_dangerous: bool = False
     cp_base_url: str = ""
     cp_api_key: str = ""
+    # GET /cp-proxy/* (api/cp_proxy.py): the CP key used upstream (falls back
+    # to cp_api_key) and the per-request timeout.
+    cp_read_api_key: str = ""
+    cp_proxy_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     # ── Axis B: what to do about the ABSENCE of a fresh snapshot ─────────
     #
     # Kept strictly separate from Axis A (an unverifiable snapshot is always

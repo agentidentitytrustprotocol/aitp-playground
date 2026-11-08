@@ -222,7 +222,7 @@ aitp-playground/
 ├── docs/                  # reader-facing docs (published to the docs site)
 ├── internal_docs/         # contributor & build docs (not published)
 ├── src/aitp_playground/   # FastAPI service — no AITP protocol logic here
-│   ├── api/               # routes: /runs /scenarios /agents /hosted-agents /packs /capabilities /metrics /dashboard /cp/* /webhooks /healthz /internal/telemetry
+│   ├── api/               # routes: /runs /scenarios /agents /hosted-agents /packs /capabilities /metrics /dashboard /cp/* /cp-proxy/* /webhooks /healthz /internal/telemetry
 │   ├── registry/          # YAML pack loader + index + templates
 │   ├── runner/            # scenario engine + run store (+ optional SQLite) + SSE
 │   ├── hosting/           # subprocess spawn, identity, port alloc, adapters

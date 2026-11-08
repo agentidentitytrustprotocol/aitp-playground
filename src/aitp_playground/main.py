@@ -17,6 +17,7 @@ from .api import metrics as metrics_api
 from .api import registry as registry_api
 from .api import runs as runs_api
 from .api import quota as quota_api
+from .api import cp_proxy as cp_proxy_api
 from .api import telemetry as telemetry_api
 from .api import webhooks as webhooks_api
 from .config import Settings, get_settings
@@ -123,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     quota_store = select_store(settings)
+    cp_proxy = cp_proxy_api.CpProxy(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -136,6 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         sweep.cancel()
         await quota_store.aclose()
+        await cp_proxy.aclose()
         # Best-effort cleanup of any agent processes still alive
         for run_id in list(run_store.list_ids()):
             supervisor.kill_run(run_id)
@@ -152,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.spend_limits = SpendLimits(settings)
     app.state.run_limiter = RunLimiter.from_settings(settings)
     app.state.quota_store = quota_store
+    app.state.cp_proxy = cp_proxy
     app.state.telemetry_token = telemetry_token
 
     install_handlers(app)
@@ -169,6 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(metrics_api.router)
     app.include_router(webhooks_api.router)
     app.include_router(cp_api.router)
+    app.include_router(cp_proxy_api.router)
     app.include_router(dashboard_api.router)
 
     return app
