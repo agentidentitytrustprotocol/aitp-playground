@@ -387,6 +387,51 @@ shape (rejection codes, grant intersection, redeemed AID, etc.).
 If you add a new scenario that needs richer assertions than the LLM
 e2e provides, this is the place.
 
+## Railway E2E through the console
+
+`scripts/console_e2e.py` tests the deployed stack the way a visitor reaches
+it: through the public console's `/api/playground/*` proxy, not the
+playground directly. It sends an `Origin` header on every mutation (the
+console's edge refuses a mutation without one), signs in with `POST /login`
+and the `__Host-aitp-console-session` cookie, reads the run's SSE stream to
+`stream.end`, and then reads `GET /runs/{id}`. Its logic is unit-tested
+without the network in `tests/unit/test_console_e2e_tool.py`.
+
+```bash
+uv run python scripts/console_e2e.py lockdown                 # read-only, keyless
+uv run python scripts/console_e2e.py list                     # live refs, inputs, designed outcome; no launches
+uv run python scripts/console_e2e.py matrix --auth anon       # every ref, paced; costs LLM money
+uv run python scripts/console_e2e.py matrix --auth signed-in
+uv run python scripts/console_e2e.py ratelimit [--expect-layer console]
+uv run python scripts/console_e2e.py quota                    # with LLM_QUOTA_PER_IP_PER_DAY lowered
+uv run python scripts/console_e2e.py <mode> --help
+```
+
+| Mode | What it asserts |
+| --- | --- |
+| `lockdown` | Keyless playground `GET /runs`, `/scenarios`, `/metrics` and `POST /runs` → 401; `/healthz` → 200. Keyless CP `/api/events/history` and `/api/metrics` → 401/403. `/api/registry/agents` is public by design (control-plane `src/proxy.ts` `PUBLIC_PATHS`), so it is reported, not asserted. The console reports `signedIn:false`, and its admin `/api/playground/metrics` is refused (403 in public mode, 401 otherwise). |
+| `list` | The live scenario list is non-empty. For each ref, it prints the inputs and the designed outcome that `matrix` would use. |
+| `matrix` | For each live ref: launch with `202`, then a terminal status the pack is designed to end in, `llm.started` and `llm.complete` when the pack has an LLM capability step that should succeed, no `llm.quota_exceeded`, `llm_quota_exceeded` false, and `llm_calls_on_mock == 0`. Signed-in mode also checks admin `/api/playground/metrics` = 200 (anonymous = 403). |
+| `ratelimit` | Sequential cheap launches (`spki-pinning`, at most 2 running) until a 429. The 429 has `Retry-After`, and the tool names the layer that refused it (see below). |
+| `quota` | One `research-and-write` run that still ends `success`, with `llm_quota_exceeded: true`, `llm_calls_on_mock > 0`, and exactly one `llm.quota_exceeded` event carrying `resets_at`. The console's run JSON carries those fields too. They are what the "LLM quota reached" badge keys on (console `lib/llm-quota.ts` `runLlmQuota`). The badge text is recorded in the evidence. |
+
+**How the tool behaves**
+
+- **URLs.** They come from `--console-url`/`CONSOLE_URL`, `--playground-url`/`PLAYGROUND_URL` and `--cp-url`/`CP_URL`. The defaults are the production hosts. `--cp-url ''` skips the CP probes.
+- **Pacing.** `--pace` defaults to 135 s between launches. That stays inside the console's launch bucket and the playground's per-IP window (both 5 per 600 s) and the global cap of 30 per hour. A 429 during `matrix` sleeps for `Retry-After` and retries the same ref once. A `Retry-After` longer than `--max-wait` (900 s) fails that ref.
+- **SSE cut.** The console's SSE route ends at Vercel's `maxDuration` (300 s). When the stream stops before `stream.end`, the tool polls `/runs/{id}/status` until the status is terminal. Either way, `GET /runs/{id}` is the authoritative record, and its full event list is what gets asserted.
+- **Inputs.** Each ref's inputs come from the input schema in its pack: every property's default, plus filler for a required property that has none. For example, `distributed-review` gets `document`. `--inputs '{…}'` merges over them.
+- **Designed outcome.** No pack declares one, and every pack is designed to end `success`, because fault and rejection steps record their result instead of failing the run. A pack the installed SDK can't run (`sdk_available: false`) is expected to fail. `DESIGNED_OUTCOMES` in the script is the explicit allowlist of exceptions. Today it has one entry: `fault-injection` runs no successful LLM call. `--expect REF=status` overrides the outcome for a single run.
+- **429 layers.** `CONSOLE_RATE_LIMITED` comes from the console (launch, read or stream-gate bucket). `run_rate_limited` is the playground's per-IP window. `max_concurrent_runs` is the playground's concurrency cap. `hourly run limit reached` is the playground's global hourly cap. `rate limit exceeded` is the playground's token bucket.
+- **Password.** Signed-in mode reads `CONSOLE_PASSWORD` from the environment. If that is unset, it runs `doppler secrets get CONSOLE_PASSWORD --project aitp-ui-console --config prd --plain`. The value stays in memory, is never printed, and the tool refuses to start (exit 2) before any launch if it is missing or sign-in fails.
+- **Evidence.** JSONL goes to `--out`, by default `$TMPDIR/aitp-console-e2e/<mode>-<utc>.jsonl`. A path inside the repo is refused. Every record is scrubbed: `sk-…` keys, `Bearer` tokens, the password, the session cookie, and any value under a password, cookie or authorization key.
+- **Exit status.** 0 means every assertion held, 1 means one failed, and 2 means a setup error.
+
+A full Railway pass (the operator steps, the temporary quota raise and its
+restore) is plan `wave4-latest-local-railway` P6. `matrix` costs real LLM
+money and uses the per-IP rate-limit budget. `lockdown` and `list` cost
+nothing.
+
 ## Which suite for which change
 
 | You changed… | Run |
