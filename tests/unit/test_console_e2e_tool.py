@@ -674,3 +674,16 @@ def test_help_documents_every_mode(capsys):
     out = capsys.readouterr().out
     for mode in ("lockdown", "list", "matrix", "ratelimit", "quota"):
         assert mode in out
+
+
+def test_interrupt_mid_run_still_writes_end_and_reraises(tmp_path):
+    def handler(request):
+        raise KeyboardInterrupt
+
+    out = tmp_path / "ev.jsonl"
+    with pytest.raises(KeyboardInterrupt):
+        ce.main(["list", "--out", str(out), "--console-url", CONSOLE],
+                transport=httpx.MockTransport(handler), sleep=lambda s: None,
+                password_reader=lambda: PASSWORD)
+    recs = [json.loads(line) for line in out.read_text().splitlines()]
+    assert recs[-1]["kind"] == "end" and recs[-1]["aborted"] == "KeyboardInterrupt"

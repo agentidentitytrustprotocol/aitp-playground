@@ -1169,13 +1169,18 @@ def main(argv: Optional[list[str]] = None, *,
         # Outside matrix's per-ref handling (ratelimit, quota, sign-in):
         # a failed assertion, not a traceback.
         ev.check("no unexpected transport/HTTP error", False, reason=_err(exc))
+    except BaseException as exc:
+        # Ctrl-C mid-matrix or an unexpected bug: still close the evidence file, then re-raise.
+        if ev is not None:
+            _end(ev, out, aborted=type(exc).__name__)
+        raise
     assert ev is not None
     _end(ev, out)
     return 1 if ev.failures else 0
 
 
 def _end(ev: Evidence, out: Optional[Path], **extra: Any) -> None:
-    """The closing ``end`` record, written on every exit path."""
+    """The closing ``end`` record, written on every exit path once the evidence file exists."""
     n_assert = sum(1 for r in ev.records if r["kind"] == "assert")
     ev.record("end", assertions=n_assert, failures=len(ev.failures), **extra)
     print(f"{n_assert - len(ev.failures)}/{n_assert} assertions passed; evidence: {out}")
