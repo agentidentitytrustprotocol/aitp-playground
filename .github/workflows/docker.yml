@@ -31,10 +31,14 @@ name: Docker
 #     in only a darwin-arm64 .node. That is why the e2e job keeps the
 #     checkout even though the playground image stopped needing it.
 
+# No `v*` tag trigger: a release does not rebuild. release.yml retags the
+# main-built `sha-<short>` image to X.Y.Z / X.Y / latest, so the release digest
+# is the digest built here. The e2e job builds its own stack from the same
+# commit and Dockerfile; the release gate requires both jobs to succeed on
+# that commit (DECISIONS.md D-33).
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -68,7 +72,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        # Only push on main + tags. PRs build to validate the Dockerfile but
+        # Only push on main. PRs build to validate the Dockerfile but
         # skip auth + push.
         if: github.event_name != 'pull_request'
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -82,15 +86,16 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # main pushes publish `main` and `sha-<short>` only. `latest` means
+          # "the latest release" and moves only through release.yml, so an
+          # incidental Railway redeploy (a Doppler sync, a restart) can never
+          # ship unreleased code (DECISIONS.md D-33).
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=sha,prefix=sha-,format=short
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build (and push on main / tags)
+      - name: Build (and push on main)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           # Context is the workspace root — the layout the Dockerfile was
@@ -107,10 +112,14 @@ jobs:
           # the experimental features, which the PyPI wheels lack from 0.24,
           # so the hosted tct-renewal and session-bundle demos keep working
           # (D-26). The Dockerfile fails the build if the wheel lacks them.
+          # GIT_SHA becomes AITP_PLAYGROUND_REVISION, reported by /healthz;
+          # release.yml compares it after a deploy when Railway does not
+          # report the image digest.
           build-args: |
             INSTALL_EXTRAS=all-agents
             AITP_SDK_SOURCE=pypi-src
             AITP_SDK_FEATURES=experimental
+            GIT_SHA=${{ github.sha }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -257,18 +266,14 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Materialize .env for compose
-        # docker-compose.test.yml reads aitp-playground/.env for OPENAI_API_KEY
-        # and a couple of provider knobs. Without the key the LLM tests
-        # self-skip (see tests/integration/test_llm_e2e.py:95); the protocol
-        # e2e tests run either way.
+        # docker-compose.test.yml reads aitp-playground/.env. CI never spends
+        # money on an LLM: .env is .env.example as is, with no provider key,
+        # so the agents run their deterministic stubs, test_llm_e2e.py skips
+        # (tests/integration/conftest.py) and the protocol e2e tests run.
+        # Never inject a provider key here; live runs are local only
+        # (scripts/live-integration.sh, which refuses under CI).
         working-directory: aitp-playground
-        run: |
-          cp .env.example .env
-          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
-            printf '\nOPENAI_API_KEY=%s\n' '${{ secrets.OPENAI_API_KEY }}' >> .env
-          else
-            echo "::warning::OPENAI_API_KEY secret not set — LLM e2e assertions will be skipped (protocol e2e still runs)."
-          fi
+        run: cp .env.example .env
 
       - name: Bring up the stack and run tests
         working-directory: aitp-playground

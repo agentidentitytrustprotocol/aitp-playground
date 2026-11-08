@@ -165,8 +165,12 @@ PyPI wheel takes a minute or two. The e2e stack
 also builds the Control Plane image from the sibling `aitp-cp` /
 `aitp-rs` checkouts.
 
-A prebuilt image is published on push to `main`:
-`ghcr.io/agentidentitytrustprotocol/aitp-playground:latest`. It is built
+Every push to `main` publishes a prebuilt image tagged `main` and
+`sha-<short>`. A release promotes one of those images, without rebuilding
+it, to `X.Y.Z`, `X.Y` and `latest`, so
+`ghcr.io/agentidentitytrustprotocol/aitp-playground:latest` is the latest
+release and is what the hosted service runs (how to release and roll back:
+[docs/deployment.md](docs/deployment.md#releasing)). The image is built
 with the `all-agents` LLM extras baked in, so the deployed container
 calls a real provider whenever `LLM_PROVIDER` and the matching
 `*_API_KEY` are set at runtime (and falls back to deterministic stubs

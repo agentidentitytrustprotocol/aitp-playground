@@ -1,6 +1,8 @@
 """Healthcheck + SDK capability endpoints."""
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter
 
 from ..capabilities import get_capabilities
@@ -10,7 +12,14 @@ router = APIRouter(tags=["health"])
 
 @router.get("/healthz")
 def healthz() -> dict:
-    return {"status": "ok"}
+    """Liveness plus the git commit the image was built from.
+
+    ``AITP_PLAYGROUND_REVISION`` is baked in by the Dockerfile from the
+    ``GIT_SHA`` build-arg. A release retags the main-built image without
+    rebuilding it, so this equals the release commit; release.yml falls back
+    to it when Railway does not report the running image digest (D-33).
+    """
+    return {"status": "ok", "revision": os.environ.get("AITP_PLAYGROUND_REVISION") or "unknown"}
 
 
 @router.get("/capabilities")

@@ -1,0 +1,202 @@
+name: Release
+
+# A release PROMOTES the image main already built and e2e-tested; it never rebuilds
+# (DECISIONS.md D-33). It retags ghcr.io/…/aitp-playground:sha-<short> to X.Y.Z, X.Y and latest
+# (same digest), tags the commit and publishes a GitHub release, redeploys the Railway service
+# from source, and verifies that what runs is that digest. Afterwards
+#
+#     running on Railway == :latest == the GitHub release marked Latest
+#
+# holds by construction; scripts/release/check-latest.sh checks it at any time.
+#
+# Two ways in, both doing the same promotion:
+#   * workflow_dispatch with `version` (X.Y.Z): releases main HEAD. The tag is created here with
+#     GITHUB_TOKEN, which does not trigger workflows, so nothing runs twice.
+#   * a human pushing a tag vX.Y.Z on a main commit: releases that commit (the tag already exists;
+#     the GitHub release is created if it is missing).
+# Rollback: workflow_dispatch with `rollback_to` (X.Y.Z of an existing release) re-points latest
+# at that release's digest, redeploys, verifies, then marks that GitHub release Latest.
+#
+# Credentials: Environment `production` (deployment policy: branch main, tags v*; no required
+# reviewers, the dispatch or tag push is the deliberate act) holds RAILWAY_PLAYGROUND_TOKEN, a
+# Railway project token scoped to aitp-runner/production. Repo variables hold the ids. Provision
+# or rotate them with scripts/release/setup-release-credentials.sh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version X.Y.Z (no leading v); releases main HEAD. Leave empty for a rollback."
+        required: false
+        type: string
+      rollback_to:
+        description: "Rollback: X.Y.Z of an existing release to point latest at. Leave empty for a release."
+        required: false
+        type: string
+  push:
+    tags: ["v*"]
+
+# Serialise releases and never cancel one half-way (a retag without its redeploy leaves
+# :latest ahead of what runs; a rerun is idempotent and finishes the job).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/agentidentitytrustprotocol/aitp-playground
+
+jobs:
+  release:
+    name: Promote, redeploy, verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: production
+    permissions:
+      contents: write # create the tag and the GitHub release, mark a release Latest
+      packages: write # retag in GHCR
+      checks: read # read the docker.yml check runs on the commit
+    steps:
+      - name: Checkout (full history and tags)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve what to release
+        id: what
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_ROLLBACK: ${{ inputs.rollback_to }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            mode=release; event=tag; version="${REF_NAME#v}"
+          elif [ -n "$IN_VERSION" ] && [ -z "$IN_ROLLBACK" ]; then
+            mode=release; event=dispatch; version="$IN_VERSION"
+          elif [ -z "$IN_VERSION" ] && [ -n "$IN_ROLLBACK" ]; then
+            mode=rollback; event=dispatch; version="$IN_ROLLBACK"
+          else
+            echo "::error::set exactly one of the inputs 'version' and 'rollback_to'"
+            exit 1
+          fi
+          {
+            echo "mode=$mode"
+            echo "event=$event"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Every refusal happens here, before anything is retagged or deployed.
+      - name: Preflight (gate)
+        id: pre
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ steps.what.outputs.mode }}
+          RELEASE_EVENT: ${{ steps.what.outputs.event }}
+          VERSION: ${{ steps.what.outputs.version }}
+          # Rollback resolves the commit from the tag; a release takes the commit this run is for.
+          COMMIT: ${{ steps.what.outputs.mode == 'release' && github.sha || '' }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_PLAYGROUND_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+        run: scripts/release/preflight.sh
+
+      - name: Promote (retag, no rebuild)
+        env:
+          MODE: ${{ steps.pre.outputs.mode }}
+          VERSION: ${{ steps.pre.outputs.version }}
+          MINOR: ${{ steps.pre.outputs.minor }}
+          SOURCE_REF: ${{ steps.pre.outputs.source_ref }}
+          SOURCE_DIGEST: ${{ steps.pre.outputs.source_digest }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = release ]; then
+            targets=("$IMAGE:$VERSION" "$IMAGE:$MINOR" "$IMAGE:latest")
+          else
+            targets=("$IMAGE:latest")
+          fi
+          args=()
+          for t in "${targets[@]}"; do args+=(-t "$t"); done
+          # The source is pinned by digest: exactly the image the gate approved.
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$SOURCE_DIGEST"
+          for t in "$SOURCE_REF" "${targets[@]}"; do
+            got="$(docker buildx imagetools inspect "$t" --format '{{json .Manifest}}' | jq -r .digest)"
+            echo "$t -> $got"
+            if [ "$got" != "$SOURCE_DIGEST" ]; then
+              echo "::error::$t is $got, expected $SOURCE_DIGEST"
+              exit 1
+            fi
+          done
+          {
+            echo "### Promoted \`$SOURCE_REF\`"
+            echo ""
+            echo "Digest \`$SOURCE_DIGEST\` is now tagged:"
+            for t in "${targets[@]}"; do echo "- \`$t\`"; done
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Tag and GitHub release
+        if: steps.pre.outputs.mode == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pre.outputs.tag }}
+          COMMIT: ${{ steps.pre.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub release $TAG already exists (resumed run)"
+          elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --latest
+          else
+            gh release create "$TAG" --target "$COMMIT" --title "$TAG" --generate-notes --latest
+          fi
+
+      - name: Redeploy Railway from source
+        id: deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_PLAYGROUND_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          prev="$(scripts/release/check-latest.sh --print-deployment-id)"
+          echo "prev_deployment=$prev" >>"$GITHUB_OUTPUT"
+          echo "previous deployment: $prev"
+          # --from-source re-resolves the image tag (:latest); a plain redeploy may reuse the
+          # previous deployment's digest.
+          npx -y @railway/cli@5.70.0 redeploy --from-source --yes \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --service "$RAILWAY_SERVICE_ID"
+
+      - name: Verify running == latest == release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_PLAYGROUND_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+          TAG: ${{ steps.pre.outputs.tag }}
+          PREV: ${{ steps.deploy.outputs.prev_deployment }}
+        run: scripts/release/check-latest.sh --release-tag "$TAG" --wait-new-deploy "$PREV" --timeout 900
+
+      - name: Mark the rollback target Latest
+        if: steps.pre.outputs.mode == 'rollback'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pre.outputs.tag }}
+        run: gh release edit "$TAG" --latest

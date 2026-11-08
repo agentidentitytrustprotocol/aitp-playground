@@ -10,7 +10,7 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
-from llm import MOCK_NOTE, call_llm_or_502, llm_permit
+from llm import MOCK_NOTE, call_llm_or_502, llm_meta, llm_permit
 from telemetry import emit_event
 
 from .crew import (  # type: ignore[import-not-found]
@@ -82,6 +82,7 @@ async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, 
     crew = build_crew({"topic": topic}, use_llm=use_llm)
     # CrewAI ≥1.0 refuses sync kickoff() inside a running event loop. Use the
     # async variant when available; the offline stub only has the sync one.
+    real_call = use_llm and hasattr(crew, "kickoff_async")
     if hasattr(crew, "kickoff_async"):
         result = await call_llm_or_502(
             crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
@@ -90,7 +91,10 @@ async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, 
     else:
         result = crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
-    await emit_event("llm.complete", bootstrap, task="research", topic=topic, notes=notes)
+    await emit_event(
+        "llm.complete", bootstrap, task="research", topic=topic, notes=notes,
+        **llm_meta("research.query", real_call),
+    )
     return {"findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}
 
 
@@ -108,6 +112,7 @@ async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[
     # A refused permit builds the stub crew (no kickoff_async), so the
     # branch below never reaches call_llm_or_502.
     crew = build_crew({"topic": topic, "depth": "deep"}, use_llm=use_llm)
+    real_call = use_llm and hasattr(crew, "kickoff_async")
     if hasattr(crew, "kickoff_async"):
         result = await call_llm_or_502(
             crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
@@ -116,7 +121,10 @@ async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[
     else:
         result = crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
-    await emit_event("llm.complete", bootstrap, task="research.deep", topic=topic, notes=notes)
+    await emit_event(
+        "llm.complete", bootstrap, task="research.deep", topic=topic, notes=notes,
+        **llm_meta("research.deep", real_call),
+    )
     return {"deep_findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}
 
 

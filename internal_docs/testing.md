@@ -60,8 +60,11 @@ tests/
 │   ├── test_trust_orchestrator.py # TrustOrchestrator.resolve_peers branching
 │   └── test_trust_resolver.py     # static / did:web / cp_registry
 ├── integration/
+│   ├── conftest.py                # live_llm gating: never under CI, selected provider's key, AITP_LIVE_LLM=1
 │   ├── test_federated_handshake.py # spawn-and-handshake did:web path (AITP_E2E=1)
+│   ├── test_live_quota_e2e.py     # per-IP LLM quota vs a real provider (live_llm, live script only)
 │   ├── test_llm_e2e.py            # real LLM calls under AITP trust (AITP_LLM_E2E=1)
+│   ├── test_lockdown_socket_e2e.py # REQUIRE_API_KEY=true over a real socket (free, no gate)
 │   ├── test_protocol_e2e.py       # protocol scenarios + CP, no LLM (AITP_PROTOCOL_E2E=1)
 │   └── test_runner.py             # spawns real agent subprocesses (AITP_E2E=1)
 └── scenarios/
@@ -200,7 +203,39 @@ pinning, OIDC identity, and the CP-backed steps. Reads `PLAYGROUND_URL`,
 the service URLs are pre-wired — the compose `tests` service runs this file
 alongside `test_llm_e2e.py`.
 
-### `test_llm_e2e.py` — `AITP_LLM_E2E=1` + `OPENAI_API_KEY`
+### `test_lockdown_socket_e2e.py` — no gate, free
+
+The backend lockdown (`AITP_PLAYGROUND_REQUIRE_API_KEY=true`) over a real
+uvicorn socket: keyless `/runs` and `/scenarios` are 401 with
+`WWW-Authenticate`, `/healthz` is 200, a keyed request is 200,
+`X-AITP-Client-IP` is honoured only with a valid key (observed through the
+per-IP token bucket), and `uvicorn aitp_playground.main:app` refuses to start
+without `PLAYGROUND_API_KEY`. No agent is spawned and no LLM is called. CI runs
+it in the integration job next to the `AITP_E2E` tests.
+
+### Live-LLM tests: the `live_llm` marker
+
+A test that spends money on a real provider carries `@pytest.mark.live_llm`.
+`tests/integration/conftest.py` skips it when `CI` is set, when the key for
+the provider `LLM_PROVIDER` selects (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`)
+is missing, and, unless the test opts out with `live_llm(live_flag=False)`,
+when `AITP_LIVE_LLM` is not `1`. Only `docker-compose.live.yml` sets
+`AITP_LIVE_LLM=1`. `test_llm_e2e.py` opts out of that flag and keeps its own
+`AITP_LLM_E2E=1` gate.
+
+### `test_live_quota_e2e.py` — `live_llm` (live stack only)
+
+The per-IP LLM quota against the real provider. One `research-and-write` run
+from one subject IP (a keyed request with `X-AITP-Client-IP`) under
+`LLM_QUOTA_PER_IP_PER_DAY=4`: the researcher's 4 units are allowed (real
+calls), the writer's 1 more is refused (its stub runs), and the run succeeds
+with `llm_quota_exceeded`, `llm_quota.quota == "per_ip_daily"`,
+`llm_calls_on_mock == 1` and one `llm.quota_exceeded` event. It runs first in
+the live suite, so the global counter is unspent and cannot be the one that
+refused. A provider 429/5xx fails the test as `FLAKY (provider …)` without a
+retry.
+
+### `test_llm_e2e.py` — `AITP_LLM_E2E=1` + the selected provider's key
 
 The full integration test: real CrewAI / LangChain / LangGraph
 calling OpenAI under real AITP identity and trust, across all three
@@ -291,17 +326,54 @@ instead, add `--build-arg AITP_SDK_SOURCE=path` (or set it in the compose
 `args:` block):
 
 ```bash
-cp .env.example .env && $EDITOR .env    # set OPENAI_API_KEY
+cp .env.example .env
 docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 ```
+
+The stack builds the control plane from `${AITP_CP_DIR:-../aitp-cp}` (a
+named build context, `cpsrc`; Compose >= 2.17). CI checks the CP out as
+`../aitp-cp`. In a workspace that has `../aitp-control-plane` instead, export
+`AITP_CP_DIR=../aitp-control-plane` (the live script does it for you).
 
 `PLAYGROUND_URL` inside the compose stack is set to
 `http://playground:8000` (compose DNS), and `AITP_LLM_E2E=1` is in
 the tests container's environment.
 
-To run against Anthropic instead, set `LLM_PROVIDER=anthropic` and
-provide `ANTHROPIC_API_KEY`. The model can be overridden with
-`ANTHROPIC_MODEL` (default `claude-sonnet-4-6`).
+**CI never spends money on an LLM.** The e2e job's `.env` is `.env.example`
+as is, with no provider key, so the agents run their stubs and
+`test_llm_e2e.py` skips. No workflow references a provider-key secret.
+
+### Live run against a real LLM — `scripts/live-integration.sh` (local only)
+
+```bash
+scripts/live-integration.sh                         # OpenAI, gpt-4o-mini
+LIVE_PROVIDER=anthropic scripts/live-integration.sh # Anthropic, claude-haiku-4-5
+```
+
+It refuses under `CI`, without Docker or Compose >= 2.17, when `.env` is not
+gitignored, or when `.env` has no key for the selected provider (checked by
+name; the script never reads or prints a value). It finds the CP checkout
+(`AITP_CP_DIR`, else `../aitp-cp`, else `../aitp-control-plane`) and
+`../aitp-rs`, then runs `docker-compose.test.yml` + `docker-compose.live.yml`
+under a per-run project `aitp-live-<epoch>-<pid>`. The `tests` container runs
+`test_live_quota_e2e.py`, then `test_llm_e2e.py`, then
+`test_protocol_e2e.py`. On exit, including Ctrl-C and failures, the project is
+torn down (`down -v --remove-orphans`). The log goes to
+`$LIVE_LOG_DIR` (default `$TMPDIR`) as `aitp-live-….log`, with `sk-…` and
+`Bearer …` scrubbed; the script fails if a raw key pattern is still in it.
+It warns about stale `aitp-live-*` projects left by a crashed run.
+
+Cost guard (`docker-compose.live.yml`): the global daily LLM quota is the
+ceiling on provider call units for the whole run, `LIVE_MAX_CALLS` (default
+120, refused above 1000), with in-memory counters on a fresh stack;
+`LLM_MAX_TOKENS_PER_CALL=512`; a small model per provider
+(`LIVE_OPENAI_MODEL`, `LIVE_ANTHROPIC_MODEL`); `RUN_TOKEN_BUDGET=24000`. The
+worst case on gpt-4o-mini is well under $0.10 per run. The live stack also
+runs with `AITP_PLAYGROUND_REQUIRE_API_KEY=true`.
+
+Classify a failure before acting on it: real (a bug, fix it), flaky (a
+provider 429/5xx or nondeterministic output; rerun once) or environmental
+(image build, Docker, a sibling checkout).
 
 ## Layer 3 — scenarios (`tests/scenarios/`)
 
@@ -314,6 +386,53 @@ shape (rejection codes, grant intersection, redeemed AID, etc.).
 
 If you add a new scenario that needs richer assertions than the LLM
 e2e provides, this is the place.
+
+## Railway E2E through the console
+
+`scripts/console_e2e.py` tests the deployed stack the way a visitor reaches
+it: through the public console's `/api/playground/*` proxy, not the
+playground directly. It sends an `Origin` header on every mutation (the
+console's edge refuses a mutation without one), signs in with `POST /login`
+and the `__Host-aitp-console-session` cookie, reads the run's SSE stream to
+`stream.end`, and then reads `GET /runs/{id}`. Its logic is unit-tested
+without the network in `tests/unit/test_console_e2e_tool.py`.
+
+```bash
+uv run python scripts/console_e2e.py lockdown                 # read-only, keyless
+uv run python scripts/console_e2e.py list                     # live refs, inputs, designed outcome; no launches
+uv run python scripts/console_e2e.py matrix --auth anon       # every ref, paced; costs LLM money
+uv run python scripts/console_e2e.py matrix --auth signed-in
+uv run python scripts/console_e2e.py ratelimit [--expect-layer console]
+uv run python scripts/console_e2e.py quota                    # with LLM_QUOTA_PER_IP_PER_DAY lowered
+uv run python scripts/console_e2e.py <mode> --help
+```
+
+| Mode | What it asserts |
+| --- | --- |
+| `lockdown` | Keyless playground `GET /runs`, `/scenarios`, `/metrics` and `POST /runs` → 401; `/healthz` → 200. Keyless CP `/api/events/history` and `/api/metrics` → 401/403. `/api/registry/agents` is public by design (control-plane `src/proxy.ts` `PUBLIC_PATHS`), so it is reported, not asserted. The console reports `signedIn:false`, and its admin `/api/playground/metrics` is refused (403 in public mode, 401 otherwise). With public mode off, `/api/auth/session` itself is 401: that is accepted, the public-mode assertions are skipped with a note, and the admin route must be 401. |
+| `list` | The live scenario list is non-empty. For each ref, it prints the inputs and the designed outcome that `matrix` would use. |
+| `matrix` | For each live ref: launch with `202`, then a terminal status the pack is designed to end in; no `step.unexpected_status` event and no probe result with `matched: false` (the runner records a wrong answer to a designed rejection and still ends `success`); for a ref the SDK can't run, a `run.failed` with code `sdk_feature_unavailable`; `llm.started`, plus one `llm.complete` with `stub: false` for **each** distinct LLM capability the pack calls; no `llm.quota_exceeded`, `llm_quota_exceeded` false, and `llm_calls_on_mock == 0`. Signed-in mode also checks admin `/api/playground/metrics` = 200 (anonymous = 403). |
+| `ratelimit` | Sequential cheap launches (`spki-pinning`, at most 2 running) until a 429. The 429 has `Retry-After`, and the tool names the layer that refused it (see below). |
+| `quota` | One `research-and-write` run that still ends `success`, with `llm_quota_exceeded: true`, `llm_calls_on_mock > 0`, and exactly one `llm.quota_exceeded` event carrying `resets_at`. The console's run JSON carries those fields too. They are what the "LLM quota reached" badge keys on (console `lib/llm-quota.ts` `runLlmQuota`). The badge text is recorded in the evidence. |
+
+**How the tool behaves**
+
+- **URLs.** They come from `--console-url`/`CONSOLE_URL`, `--playground-url`/`PLAYGROUND_URL` and `--cp-url`/`CP_URL`. The defaults are the production hosts. `--cp-url ''` skips the CP probes.
+- **Pacing.** `--pace` defaults to 135 s between launches. That stays inside the console's launch bucket and the playground's per-IP window (both 5 per 600 s) and the global cap of 30 per hour. A 429 during `matrix` sleeps for `Retry-After` and retries the same ref once. A `Retry-After` longer than `--max-wait` (900 s) fails that ref.
+- **SSE cut.** The console's SSE route ends at Vercel's `maxDuration` (300 s). When the stream stops before `stream.end`, the tool polls `/runs/{id}/status` until the status is terminal. Either way, `GET /runs/{id}` is the authoritative record, and its full event list is what gets asserted.
+- **Inputs.** Each ref's inputs come from the input schema in its pack: every property's default, plus filler for a required property that has none. For example, `distributed-review` gets `document`. `--inputs '{…}'` merges over them.
+- **Designed outcome.** No pack declares one, and every pack is designed to end `success`, because fault and rejection steps record their result instead of failing the run. A pack the installed SDK can't run (`sdk_available: false`) is expected to fail. `DESIGNED_OUTCOMES` in the script is the explicit allowlist of exceptions. Today it has one entry: `fault-injection` runs no successful LLM call. `--expect REF=status` overrides the outcome for a single run.
+- **Real LLM, not the stub.** `llm.started` and `llm.complete` fire even when an agent has no provider key or framework, or the quota sent it to the stub, and `llm_calls_on_mock` counts only quota refusals. So each agent's `llm.complete` carries `capability`, `provider`, `model` and `stub` (`agents/base/llm.py` `llm_meta`). `matrix` requires `stub: false` per LLM capability. If the events have no `stub` field, the deployed playground predates it, and the check fails with a message saying so.
+- **Transient errors.** In `matrix`, a transport error or an HTTP error status on a ref's detail, launch, status or final run fetch fails that ref (recorded with the reason) and the matrix carries on. Elsewhere it becomes a failed assertion (exit 1). Polling `/status` honours the run deadline through 429s. Invalid `--inputs` JSON exits 2 before any request. Once the evidence file exists, every exit path (including Ctrl-C) writes a closing `end` record.
+- **429 layers.** `CONSOLE_RATE_LIMITED` comes from the console (launch, read or stream-gate bucket). `run_rate_limited` is the playground's per-IP window. `max_concurrent_runs` is the playground's concurrency cap. `hourly run limit reached` is the playground's global hourly cap. `rate limit exceeded` is the playground's token bucket.
+- **Password.** Signed-in mode reads `CONSOLE_PASSWORD` from the environment. If that is unset, it runs `doppler secrets get CONSOLE_PASSWORD --project aitp-ui-console --config prd --plain`. The value stays in memory, is never printed, and the tool refuses to start (exit 2) before any launch if it is missing or sign-in fails.
+- **Evidence.** JSONL goes to `--out`, by default `$TMPDIR/aitp-console-e2e/<mode>-<utc>.jsonl`. A path inside the repo is refused. Every record is scrubbed: `sk-…` keys (a word-boundary `sk-` plus at least 16 key characters, so `task-…` and `risk-…` survive), `Bearer` tokens, the password, the session cookie, and any value under a password, cookie or authorization key.
+- **Exit status.** 0 means every assertion held, 1 means one failed, and 2 means a setup error.
+
+A full Railway pass (the operator steps, the temporary quota raise and its
+restore) is plan `wave4-latest-local-railway` P6. `matrix` costs real LLM
+money and uses the per-IP rate-limit budget. `lockdown` and `list` cost
+nothing.
 
 ## Which suite for which change
 
@@ -347,5 +466,7 @@ for spawned agents.
 | `tests/integration/test_runner.py` | `AITP_E2E=1` | no (stubs) | yes | ~30-45s |
 | `tests/integration/test_stable_only_sdk.py` | default | no | no (re-runs `tests/unit`) | ~30s |
 | `tests/integration/test_protocol_e2e.py` | `AITP_PROTOCOL_E2E=1` | no (stubs) | yes (Docker recommended) | minutes |
-| `tests/integration/test_llm_e2e.py` | `AITP_LLM_E2E=1` | yes | yes (Docker recommended) | minutes |
+| `tests/integration/test_llm_e2e.py` | `AITP_LLM_E2E=1` + `live_llm(live_flag=False)` | yes (the selected provider's) | yes (Docker recommended) | minutes |
+| `tests/integration/test_live_quota_e2e.py` | `live_llm` (`AITP_LIVE_LLM=1`, never under `CI`) | yes | yes (`scripts/live-integration.sh`) | minutes |
+| `tests/integration/test_lockdown_socket_e2e.py` | default | no | no (in-process uvicorn socket) | ~1s |
 | `tests/scenarios/*` | currently skipped | — | — | — |
