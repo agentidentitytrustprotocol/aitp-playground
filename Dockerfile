@@ -206,6 +206,14 @@ assert not missing, f'AITP_SDK_FEATURES is set but the wheel lacks {missing}'"; 
 
 ENV PYTHONPATH=/app/src:/app/agents/base
 
+# The commit this image was built from, reported by GET /healthz as `revision`.
+# docker.yml passes GIT_SHA=${{ github.sha }}. Declared after every install
+# step so a new commit never invalidates the cached dependency layers. Public
+# repo SHA, not a secret. A release retags this image (same digest), so the
+# revision equals the release commit (DECISIONS.md D-33).
+ARG GIT_SHA=unknown
+ENV AITP_PLAYGROUND_REVISION=$GIT_SHA
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=20 \

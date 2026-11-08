@@ -258,3 +258,35 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Alternatives:** a per-run quota token in each bootstrap, checked against `run_id` (a bootstrap and telemetry change).
 - **Blast radius if wrong:** a misbehaving agent could shift charges between runs inside one process; per-run tokens close it in one change.
 - **Status:** CONFIRMED (2026-11-07, Opus after Fable analysis; DECISIONS D-32)
+
+## wave4-latest-local-railway — release promotion instead of deploy-on-merge
+- **Plan:** plans/wave4-latest-local-railway.md (P1, Q1)
+- **Assumed:** owner goal 6 ("every Railway service runs the latest release") means a tagged release, not main HEAD.
+- **Chose:** `:latest` moves only through `release.yml`, which retags the main-built `sha-<short>` digest and redeploys; `docker.yml` stops tagging `latest` and stops rebuilding on `v*` tags (DECISIONS D-33).
+- **Alternatives:** ACDP's model (rebuild `latest` and redeploy on every merge to main); rebuild on the tag.
+- **Blast radius if wrong:** merged code waits for a release before it reaches prod. Reversible in one commit: restore `type=raw,value=latest,enable={{is_default_branch}}` in docker.yml.
+- **Status:** UNCONFIRMED
+
+## wave4-latest-local-railway — release token name and home
+- **Plan:** plans/wave4-latest-local-railway.md (P1/P2, Q2)
+- **Assumed:** the playground needs its own Railway token, separate from aitp-docs' org-level `RAILWAY_TOKEN`.
+- **Chose:** project token `gha-aitp-playground-release` (aitp-runner / production), Doppler `aitp-playground/prd` `RAILWAY_PLAYGROUND_TOKEN` (not on the sync allowlist), mirrored into the GitHub Environment `production` secret of the same name; ids in repo variables.
+- **Alternatives:** reuse the org `RAILWAY_TOKEN`; name the secret `RAILWAY_TOKEN` at repo level (would shadow the org secret).
+- **Blast radius if wrong:** a rename in release.yml, setup-release-credentials.sh and docs/deployment.md; the token is revocable.
+- **Status:** UNCONFIRMED
+
+## wave4-latest-local-railway — first release is v0.3.0; pyproject version stays out of the release
+- **Plan:** plans/wave4-latest-local-railway.md (P1/P5, Q3)
+- **Assumed:** the changes since v0.2.0 (lockdown, quotas, the release model) are a minor bump; `pyproject.toml` `version = "0.1.0"` is stale and nothing reads it for the image.
+- **Chose:** release `v0.3.0` in P5; the release version comes only from the tag, and the stale pyproject version is recorded in DEFERRED.md.
+- **Alternatives:** v1.0.0; couple the release to pyproject (bump it in a release commit).
+- **Blast radius if wrong:** a tag name; tags are cheap to supersede with a higher version.
+- **Status:** UNCONFIRMED
+
+## wave4-latest-local-railway — a human-pushed tag also gets a GitHub release
+- **Plan:** plans/wave4-latest-local-railway.md (P1 step 5 creates the tag and release on the dispatch path only)
+- **Assumed:** the plan's "dispatch path only" was about creating the tag, since the invariant check-latest enforces is against the GitHub release marked Latest.
+- **Chose:** on a tag push, release.yml creates the GitHub release (`--verify-tag --latest`) when the tag has none, so both entry points end in the same state. The gate also accepts a dispatch whose tag already points at the commit, so a failed run can be re-run.
+- **Alternatives:** leave tag pushes without a release (check-latest would then report MISMATCH after a tag-push release).
+- **Blast radius if wrong:** one step in release.yml.
+- **Status:** UNCONFIRMED

@@ -33,6 +33,28 @@ CrewAI, LangChain, LangGraph, and the OpenAI/Anthropic clients so the real
 LLM path runs. Default builds skip those — the deterministic stubs are
 enough for many demos, and it's the largest single factor in build time.
 
+## Image tags
+
+`docker.yml` builds `ghcr.io/agentidentitytrustprotocol/aitp-playground`
+(linux/amd64, `INSTALL_EXTRAS=all-agents`, `AITP_SDK_SOURCE=pypi-src`).
+Releases never rebuild: `release.yml` retags an image `docker.yml` already
+built, so a release tag has the same digest as the image that passed e2e
+([deployment.md § Releasing](deployment.md#releasing), DECISIONS D-33).
+
+| Tag | Set by | Moves when |
+| --- | --- | --- |
+| `sha-<short>` | `docker.yml`, push to `main` | Never; one per main commit |
+| `main` | `docker.yml`, push to `main` | Every push to `main` |
+| `pr-<n>` | `docker.yml`, pull request | Built to validate the Dockerfile, never pushed |
+| `X.Y.Z` | `release.yml` | Never; one per release |
+| `X.Y` | `release.yml` | Each release in that minor line |
+| `latest` | `release.yml` | Each release, or a rollback. It is the latest release, and what Railway runs |
+
+The build passes `GIT_SHA` (the commit), which the image exposes as
+`AITP_PLAYGROUND_REVISION` and `GET /healthz` reports as `revision`. It is
+also the `org.opencontainers.image.revision` label. A local build without the
+argument reports `"unknown"`.
+
 ## Compose files
 
 ### `docker-compose.yml` — vanilla

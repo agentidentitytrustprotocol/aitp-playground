@@ -58,6 +58,8 @@ pin, so this cannot silently regress.
 as of build time"; now it means "the pinned version, compiled from its locked
 sdist with `experimental`". Older tags are not
 reproducible from their commit — don't diagnose against them as if they were.
+Since D-33 `:latest` also moves only on a release (it is the latest release's
+`sha-<short>` image, retagged), and a `v*` tag no longer triggers a rebuild.
 
 **Local dev note.** `docker compose -f docker-compose.test.yml up` now compiles
 the pinned sdist from PyPI (`AITP_SDK_SOURCE=pypi-src`). If you were relying on it picking up your `../aitp-rs` working

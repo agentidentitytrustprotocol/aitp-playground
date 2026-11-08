@@ -812,3 +812,37 @@ owner. Any can be reopened from ASSUMPTIONS.md.
   It is now fixed to `quota_check_failed` (`api/telemetry.py`), with a test.
 - **Hosted agents charge global counters only: deferred.** Hosted agents are created and invoked only with the key,
   and `/invoke` already goes through the per-IP window. Trigger: a hosted agent gets a public origin on Railway.
+
+## D-33 — Releases promote the main-built image; `:latest` is the latest release
+
+2026-11-08, aitp-hardening wave 5 (prompt "Wave 4", plans/wave4-latest-local-railway.md P1/P2). Opus calls,
+reversible; Q1–Q3 are UNCONFIRMED in ASSUMPTIONS.md until `/reconcile`.
+- **Model:** `docker.yml` publishes only `main` and `sha-<short>` on a push to main and no longer runs on `v*` tags.
+  `release.yml` (a dispatch with `version`, or a human-pushed `vX.Y.Z` tag) retags the gated `sha-<short>` digest to
+  `X.Y.Z`, `X.Y` and `latest` with `docker buildx imagetools create`, creates the tag and GitHub release, runs
+  `railway redeploy --from-source` and verifies. So **running == `:latest` == the GitHub release marked Latest**
+  holds after every release, and `scripts/release/check-latest.sh` checks it at any time.
+- **Why not ACDP's redeploy on every merge:** goal 6 says "latest release". Before this, a merge moved `:latest`
+  and the next unrelated redeploy (a Doppler sync, 2026-11-08T08:22Z) shipped it unreleased. Bot SDK bumps
+  merged by auto-merge.yml now reach prod only through a release. Rejected: rebuilding on the tag (a second
+  build has a different digest and can diverge from what e2e tested) and pinning Railway to `:X.Y.Z` (every
+  release would need a service-source write with an account token).
+- **Gate:** `scripts/release/preflight.sh` refuses before any retag unless the credentials are set, the version
+  is `X.Y.Z` and above every other tag (an existing tag must point at the commit, which makes a rerun
+  idempotent), the commit is on main, `sha-<short>` carries that commit as its revision label, and the
+  `docker-compose e2e` and `Build & push playground image` checks concluded `success`. It waits up to 35 min for
+  a build in progress. ci.yml has no push trigger (D-29); strict branch protection covers its checks.
+- **Verification:** the new deployment must end `SUCCESS`; then Railway's `meta.imageDigest` must equal the
+  `:latest` index digest or its linux/amd64 manifest, or, if Railway does not report it, `/healthz` `revision`
+  must equal `:latest`'s revision label. Neither fails the release. For that fallback the image now carries
+  `GIT_SHA` as `AITP_PLAYGROUND_REVISION`. Checked 2026-11-08: the project token can read `meta.imageDigest`.
+- **Rollback:** a dispatch with `rollback_to: X.Y.Z` retags `latest` to that release's digest, redeploys,
+  verifies, then marks that GitHub release Latest.
+- **Token scope:** a dedicated Railway project token, `gha-aitp-playground-release`, scoped to aitp-runner /
+  production (the narrowest scope Railway offers). Its source of truth is Doppler `aitp-playground/prd`
+  `RAILWAY_PLAYGROUND_TOKEN`, outside the sync allowlist. It is mirrored into the GitHub Environment
+  `production` (branch main and tags `v*`, no required reviewers: the dispatch is the deliberate act). The
+  name avoids shadowing the org `RAILWAY_TOKEN` that aitp-docs uses, so each can be revoked alone.
+- **Until the first release (P5):** `:latest` stays at bf9be6a, the image prod runs today, so a redeploy in
+  the meantime changes nothing. Whether a plain redeploy re-resolves the tag (evidence says yes, CLI help says
+  only `--from-source`) is recorded in P5; under promotion either is safe.

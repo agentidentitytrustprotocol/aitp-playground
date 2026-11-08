@@ -1,6 +1,7 @@
 """API surface tests — exercises health + registry routes via TestClient."""
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from aitp_playground.main import create_app
@@ -10,10 +11,19 @@ def _client() -> TestClient:
     return TestClient(create_app())
 
 
-def test_healthz() -> None:
+def test_healthz(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AITP_PLAYGROUND_REVISION", raising=False)
     r = _client().get("/healthz")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json() == {"status": "ok", "revision": "unknown"}
+
+
+def test_healthz_reports_build_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    sha = "bf9be6a524a356f6593bd8fb45cd9528077937c0"
+    monkeypatch.setenv("AITP_PLAYGROUND_REVISION", sha)
+    r = _client().get("/healthz")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "revision": sha}
 
 
 def test_list_packs() -> None:
