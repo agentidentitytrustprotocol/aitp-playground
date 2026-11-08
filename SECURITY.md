@@ -121,8 +121,9 @@ caller can't pick an IP, though: the IP always comes from the run record. The
 quota bounds what honest agents spend. It is not a boundary against a
 compromised agent, which already holds a provider key.
 
-The per-IP token bucket keys on the right-most `X-Forwarded-For` entry
-(normalised as above), which is the one Railway's edge proxy appends, so a client cannot choose its own
-bucket by sending that header. Requests the console proxies share the
-console's egress IP, so the per-key bucket and the hourly cap are what bound
-them.
+The per-IP token bucket keys on the trusted subject IP when a keyed caller
+sends one (above). Otherwise it keys on the right-most `X-Forwarded-For` entry
+(normalised as above), which is the one Railway's edge proxy appends, so a
+client cannot choose its own bucket by sending that header. A keyed request
+without the header (the console today) shares the console's egress IP, so the
+per-key bucket, the concurrency cap and the hourly cap are what bound it.

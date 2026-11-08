@@ -292,6 +292,21 @@ def test_agent_reported_check_failure_flags_the_run_once():
     assert len(_quota_events(c, rid)) == 1
 
 
+def test_agent_reported_reason_is_pinned_whatever_the_body_says():
+    """The body's code is never a metric label or the run's reason: only
+    quota_check_failed can come in through telemetry."""
+    app = _app()
+    c = _client(app)
+    rid = _run(app)
+    before = _counter(LLM_QUOTA_DENIALS_TOTAL, (("reason", "quota_check_failed"),))
+    for code in ("quota_exceeded", "x" * 50):
+        c.post("/internal/telemetry", headers=_tok(app),
+               json={"run_id": rid, "type": "llm.quota_exceeded", "code": code, "calls": 1})
+    assert c.get(f"/runs/{rid}").json()["llm_quota"]["reason"] == "quota_check_failed"
+    assert _counter(LLM_QUOTA_DENIALS_TOTAL, (("reason", "quota_check_failed"),)) - before == 2
+    assert "x" * 50 not in c.get("/metrics").text
+
+
 def test_agent_duplicate_after_a_server_denial_is_dropped():
     app = _app(MemoryQuotaStore(limits(g_day=0), clock=Clock()))
     c = _client(app)

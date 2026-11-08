@@ -28,8 +28,10 @@ async def post_telemetry(request: Request) -> dict:
     if body.get("type") == "llm.quota_exceeded":
         # An agent reports this only when it could not get an answer from
         # /internal/llm-quota (a decided denial is recorded there). Fold it
-        # into the run's single quota event; a duplicate is dropped.
-        reason = str(body.get("code") or REASON_CHECK_FAILED)
+        # into the run's single quota event; a duplicate is dropped. The
+        # reason is fixed, never taken from the body: it is a metric label,
+        # and a decided denial is only ever recorded by the quota route.
+        reason = REASON_CHECK_FAILED
         metrics.inc(LLM_QUOTA_DENIALS_TOTAL, {"reason": reason})
         if is_scenario_run(run_id):
             calls = body.get("calls")
