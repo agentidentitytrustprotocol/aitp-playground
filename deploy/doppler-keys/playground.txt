@@ -19,6 +19,20 @@ LLM_PROVIDER
 OPENAI_MODEL
 ANTHROPIC_MODEL
 PLAYGROUND_BASE_URL
+# API-key gate (D-31). false until the rollout flips it; true with no
+# PLAYGROUND_API_KEY refuses to start.
+AITP_PLAYGROUND_REQUIRE_API_KEY
+# Run limits (per trusted client IP, service-wide concurrency).
+RUN_RATE_LIMIT_PER_IP
+RUN_RATE_LIMIT_WINDOW_SECONDS
+MAX_CONCURRENT_RUNS
+# LLM quota, in real LLM call units. The store's DATABASE_URL is a Railway
+# reference to playground-db (${{playground-db.DATABASE_URL}}), so it is not
+# listed here and the sync leaves it alone.
+LLM_QUOTA_PER_IP_PER_DAY
+LLM_QUOTA_PER_IP_PER_MONTH
+LLM_QUOTA_GLOBAL_PER_DAY
+LLM_QUOTA_GLOBAL_PER_MONTH
 # Docker build arg (Dockerfile). Inert while the service deploys the
 # prebuilt GHCR image instead of building from source; kept so a switch
 # back to a source build gets the same extras.

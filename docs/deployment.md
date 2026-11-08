@@ -46,12 +46,46 @@ is the allowlist: the script manages these keys and no others.
 | `LLM_PROVIDER` | config | `openai` or `anthropic` |
 | `OPENAI_MODEL` | config | |
 | `ANTHROPIC_MODEL` | config | Dev/local only, like `ANTHROPIC_API_KEY` |
+| `AITP_PLAYGROUND_REQUIRE_API_KEY` | config | Backend lockdown flag ([SECURITY.md](../SECURITY.md#backend-lockdown-aitp_playground_require_api_key)). `false` in prd until the console sends the key (rollout step 1); `true` with no `PLAYGROUND_API_KEY` refuses to start |
+| `RUN_RATE_LIMIT_PER_IP` | config | Launches per trusted client IP per window (prd 5) |
+| `RUN_RATE_LIMIT_WINDOW_SECONDS` | config | That window (prd 600) |
+| `MAX_CONCURRENT_RUNS` | config | Runs in progress service-wide (prd 3) |
+| `LLM_QUOTA_PER_IP_PER_DAY` | config | Real LLM call units per trusted client IP per UTC day (prd 30) |
+| `LLM_QUOTA_PER_IP_PER_MONTH` | config | Per UTC month (prd 300) |
+| `LLM_QUOTA_GLOBAL_PER_DAY` | config | All callers per UTC day (prd 1000) |
+| `LLM_QUOTA_GLOBAL_PER_MONTH` | config | All callers per UTC month (prd 10000) |
 | `INSTALL_EXTRAS` | build arg | Read by the Dockerfile. Inert while the service deploys the prebuilt image; kept so a source build gets the same extras. |
 
 Every other variable the service reads keeps its default
 ([getting-started.md](getting-started.md#configure) lists them all).
 Railway's own `RAILWAY_*` variables are Railway's, and the script refuses
 to manage them.
+
+## Quota database
+
+The LLM quota counters live in a dedicated Railway Postgres, service
+`playground-db` in `aitp-runner` / `production` (DECISIONS D-31). It holds
+one table, `playground_llm_usage`, which the playground creates on first
+use. Nothing else uses this database.
+
+`aitp-playground` reads it through `DATABASE_URL`, set on the service as the
+Railway reference `${{playground-db.DATABASE_URL}}`. That variable is **not**
+on the Doppler allowlist: the sync refuses references, and it reports the
+key as "left alone". The reference resolves to the private host
+`postgres-0lu4.railway.internal` (the service was created under Railway's
+generated name and renamed afterwards; the private domain kept the old name).
+
+With `LLM_QUOTA_STORE=auto` (the default), a service on Railway with no
+`DATABASE_URL` uses a store that refuses every real LLM call, so the
+playground runs on its mocks rather than spending without a limit. Check
+the reference exists (by name) before a deploy that depends on it:
+
+```bash
+railway variables --service aitp-playground --kv | cut -d= -f1 | grep -x DATABASE_URL
+```
+
+The `aitp_playground_llm_quota_store_up` gauge on `/metrics` is `1` while
+the store answers ([observability.md](observability.md)).
 
 ## Syncing Doppler into Railway
 
