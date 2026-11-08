@@ -92,6 +92,11 @@ class QuotaStore:
         self.limits = limits
         self._clock = clock
 
+    @property
+    def healthy(self) -> bool:
+        """Whether charges can currently be counted (not failing closed)."""
+        return True
+
     async def charge(self, subject_ip: str | None, n: int = 1) -> Decision:
         if n < 1:
             raise ValueError("n must be >= 1")
@@ -144,6 +149,10 @@ class UnavailableQuotaStore(QuotaStore):
     """Denies every charge. Railway without a database, or an explicit choice."""
 
     kind = "unavailable"
+
+    @property
+    def healthy(self) -> bool:
+        return False
 
     async def _charge(self, counters: list[Counter], n: int) -> Decision:
         return UNAVAILABLE

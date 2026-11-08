@@ -91,6 +91,7 @@ one. The run-limit `429`s carry `{code, limit, retry_after, detail}` and a
 | Concurrency cap | `MAX_CONCURRENT_RUNS` | Runs in progress, service-wide (3). The next launch gets `429 max_concurrent_runs`, `Retry-After: 10`. The slot frees when the run's task ends; a cancel does not free it early, because the agents may still be stopping |
 | Run deadline | `RUN_DEADLINE_SECONDS` | A run past 900 s ends `failed` (`run_deadline_exceeded`) and its agents are torn down, so a stuck run can't hold a slot |
 | Global hourly cap | `MAX_RUNS_PER_HOUR` | Run creations plus hosted invokes, all callers. The next one gets `429` |
+| LLM quota | `LLM_QUOTA_PER_IP_PER_DAY` / `_PER_MONTH`, `LLM_QUOTA_GLOBAL_PER_DAY` / `_PER_MONTH`, `LLM_QUOTA_STORE`, `DATABASE_URL` | Real LLM call units, charged by each agent's quota check before the provider call (30/day and 300/month per trusted client IP; 1000/day and 10000/month overall). Over quota the capability runs on its deterministic mock and the run is flagged (`llm_quota_exceeded`, `llm_quota.resets_at`, one `llm.quota_exceeded` event). It fails closed: if the quota store is unreachable, every real call is refused. Keyless runs charge the global counters only |
 | Per-run token budget | `RUN_TOKEN_BUDGET`, `LLM_MAX_TOKENS_PER_CALL` | Enforced in each agent (`agents/base/llm.py`) before every provider call. Every call is capped at `max_tokens`, and the call that would exceed the budget gets `429` without contacting the provider |
 
 Provider error text is redacted (configured keys, `sk-…` strings and bearer
@@ -106,6 +107,19 @@ process memory**. They are correct only while the service runs as **one
 replica**: N replicas multiply every limit by N, and a restart resets them.
 The Railway service is deployed with one replica. Before scaling out, move
 this state to a shared store such as Postgres or Redis.
+
+The LLM quota is the exception: its counters live in the dedicated playground
+Postgres (`DATABASE_URL`), so they are shared by every replica and survive a
+restart. The `memory` store is for local runs only.
+
+The quota check (`POST /internal/llm-quota`) trusts the agents the playground
+launched. It is reachable only from loopback, with no forwarding headers, and
+only with the telemetry token every agent of this process holds. The token is
+not bound to one run: an agent holding it could name another run id (charging
+that run's IP) or send no run id (charging the global counters only). The
+caller can't pick an IP, though: the IP always comes from the run record. The
+quota bounds what honest agents spend. It is not a boundary against a
+compromised agent, which already holds a provider key.
 
 The per-IP token bucket keys on the right-most `X-Forwarded-For` entry
 (normalised as above), which is the one Railway's edge proxy appends, so a client cannot choose its own

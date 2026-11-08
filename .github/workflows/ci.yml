@@ -210,3 +210,11 @@ jobs:
         # test_quota_postgres.py runs on the postgres service above.
         run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py tests/integration/test_revocation_two_agents.py tests/integration/test_stable_only_sdk.py tests/integration/test_quota_postgres.py -v
         timeout-minutes: 10
+
+      - name: Run LLM quota end-to-end test
+        # Needs the researcher and writer extras so both agents' real LLM
+        # paths exist; the provider is a closed loopback port and the key is
+        # fake, so no network call leaves the runner. Runs last: the extras
+        # stay out of the stable-only SDK run above.
+        run: AITP_E2E=1 CP_BASE_URL= uv run --locked --extra researcher --extra writer pytest tests/integration/test_llm_quota_e2e.py -v
+        timeout-minutes: 5

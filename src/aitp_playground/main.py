@@ -16,6 +16,7 @@ from .api import hosted as hosted_api
 from .api import metrics as metrics_api
 from .api import registry as registry_api
 from .api import runs as runs_api
+from .api import quota as quota_api
 from .api import telemetry as telemetry_api
 from .api import webhooks as webhooks_api
 from .config import Settings, get_settings
@@ -28,6 +29,7 @@ from .hosting.loopback import AgentLoopback
 from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
 from .limits import RunLimiter, SpendLimits
+from .observability.metrics import LLM_QUOTA_STORE_UP, metrics
 from .quota import select_store
 from .registry.service import RegistryService
 from .runner.engine import ScenarioRunner
@@ -128,6 +130,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Opens the quota pool now so the first LLM call doesn't pay for it.
         # Never blocks startup: a down database just denies LLM calls.
         await quota_store.start()
+        # 0 until a check proves otherwise when the store denies everything
+        # or could not connect; charges keep it current afterwards.
+        metrics.set(LLM_QUOTA_STORE_UP, 1.0 if quota_store.healthy else 0.0)
         yield
         sweep.cancel()
         await quota_store.aclose()
@@ -160,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agents_api.router)
     app.include_router(hosted_api.router)
     app.include_router(telemetry_api.router)
+    app.include_router(quota_api.router)
     app.include_router(metrics_api.router)
     app.include_router(webhooks_api.router)
     app.include_router(cp_api.router)

@@ -444,6 +444,7 @@ def test_bootstrap_telemetry_url_is_the_internal_loopback_url() -> None:
     )
     assert bs["playground"]["telemetry_url"] == "http://127.0.0.1:8000/internal/telemetry"
     assert "playground.example.com" not in bs["playground"]["telemetry_url"]
+    assert bs["playground"]["quota_url"] == "http://127.0.0.1:8000/internal/llm-quota"
 
 
 def test_non_loopback_internal_url_is_warned(caplog: pytest.LogCaptureFixture) -> None:

@@ -58,7 +58,34 @@ class RunCreated(BaseModel):
     run_label: Optional[str] = None
 
 
-class RunSummary(BaseModel):
+class LlmQuota(BaseModel):
+    """The quota that first refused a real LLM call in this run."""
+
+    reason: Optional[str] = None  # quota_exceeded | quota_store_unavailable | quota_check_failed
+    quota: Optional[str] = None  # e.g. per_ip_daily, global_monthly
+    limit: Optional[int] = None
+    resets_at: Optional[str] = None  # RFC 3339 UTC; null when the store was unavailable
+
+
+class LlmQuotaFields(BaseModel):
+    """Set once any capability in the run fell back to the mock LLM because
+    of the quota. ``llm_calls_on_mock`` counts the refused call units."""
+
+    llm_quota_exceeded: bool = False
+    llm_quota: Optional[LlmQuota] = None
+    llm_calls_on_mock: int = 0
+
+
+def _quota_fields(record: dict[str, Any]) -> dict[str, Any]:
+    quota = record.get("llm_quota")
+    return {
+        "llm_quota_exceeded": bool(record.get("llm_quota_exceeded")),
+        "llm_quota": LlmQuota(**quota) if isinstance(quota, dict) else None,
+        "llm_calls_on_mock": int(record.get("llm_calls_on_mock") or 0),
+    }
+
+
+class RunSummary(LlmQuotaFields):
     run_id: str
     status: Optional[str] = None
     scenario_ref: Optional[str] = None
@@ -71,14 +98,14 @@ class RunList(BaseModel):
     runs: list[RunSummary]
 
 
-class RunStatus(BaseModel):
+class RunStatus(LlmQuotaFields):
     run_id: str
     status: Optional[str] = None
     event_count: int = 0
     created_at: Optional[float] = None
 
 
-class RunResponse(BaseModel):
+class RunResponse(LlmQuotaFields):
     run_id: str
     status: str
     scenario_ref: str
@@ -198,6 +225,7 @@ def list_runs(store: RunStore = Depends(get_run_store)) -> RunList:
             run_label=r.get("run_label"),
             created_at=r.get("created_at"),
             event_count=len(r.get("events", [])),
+            **_quota_fields(r),
         ))
     return RunList(runs=items)
 
@@ -216,6 +244,7 @@ def get_run(run_id: str, store: RunStore = Depends(get_run_store)) -> RunRespons
         events=list(record.get("events") or []),
         error=record.get("error"),
         created_at=record.get("created_at"),
+        **_quota_fields(record),
     )
 
 
@@ -365,6 +394,7 @@ def get_run_status(run_id: str, store: RunStore = Depends(get_run_store)) -> Run
         status=record.get("status"),
         event_count=len(record.get("events", [])),
         created_at=record.get("created_at"),
+        **_quota_fields(record),
     )
 
 

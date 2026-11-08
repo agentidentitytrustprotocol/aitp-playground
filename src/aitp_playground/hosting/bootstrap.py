@@ -111,6 +111,10 @@ class BootstrapBuilder:
                 "telemetry_url": (
                     f"{self.settings.playground_internal_url.rstrip('/')}/internal/telemetry"
                 ),
+                # Asked before every real LLM call (api/quota.py); same token.
+                "quota_url": (
+                    f"{self.settings.playground_internal_url.rstrip('/')}/internal/llm-quota"
+                ),
                 "telemetry_token": self.telemetry_token,
                 "run_id": run_id,
             },

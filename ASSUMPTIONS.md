@@ -227,3 +227,34 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Alternatives:** refuse to start on `postgres` without a URL; refuse `memory` on Railway.
 - **Blast radius if wrong:** an operator could opt into reset-on-deploy counting on Railway; logged loudly. Tighten in `select_store` in one commit.
 - **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — quota metrics carry the aitp_playground_ prefix
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4 named `llm_quota_charged_total`, `llm_quota_denials_total`, `llm_quota_store_up`)
+- **Assumed:** the plan's names were shorthand.
+- **Chose:** `aitp_playground_llm_quota_charged_total`, `aitp_playground_llm_quota_denials_total{reason}`, `aitp_playground_llm_quota_store_up`, matching every other series in `observability/metrics.py`.
+- **Blast radius if wrong:** a rename in one module and docs/observability.md; no dashboard reads these yet.
+- **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — agent-reported check failures fold into the run's single quota event
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4, decision 5: "one llm.quota_exceeded event")
+- **Assumed:** an agent that gets no answer from `/internal/llm-quota` must still flag the run, but the run should still show one event.
+- **Chose:** the agent emits `llm.quota_exceeded` (`code=quota_check_failed`) through telemetry; `/internal/telemetry` routes it through the same `record_llm_fallback` as a decided denial (adds to `llm_calls_on_mock`, emits only on the run's first fallback, never creates an unknown run) and counts it in `llm_quota_denials_total{reason="quota_check_failed"}`.
+- **Alternatives:** append each agent report raw (several events per run); drop agent reports (a failed check would be invisible).
+- **Blast radius if wrong:** event count per run; one branch in `api/telemetry.py`.
+- **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — hosted agents and run-less checks charge the global counters only
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4; hosted invokes not addressed)
+- **Assumed:** a hosted agent (run id `hosted-<id>`) has no run record and so no trusted subject IP.
+- **Chose:** a `hosted-` or empty run id charges the global day/month counters only and records nothing on any run; any other unknown run id is a 404 and charges nothing.
+- **Alternatives:** carry the invoker's subject IP into the hosted agent's bootstrap (a per-invoke bootstrap change, out of scope here).
+- **Blast radius if wrong:** hosted LLM spend is bounded by the global quota but not per IP; add the IP to the hosted bootstrap in one change.
+- **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — the quota check trusts the playground's own agents
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4: loopback-only, telemetry-token gated)
+- **Assumed:** agents launched by this playground are cooperative; the quota bounds honest spend, not a compromised agent (which already holds a provider key).
+- **Chose:** the telemetry token is per process, not per run, so `run_id` is not bound to the token. A token holder can charge another run's IP or send no run id (global only), but can never choose the IP: it always comes from the run record. Documented in SECURITY.md.
+- **Alternatives:** a per-run quota token in each bootstrap, checked against `run_id` (a bootstrap and telemetry change).
+- **Blast radius if wrong:** a misbehaving agent could shift charges between runs inside one process; per-run tokens close it in one change.
+- **Status:** UNCONFIRMED

@@ -4,8 +4,25 @@ from __future__ import annotations
 from llm import build_chat_model, response_text  # type: ignore[import-not-found]
 
 
-async def run_writer(findings: str, *, style: str = "casual") -> str:
-    """Produce an article-style response built from the researcher's findings."""
+def _langchain_ready() -> bool:
+    try:
+        import langchain_core.messages  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def real_path_available() -> bool:
+    """Whether :func:`run_writer` would call the provider (the same check)."""
+    return build_chat_model() is not None and _langchain_ready()
+
+
+async def run_writer(findings: str, *, style: str = "casual", use_llm: bool = True) -> str:
+    """Produce an article-style response built from the researcher's findings.
+
+    ``use_llm=False`` (the LLM quota refused) always takes the stub."""
+    if not use_llm:
+        return _stub_article(findings, style)
     llm = build_chat_model()
     if llm is not None:
         try:

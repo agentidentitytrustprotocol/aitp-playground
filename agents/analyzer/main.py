@@ -10,10 +10,14 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
-from llm import call_llm_or_502
+from llm import MOCK_NOTE, call_llm_or_502, llm_permit
 from telemetry import emit_event
 
-from .graph import run_analyzer  # type: ignore[import-not-found]
+from .graph import (  # type: ignore[import-not-found]
+    ANALYZE_LLM_CALLS,
+    real_path_available,
+    run_analyzer,
+)
 
 
 bootstrap = load_bootstrap()
@@ -67,14 +71,22 @@ def _payload_to_text(payload: Any) -> str:
 
 async def do_analyze(payload: Any, commissioned_by: str = "self") -> dict[str, Any]:
     input_text = _payload_to_text(payload)
+    real = real_path_available()
+    use_llm = real and await llm_permit(
+        bootstrap, capability="analyze.data", calls=ANALYZE_LLM_CALLS, emit_event=emit_event,
+    )
+    notes = MOCK_NOTE if real and not use_llm else None
     await emit_event(
-        "llm.started", bootstrap, task="analyze", commissioned_by=commissioned_by,
+        "llm.started", bootstrap, task="analyze", commissioned_by=commissioned_by, notes=notes,
     )
-    result = await call_llm_or_502(
-        run_analyzer(input_text), emit_event=emit_event,
-        bootstrap=bootstrap, task="analyze", llm_calls=2,  # summary + risks (graph.py)
-    )
-    await emit_event("llm.complete", bootstrap, task="analyze")
+    if use_llm:
+        result = await call_llm_or_502(
+            run_analyzer(input_text, use_llm=True), emit_event=emit_event,
+            bootstrap=bootstrap, task="analyze", llm_calls=ANALYZE_LLM_CALLS,
+        )
+    else:
+        result = await run_analyzer(input_text, use_llm=False)
+    await emit_event("llm.complete", bootstrap, task="analyze", notes=notes)
     return {**result, "agent": bootstrap["agent_id"]}
 
 

@@ -10,10 +10,14 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
-from llm import call_llm_or_502
+from llm import MOCK_NOTE, call_llm_or_502, llm_permit
 from telemetry import emit_event
 
-from .crew import RESEARCH_LLM_CALLS, build_crew  # type: ignore[import-not-found]
+from .crew import (  # type: ignore[import-not-found]
+    RESEARCH_LLM_CALLS,
+    build_crew,
+    real_path_available,
+)
 
 
 bootstrap = load_bootstrap()
@@ -64,11 +68,18 @@ def _payload_to_topic(payload: Any) -> str:
 
 async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, Any]:
     topic = _payload_to_topic(payload)
+    real = real_path_available()
+    use_llm = real and await llm_permit(
+        bootstrap, capability="research.query", calls=RESEARCH_LLM_CALLS, emit_event=emit_event,
+    )
+    notes = MOCK_NOTE if real and not use_llm else None
     await emit_event(
         "llm.started", bootstrap, task="research",
-        topic=topic, commissioned_by=commissioned_by,
+        topic=topic, commissioned_by=commissioned_by, notes=notes,
     )
-    crew = build_crew({"topic": topic})
+    # A refused permit builds the stub crew (no kickoff_async), so the
+    # branch below never reaches call_llm_or_502.
+    crew = build_crew({"topic": topic}, use_llm=use_llm)
     # CrewAI ≥1.0 refuses sync kickoff() inside a running event loop. Use the
     # async variant when available; the offline stub only has the sync one.
     if hasattr(crew, "kickoff_async"):
@@ -79,17 +90,24 @@ async def do_research(payload: Any, commissioned_by: str = "self") -> dict[str, 
     else:
         result = crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
-    await emit_event("llm.complete", bootstrap, task="research", topic=topic)
+    await emit_event("llm.complete", bootstrap, task="research", topic=topic, notes=notes)
     return {"findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}
 
 
 async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[str, Any]:
     topic = _payload_to_topic(payload)
+    real = real_path_available()
+    use_llm = real and await llm_permit(
+        bootstrap, capability="research.deep", calls=RESEARCH_LLM_CALLS, emit_event=emit_event,
+    )
+    notes = MOCK_NOTE if real and not use_llm else None
     await emit_event(
         "llm.started", bootstrap, task="research.deep",
-        topic=topic, commissioned_by=commissioned_by,
+        topic=topic, commissioned_by=commissioned_by, notes=notes,
     )
-    crew = build_crew({"topic": topic, "depth": "deep"})
+    # A refused permit builds the stub crew (no kickoff_async), so the
+    # branch below never reaches call_llm_or_502.
+    crew = build_crew({"topic": topic, "depth": "deep"}, use_llm=use_llm)
     if hasattr(crew, "kickoff_async"):
         result = await call_llm_or_502(
             crew.kickoff_async(), emit_event=emit_event, bootstrap=bootstrap,
@@ -98,7 +116,7 @@ async def do_deep_research(payload: Any, commissioned_by: str = "self") -> dict[
     else:
         result = crew.kickoff()
     findings = str(result.raw) if hasattr(result, "raw") else str(result)
-    await emit_event("llm.complete", bootstrap, task="research.deep", topic=topic)
+    await emit_event("llm.complete", bootstrap, task="research.deep", topic=topic, notes=notes)
     return {"deep_findings": findings, "topic": topic, "agent": bootstrap["agent_id"]}
 
 

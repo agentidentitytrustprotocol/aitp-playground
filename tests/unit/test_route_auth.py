@@ -44,6 +44,8 @@ OTHER_AUTH = {
     ("POST", "/webhooks/cp/{run_id}"): None,
     # Agent subprocesses hold a per-process telemetry token, not the key.
     ("POST", "/internal/telemetry"): require_telemetry_token,
+    # Same token, and loopback-only always (api/quota.py).
+    ("POST", "/internal/llm-quota"): require_telemetry_token,
 }
 
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}

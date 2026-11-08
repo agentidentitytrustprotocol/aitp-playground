@@ -22,6 +22,7 @@ response, a log line or telemetry.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -29,6 +30,7 @@ import re
 import threading
 from typing import Any, Awaitable, Literal, Optional, TypeVar
 
+import httpx
 from fastapi import HTTPException
 
 Provider = Literal["openai", "anthropic"]
@@ -216,3 +218,56 @@ async def call_llm_or_502(
         raise HTTPException(
             status_code=502, detail=f"LLM provider call failed: {detail}"
         ) from None
+
+
+#: Total deadline for one quota check, connect included.
+QUOTA_CHECK_TIMEOUT_S = 5.0
+#: Marks llm.started/llm.complete on a capability the quota sent to the stub.
+MOCK_NOTE = "mock LLM: quota refused real calls"
+
+
+async def llm_permit(
+    bootstrap: dict, *, capability: str, calls: int, emit_event: Any,
+) -> bool:
+    """Ask the playground whether this capability may make ``calls`` real
+    provider calls. Call it only when the real path would actually run
+    (a provider key is set and the framework imports): with no key there is
+    no real call to permit.
+
+    Fails closed: no quota URL or token, a transport error, a timeout
+    (:data:`QUOTA_CHECK_TIMEOUT_S`), a non-200 (an unknown run is 404) or a
+    malformed answer all deny, and the agent reports ``llm.quota_exceeded``
+    with ``code=quota_check_failed`` itself. A decided denial is recorded by
+    the playground, so nothing is emitted for it here.
+    """
+    pg = bootstrap.get("playground") or {}
+    url, token = pg.get("quota_url"), pg.get("telemetry_token")
+    if url and token:
+        body = {
+            "run_id": bootstrap.get("run_id") or pg.get("run_id"),
+            "capability": capability,
+            "calls": max(1, int(calls)),
+            "agent_id": bootstrap.get("agent_id"),
+        }
+        try:
+            answer = await asyncio.wait_for(
+                _post_quota(url, token, body), timeout=QUOTA_CHECK_TIMEOUT_S,
+            )
+        except Exception:  # noqa: BLE001 - fail closed on anything
+            answer = None
+        if isinstance(answer, dict) and isinstance(answer.get("allowed"), bool):
+            return answer["allowed"]
+    await emit_event(
+        "llm.quota_exceeded", bootstrap, capability=capability,
+        code="quota_check_failed", calls=max(1, int(calls)),
+    )
+    return False
+
+
+async def _post_quota(url: str, token: str, body: dict) -> Any:
+    # trust_env=False: a loopback call must never go through an HTTP(S)_PROXY.
+    async with httpx.AsyncClient(timeout=QUOTA_CHECK_TIMEOUT_S, trust_env=False) as client:
+        resp = await client.post(url, json=body, headers={"Authorization": f"Bearer {token}"})
+    if resp.status_code != 200:
+        return None
+    return resp.json()

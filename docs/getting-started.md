@@ -159,6 +159,11 @@ quota, unreachable) does **not** fall back to the stub: the agent emits
 run fails with a message of the form `<agent> self-execute <capability>
 failed: status=502 detail=…`.
 
+Before a real call the agent also asks the playground's LLM quota
+(`LLM_QUOTA_*` above). Over quota, the capability answers with its stub and
+the run is flagged rather than failed; see
+[observability.md § LLM quota](observability.md#llm-quota).
+
 ## Run the service
 
 ```bash
