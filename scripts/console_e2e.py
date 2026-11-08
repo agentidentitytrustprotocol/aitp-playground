@@ -1100,10 +1100,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="keyless probes: playground /runs,/scenarios,/metrics,POST /runs -> 401, "
              "/healthz -> 200; CP /api/events/history,/api/metrics -> 401/403; console "
              "anonymous session + admin route refused. Read-only.")
-    lp = sub.add_parser(
+    sub.add_parser(
         "list", parents=[common, launch, select],
         help="list live scenario refs with derived inputs and designed outcome. No launches.")
-    lp.set_defaults(pace=0)
+    # No set_defaults(pace=...) on any subparser: the --pace action is shared through the `launch`
+    # parent, so a per-subparser default would rewrite it for matrix/quota too.
     sub.add_parser(
         "matrix", parents=[common, launch, select],
         help="launch every live ref through the console (paced), follow SSE (poll on a cut), "

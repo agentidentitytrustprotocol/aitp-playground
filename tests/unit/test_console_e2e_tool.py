@@ -687,3 +687,11 @@ def test_interrupt_mid_run_still_writes_end_and_reraises(tmp_path):
                 password_reader=lambda: PASSWORD)
     recs = [json.loads(line) for line in out.read_text().splitlines()]
     assert recs[-1]["kind"] == "end" and recs[-1]["aborted"] == "KeyboardInterrupt"
+
+
+@pytest.mark.parametrize("mode", ["matrix", "quota", "ratelimit", "list"])
+def test_default_pace_is_not_zero(mode):
+    """Regression: a set_defaults(pace=0) on `list` leaked into every mode via the
+    shared `launch` parent, so an unflagged matrix launched unpaced."""
+    args = ce.build_parser().parse_args([mode])
+    assert args.pace == ce.DEFAULT_PACE_S
