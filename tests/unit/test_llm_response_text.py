@@ -6,14 +6,19 @@ as its ``article`` and the analyzer stored it as ``summary``/``risks`` —
 interpolating the list's Python repr (thinking/tool_use blocks included)
 into its critique prompt. Same bug as acdp-playground #131.
 
-The shape matrix runs everywhere. The writer/analyzer cases need
-``langchain_core``/``langgraph`` (the agent extras) and skip without them;
-CI's ``--all-extras`` job runs them.
+Nothing here may skip: ``tests/integration/test_stable_only_sdk.py``
+requires that the only skips in ``tests/unit`` are SDK-feature tests. The
+writer/analyzer cases use the real ``langchain_core``/``langgraph`` when the
+agent extras are installed (CI's ``--all-extras`` job), and otherwise a minimal
+stand-in registered in ``sys.modules`` for the duration of the test.
 """
 from __future__ import annotations
 
 import asyncio
+import importlib
 import importlib.util
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +54,67 @@ class _FakeChatModel:
         return self.message
 
 
+def _real(module: str) -> bool:
+    try:
+        importlib.import_module(module)
+        return True
+    except ImportError:
+        return False
+
+
+class _FakeMessage:
+    def __init__(self, content: Any):
+        self.content = content
+
+
+class _FakeStateGraph:
+    """The slice of ``langgraph.graph.StateGraph`` that graph.py uses."""
+
+    def __init__(self, _schema: Any):
+        self.nodes: dict[str, Any] = {}
+        self.edges: dict[str, str] = {}
+        self.entry = ""
+
+    def add_node(self, name: str, fn: Any) -> None:
+        self.nodes[name] = fn
+
+    def set_entry_point(self, name: str) -> None:
+        self.entry = name
+
+    def add_edge(self, src: str, dst: str) -> None:
+        self.edges[src] = dst
+
+    def compile(self) -> "_FakeStateGraph":
+        return self
+
+    async def ainvoke(self, state: dict) -> dict:
+        node = self.entry
+        while node != "__end__":
+            state = await self.nodes[node](state)
+            node = self.edges[node]
+        return state
+
+
+@pytest.fixture
+def agent_libs(monkeypatch):
+    """Real langchain_core/langgraph when installed, else minimal stand-ins."""
+    if not _real("langchain_core.messages"):
+        msgs = types.ModuleType("langchain_core.messages")
+        msgs.HumanMessage = msgs.SystemMessage = _FakeMessage
+        core = types.ModuleType("langchain_core")
+        core.messages = msgs
+        monkeypatch.setitem(sys.modules, "langchain_core", core)
+        monkeypatch.setitem(sys.modules, "langchain_core.messages", msgs)
+    if not _real("langgraph.graph"):
+        graph_mod = types.ModuleType("langgraph.graph")
+        graph_mod.StateGraph = _FakeStateGraph
+        graph_mod.END = "__end__"
+        lg = types.ModuleType("langgraph")
+        lg.graph = graph_mod
+        monkeypatch.setitem(sys.modules, "langgraph", lg)
+        monkeypatch.setitem(sys.modules, "langgraph.graph", graph_mod)
+
+
 def _load(rel: str, name: str):
     spec = importlib.util.spec_from_file_location(name, AGENTS / rel)
     assert spec and spec.loader
@@ -72,13 +138,17 @@ def test_response_text_normalises_every_shape(resp: Any, expected: str) -> None:
 
 
 def test_response_text_matches_langchain_text_property() -> None:
-    messages = pytest.importorskip("langchain_core.messages")
-    msg = messages.AIMessage(content=ANTHROPIC_BLOCKS)
+    """Parity with ``AIMessage.text`` where langchain_core is installed."""
+    if not _real("langchain_core.messages"):
+        assert llm.response_text(_Msg(ANTHROPIC_BLOCKS)) == EXPECTED
+        return
+    from langchain_core.messages import AIMessage  # type: ignore
+
+    msg = AIMessage(content=ANTHROPIC_BLOCKS)
     assert llm.response_text(msg) == msg.text == EXPECTED
 
 
-def test_writer_returns_text_for_anthropic_blocks(monkeypatch) -> None:
-    pytest.importorskip("langchain_core.messages")
+def test_writer_returns_text_for_anthropic_blocks(monkeypatch, agent_libs) -> None:
     chain = _load("writer/chain.py", "_writer_chain_under_test")
     fake = _FakeChatModel(_Msg(ANTHROPIC_BLOCKS))
     monkeypatch.setattr(chain, "build_chat_model", lambda: fake)
@@ -89,9 +159,7 @@ def test_writer_returns_text_for_anthropic_blocks(monkeypatch) -> None:
     assert len(fake.prompts) == 1
 
 
-def test_analyzer_returns_text_and_prompts_with_text(monkeypatch) -> None:
-    pytest.importorskip("langchain_core.messages")
-    pytest.importorskip("langgraph")
+def test_analyzer_returns_text_and_prompts_with_text(monkeypatch, agent_libs) -> None:
     graph = _load("analyzer/graph.py", "_analyzer_graph_under_test")
     fake = _FakeChatModel(_Msg(ANTHROPIC_BLOCKS))
     monkeypatch.setattr(graph, "build_chat_model", lambda: fake)
