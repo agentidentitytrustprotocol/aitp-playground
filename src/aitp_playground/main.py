@@ -28,6 +28,7 @@ from .hosting.loopback import AgentLoopback
 from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
 from .limits import RunLimiter, SpendLimits
+from .quota import select_store
 from .registry.service import RegistryService
 from .runner.engine import ScenarioRunner
 from .runner.store import build_run_store
@@ -119,11 +120,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store=run_store,
     )
 
+    quota_store = select_store(settings)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         sweep = asyncio.create_task(sweep_cp_webhooks(cp, settings, runner))
+        # Opens the quota pool now so the first LLM call doesn't pay for it.
+        # Never blocks startup: a down database just denies LLM calls.
+        await quota_store.start()
         yield
         sweep.cancel()
+        await quota_store.aclose()
         # Best-effort cleanup of any agent processes still alive
         for run_id in list(run_store.list_ids()):
             supervisor.kill_run(run_id)
@@ -139,6 +146,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.hosted = hosted
     app.state.spend_limits = SpendLimits(settings)
     app.state.run_limiter = RunLimiter.from_settings(settings)
+    app.state.quota_store = quota_store
     app.state.telemetry_token = telemetry_token
 
     install_handlers(app)

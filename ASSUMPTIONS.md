@@ -211,3 +211,19 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** keep the finally as the only normal release, plus a backstop: a slot held longer than `RUN_DEADLINE_SECONDS + 120` is reclaimed on the next reservation. A run cannot legitimately hold a slot that long (the deadline ends it, 120 s covers teardown).
 - **Blast radius if wrong:** a run whose teardown takes over 120 s past the deadline briefly lets a 4th run start. Remove the reclaim in one commit.
 - **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — a quota denial quotes the exceeded counter that resets last
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 3; decision 6 said "the tightest exceeded counter's resets_at")
+- **Assumed:** callers use `resets_at` as "when can I call again".
+- **Chose:** when several counters are exceeded, name the one whose window resets last (a spent month beats a spent day); ties keep the fixed counter order.
+- **Alternatives:** the earliest reset (promises a retry that will still be refused).
+- **Blast radius if wrong:** a different counter name/reset in the denial and run summary; one-line change in `quota/store.py:_deny`.
+- **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — quota store selection edge cases
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 3, decision 6)
+- **Assumed:** decision 6 only specified `auto`.
+- **Chose:** explicit `LLM_QUOTA_STORE=postgres` without `DATABASE_URL` ⇒ unavailable (deny all, WARNING); explicit `memory` on Railway is honoured with a WARNING (a deliberate operator opt-in, never a silent fallback); a store-unavailable denial carries `quota=quota_store_unavailable` with null `limit`/`resets_at`.
+- **Alternatives:** refuse to start on `postgres` without a URL; refuse `memory` on Railway.
+- **Blast radius if wrong:** an operator could opt into reset-on-deploy counting on Railway; logged loudly. Tighten in `select_store` in one commit.
+- **Status:** UNCONFIRMED

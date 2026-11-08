@@ -146,6 +146,9 @@ dependencies = [
   # otherwise only arrive transitively via the optional *-agents extras,
   # so agents crash with ModuleNotFoundError when those aren't installed.
   "cryptography>=49.0.0",
+  # LLM quota counters (src/aitp_playground/quota/store.py) in the dedicated
+  # playground Postgres. Imported lazily, only when DATABASE_URL is set.
+  "asyncpg>=0.31",
 ]
 
 [project.optional-dependencies]

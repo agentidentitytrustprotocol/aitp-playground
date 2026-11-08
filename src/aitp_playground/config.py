@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -115,6 +115,21 @@ class Settings(BaseSettings):
     run_rate_limit_window_seconds: int = Field(default=600, ge=1)
     max_concurrent_runs: int = Field(default=3, ge=1)
     run_deadline_seconds: float = Field(default=900.0, gt=0)
+    # LLM-call quotas (src/aitp_playground/quota/), charged per real LLM call
+    # unit before an agent does real provider work. Per subject IP (a trusted
+    # X-AITP-Client-IP) and global, per UTC calendar day and month. 0 refuses
+    # every real call (the agents fall back to their deterministic mock).
+    llm_quota_per_ip_per_day: int = Field(default=30, ge=0)
+    llm_quota_per_ip_per_month: int = Field(default=300, ge=0)
+    llm_quota_global_per_day: int = Field(default=1000, ge=0)
+    llm_quota_global_per_month: int = Field(default=10000, ge=0)
+    # Where the counters live. auto: postgres when DATABASE_URL is set; else
+    # memory off Railway, and `unavailable` (refuse every real call) on
+    # Railway, so a missing database never silently means "reset on deploy".
+    llm_quota_store: Literal["auto", "postgres", "memory", "unavailable"] = "auto"
+    # The dedicated playground Postgres (a Railway reference variable in
+    # prod). A credential: never logged, kept out of repr.
+    database_url: str = Field(default="", repr=False)
     # Output-token budget for one run, split evenly across the run's agents
     # and enforced inside each agent before every provider call
     # (`agents/base/llm.py`). A hosted agent gets the whole budget for its

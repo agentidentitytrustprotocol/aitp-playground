@@ -136,6 +136,12 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `RUN_RATE_LIMIT_WINDOW_SECONDS` | `600` | Sliding window for `RUN_RATE_LIMIT_PER_IP` |
 | `MAX_CONCURRENT_RUNS` | `3` | Runs in progress at once, service-wide; the next launch gets `429 max_concurrent_runs` with `Retry-After: 10`. A slot frees when the run ends (success, failure, cancel or deadline) |
 | `RUN_DEADLINE_SECONDS` | `900` | A run still going after this ends `failed` with `code: run_deadline_exceeded`, its agents torn down |
+| `LLM_QUOTA_PER_IP_PER_DAY` | `30` | Real LLM call units per trusted client IP (`X-AITP-Client-IP`) per UTC day. Over quota, the agent answers with its deterministic mock. `0` refuses every real call |
+| `LLM_QUOTA_PER_IP_PER_MONTH` | `300` | The same, per UTC calendar month |
+| `LLM_QUOTA_GLOBAL_PER_DAY` | `1000` | Real LLM call units across every caller per UTC day |
+| `LLM_QUOTA_GLOBAL_PER_MONTH` | `10000` | The same, per UTC calendar month |
+| `LLM_QUOTA_STORE` | `auto` | Where the quota counters live: `postgres`, `memory`, `unavailable` (refuse every real call), or `auto`: `postgres` when `DATABASE_URL` is set, else `memory` locally and `unavailable` on Railway |
+| `DATABASE_URL` | unset | The dedicated playground Postgres for the quota counters (a Railway reference variable in prod, not a Doppler key). The table `playground_llm_usage` is created on first connect. Never logged |
 | `RUN_TOKEN_BUDGET` | `40000` | Output-token budget per run, split across the run's agents and enforced in each agent before every provider call (`429` once spent). A hosted agent gets the whole budget for its lifetime. |
 | `LLM_MAX_TOKENS_PER_CALL` | `1024` | `max_tokens` cap on every single provider call |
 | `LOG_LEVEL` | `INFO` | Standard logging level |

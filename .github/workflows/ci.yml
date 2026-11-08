@@ -162,6 +162,23 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    services:
+      # Scratch database for tests/integration/test_quota_postgres.py (the
+      # LLM quota store on a real Postgres, same major as Railway's).
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: quota
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d quota"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PLAYGROUND_TEST_DATABASE_URL: postgresql://postgres:ci-only@127.0.0.1:5432/quota
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -190,5 +207,6 @@ jobs:
         # cross-origin handshake path and the loopback fail-closed guard.
         # test_stable_only_sdk.py re-runs tests/unit as if aitp-sdk were a
         # stable-only (no `experimental`) wheel (#117).
-        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py tests/integration/test_revocation_two_agents.py tests/integration/test_stable_only_sdk.py -v
+        # test_quota_postgres.py runs on the postgres service above.
+        run: AITP_E2E=1 uv run pytest tests/integration/test_runner.py tests/integration/test_federated_handshake.py tests/integration/test_revocation_two_agents.py tests/integration/test_stable_only_sdk.py tests/integration/test_quota_postgres.py -v
         timeout-minutes: 10
