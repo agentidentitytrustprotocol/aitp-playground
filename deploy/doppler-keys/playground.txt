@@ -1,0 +1,25 @@
+# Keys deploy/doppler-sync.sh manages on the Railway service aitp-playground
+# (project aitp-runner, environment production), sourced from Doppler
+# aitp-playground/prd. One name per line; '#' starts a comment.
+#
+# A key listed here but set on neither side is reported as "absent" and
+# skipped. A key Railway has that Doppler lacks stops the sync. Railway
+# variables not listed here are left alone; the script never deletes.
+# Never list RAILWAY_* platform variables or a Railway ${{...}} reference.
+
+# Secrets
+CP_API_KEY
+OPENAI_API_KEY
+PLAYGROUND_API_KEY
+ANTHROPIC_API_KEY
+
+# Config
+CP_BASE_URL
+LLM_PROVIDER
+OPENAI_MODEL
+ANTHROPIC_MODEL
+PLAYGROUND_BASE_URL
+# Docker build arg (Dockerfile). Inert while the service deploys the
+# prebuilt GHCR image instead of building from source; kept so a switch
+# back to a source build gets the same extras.
+INSTALL_EXTRAS

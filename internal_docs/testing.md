@@ -245,15 +245,26 @@ AITP_LLM_E2E=1 PLAYGROUND_URL=http://localhost:8000 \
 
 …or, more typically, inside the Dockerized stack — see [docker.md](docker.md).
 
+### When CI runs
+
+`ci.yml` runs on every pull request to `main`, weekly (Mondays 06:17 UTC) and on manual
+dispatch; it does not run on push to `main`. Branch protection is strict, so a PR's run
+already tested the exact tree that merges. The weekly run catches a direct admin push and
+drift of `aitp-verifier-py` HEAD (the JCS drift guard clones it). A newer push to a PR
+cancels that PR's older run; other runs are never cancelled once running, though a newer
+run replaces a pending one in the same group. Every
+job has a `timeout-minutes`. Measurements and the reasoning: [ci-cost.md](ci-cost.md),
+`DECISIONS.md` D-29.
+
 ### When the Dockerized e2e stack runs
 
 | Event | Runs? | Why |
 |-------|-------|-----|
 | Push to `main` | yes | standing regression check |
-| PR touching `uv.lock` | yes | the SDK pin moved — this is the cross-implementation check, and it has to happen **before** merge |
+| PR touching `uv.lock`, `Dockerfile`, `Dockerfile.cp-e2e` or `docker-compose.test.yml` | yes | the SDK pin or the stack definition moved — this is the cross-implementation check, and it has to happen **before** merge |
 | Any other PR | no | ~6 minutes and two sibling repo checkouts; `build-and-push` already validates the Dockerfile and `ci.yml` runs the unit suite |
 
-The filter is `uv.lock` alone: uv mirrors a declared specifier into the lock's
+The `sdk_pin` filter is `uv.lock` alone: uv mirrors a declared specifier into the lock's
 `requires-dist` metadata, so any dependency edit in `pyproject.toml` necessarily
 moves `uv.lock` too — while `[tool.ruff]` and the LLM extras, which live in the
 same file and change for unrelated reasons, do not.

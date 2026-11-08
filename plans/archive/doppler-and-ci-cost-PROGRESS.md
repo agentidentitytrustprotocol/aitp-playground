@@ -1,0 +1,40 @@
+# PROGRESS — doppler-and-ci-cost
+
+Plan: `plans/doppler-and-ci-cost.md`. Branch `chore/doppler-secrets`. Lock `.drive.lock` (gitignored).
+
+## Repo map
+- `src/aitp_playground/config.py` — pydantic `Settings`; every env var the service reads (`RAILWAY_PLATFORM_VARS` :12).
+- `agents/base/llm.py` — agents read `LLM_PROVIDER`, `OPENAI_*`, `ANTHROPIC_*` from the process env.
+- `Dockerfile:178-196` — `INSTALL_EXTRAS` build arg (set on Railway).
+- `.env.example` — local env template; `.env` gitignored (`.gitignore:37`).
+- `docs/getting-started.md:77-130` — Configure section + env table (checked by `tests/unit/test_config_env_table.py`).
+- `docs/README.md` — published docs map; `internal_docs/README.md` — contributor docs map.
+- `internal_docs/testing.md` — CI gating doc.
+- `.github/workflows/ci.yml` — lint / test matrix / test-experimental / integration; required-name warning :14-20.
+- `.github/workflows/docker.yml` — build-and-push (publish, do not touch) :51, changes :120, e2e :169.
+- `DECISIONS.md` — last entry D-27; `DEFERRED.md`, `ASSUMPTIONS.md` exist.
+- Reference: `/Users/Shared/agentcontextdistributionprotocol/acdp-playground/deploy/doppler-sync.sh` + `deploy/doppler-keys/playground.txt`.
+- Railway ids: project `70754f0b-c930-4433-a268-7b408e8230e2`, env production `72787d79-e3d4-4ec8-81fa-ffdc476ad376`, service `f321666f-c5c3-45cf-9669-5f837bfcff5c`.
+
+## Checkpoints
+- 2026-11-07 plan written.
+
+PR strategy: one PR (waves §5: one PR per unit; phases are small and share one purpose).
+Risk: P1 complex (prod Doppler write), P2 complex (network script), P3+P4 simple (batched gate).
+- 2026-11-07 P1 DONE — verdict PASS, round 1, Opus verifier (prod Doppler write = complex, gated solo). Gap round 1: PROGRESS checkpoint missing (bookkeeping, closed here).
+  - prd: 7 keys set by pipe (CP_API_KEY CP_BASE_URL INSTALL_EXTRAS LLM_PROVIDER OPENAI_API_KEY OPENAI_MODEL PLAYGROUND_BASE_URL); PLAYGROUND_API_KEY was already equal. 8/8 EQUAL to Railway; managed hash `690a601691b49038` (sha256 of `sort` output incl. trailing newline, first 16 hex) on both sides.
+  - dev: 16 keys from .env (count recorded), all equal by per-key sha256 prefix.
+  - stg: 0 keys. dev_personal: branch config of dev, inherits its 16 keys, no overrides.
+  - Railway: no write, no redeploy (latest deployment `4ba5e131-…` unchanged).
+  - Files: plans/doppler-and-ci-cost.md, PROGRESS.md. Next: P2.
+- 2026-11-07 P2 DONE — verdict PASS, 2 rounds, Opus verifier (network script on the prod path = complex, gated solo).
+  - Round 1 GAPS: value here-strings could spool to disk on bash <5.1 (medium); untested failure paths (GraphQL errors, service not found, Doppler failure, curl HTTP failure, missing allowlist); partial apply had no summary; Doppler re-read per key; auth header untested; newline values undocumented; help range and derived-from nits.
+  - Round 2 PASS; its two low nits (no summary when the post-apply read or the redeploy fails) closed with explicit `die` messages and a redeploy-failure test.
+  - Files: deploy/doppler-sync.sh, deploy/doppler-keys/playground.txt, tests/unit/test_doppler_sync.py (32 tests, pass under bash 5.3 and /bin/bash 3.2). shellcheck clean. Live dry run: 8 unchanged, ANTHROPIC_API_KEY/ANTHROPIC_MODEL absent, hash 690a601691b49038 match, exit 0. --apply never run (nothing to change).
+  - Next: P3+P4 batched gate (both simple).
+- 2026-11-07 P3+P4 DONE — verdict PASS (both), 2 rounds, Opus verifier (simple phases, batched gate, separate verdicts).
+  - Round 1 GAPS: P3 Medium, Doppler offered as a .env alternative though compose needs `env_file: .env`; Low: dev described as all keys, `shasum` not listed, D-28 here-string wording, pbpaste. P4 Low: cancellation evidence misattributed, savings not net of weekly runs (−19% → −17%), "never cancelled"/"every push" wording ignores pending-run replacement, `dependabot` event label, jq -r.
+  - Round 2 PASS; leftover nits (ASSUMPTIONS numbers, README/docker.yml "every push", script header shasum) fixed too.
+  - Files: docs/deployment.md (new), docs/README.md, docs/getting-started.md, README.md, .env.example, DECISIONS.md (D-28, D-29), ASSUMPTIONS.md, .github/workflows/ci.yml, .github/workflows/docker.yml, internal_docs/ci-cost.md (new), internal_docs/testing.md, internal_docs/README.md, deploy/doppler-sync.sh (header comment).
+  - Next: finalization.
+- 2026-11-07 Finalization — final Opus verify of the cumulative diff: PASS (round 1). Lows closed: test that Railway reads use `unrendered: true`; dev hash prefixes dropped from this log. Remaining lows accepted (untested env-not-found/non-object/read-back/config-file-token branches; no allowlist↔docs drift test). Full gate: unit+scenarios 966 passed, integration 2 passed / 18 skipped (AITP_E2E-gated, CI runs them), ruff + actionlint clean. Next: /ship (one draft PR).

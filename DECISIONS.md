@@ -690,3 +690,58 @@ and a `CA:FALSE` certificate can issue nothing.
 **Plain-HTTP federated stack removed.** Its hostnames are not loopback, so 0.25 refuses them
 with the opt-in on. TLS is the only federated path. `AITP_DIDWEB_INSECURE_HOSTS` went with it,
 which closes D-19.
+
+
+## D-28 — Doppler is the source of truth for the hosted service's variables
+**2026-11-07 · recorded**
+
+The Railway service `aitp-playground` (project `aitp-runner`, environment `production`) got
+its variables by hand in the Railway dashboard, with no record outside Railway. Doppler
+project `aitp-playground` is now the source of truth: `prd` holds every variable the service
+has, `dev` the local development set. `deploy/doppler-sync.sh` copies the allowlisted keys
+(`deploy/doppler-keys/playground.txt`) from `prd` into Railway. See `docs/deployment.md`.
+
+The script is the acdp-playground one (same template), with three deliberate changes:
+
+- **An `absent` status.** A listed key that is set on neither side is skipped, not refused.
+  That lets the allowlist name `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` before they have
+  values. A key Railway has and Doppler lacks is still refused, so drift is never silent.
+- **The Railway token stays out of argv.** It reaches `curl` as `-H @<(printf …)`, so it is
+  not visible in the process list.
+- **No here-strings for values, and one Doppler read.** Values reach `jq` through `printf` pipes (older
+  bash spools a here-string to a temp file; here-strings remain only for IDs and key names), and `--apply` writes the values the plan
+  compared, not a second read.
+
+The initial import copied the 7 Railway literals Doppler lacked into `prd` by pipe; all 8
+keys are hash-equal (managed hash `690a601691b49038`). No Railway variable changed and
+nothing redeployed. LLM key values are untouched; changing them is separate work.
+
+**Rejected: Doppler's Railway integration.** It syncs a whole config into the service, with
+no per-key allowlist, no dry run and no hash check before a write. The script manages only
+what the allowlist names, never deletes, and shows the plan first.
+
+
+## D-29 — One-time CI-cost pass
+**2026-11-07 · recorded**
+
+Measured over 30 days (241 runs): 1,235 billed minutes, $0 because the repo is public. The
+changes cut about 17% (to ~1,030 billed min, net of the new weekly runs) and stop a newer merge from cancelling an
+in-flight image publish. Measurement, reasoning and the re-measure method:
+`internal_docs/ci-cost.md`.
+
+- **`ci.yml` runs on pull requests, weekly and on dispatch, not on push to `main`.** Branch
+  protection is `strict: true`, so the PR run already tested the merged tree, and nothing
+  reads CI status on `main`. The weekly run keeps the signal for a direct admin push and for
+  `aitp-verifier-py` drift.
+- **`docker.yml` `changes` is PR-only.** Its outputs are read only by the PR branch of
+  `e2e`'s `if:`, which starts with `always()`, so `e2e` still runs on push to `main`.
+- **Concurrency cancels superseded PR runs only.** Before, `cancel-in-progress: true`
+  applied on `main` too. Now runs on `main` queue (one running, one pending, the newest
+  pending wins, so in a burst of merges a middle commit can get no run). **This changes how `build-and-push` is scheduled** even though its job body
+  is untouched: a running publish is never cancelled, and the newest image is tagged
+  `latest` last. Rejected: grouping by SHA, which would let publishes race on `latest`.
+- **Every job but `build-and-push` has `timeout-minutes`**, at least 4× its longest run.
+- **Not done:** smaller runners (free on a public repo), a docs-only skip (unit tests read the
+  docs), a merge-queue path filter (there is no merge queue; the recipe is in the doc).
+
+No job `name:` or matrix value changed, so every required context still reports (D-13).

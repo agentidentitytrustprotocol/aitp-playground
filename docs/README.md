@@ -17,6 +17,7 @@ below.
 | [aitp-integration.md](aitp-integration.md) | You want to know where the SDK is called, how identity/handshake/TCT/revocation work end-to-end, and the draft/extension surfaces (OIDC, renewal, bundles, pinning, multi-hop). |
 | [observability.md](observability.md) | You want events, the SSE stream, narration, Prometheus metrics, the dashboard, or run persistence. |
 | [control-plane.md](control-plane.md) | You're wiring the optional Control Plane — discovery, enrollment, revocation, webhooks, trust anchors, observability proxies. |
+| [deployment.md](deployment.md) | You're changing a variable on the hosted playground — the Railway service, Doppler as the source of truth, and the sync script. |
 | [capabilities.md](capabilities.md) | You want to know which SDK features the installed wheel exposes, how scenarios degrade, and the conformance harness. |
 
 ### Contributor & build docs (in the repo, not on the docs site)

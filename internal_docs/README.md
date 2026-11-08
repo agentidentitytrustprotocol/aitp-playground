@@ -18,6 +18,7 @@ drives the protocol — see [`../docs/`](../docs/README.md).
 | [llm-providers.md](llm-providers.md) | OpenAI/Anthropic selection, the stub fallback, async behavior, adding a provider. |
 | [docker.md](docker.md) | The multi-stage Dockerfile, the compose files, and the Dockerized e2e build. |
 | [testing.md](testing.md) | Unit / integration / protocol-e2e / live-LLM tiers and how each is gated. |
+| [ci-cost.md](ci-cost.md) | What CI costs (measured), what was cut and why, the merge-queue recipe, and how to re-measure. |
 
 ## Why split this out
 
