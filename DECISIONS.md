@@ -831,13 +831,16 @@ reversible; Q1–Q3 are UNCONFIRMED in ASSUMPTIONS.md until `/reconcile`.
   is `X.Y.Z` and above every other tag (an existing tag must point at the commit, which makes a rerun
   idempotent), the commit is on main, `sha-<short>` carries that commit as its revision label, and the
   `docker-compose e2e` and `Build & push playground image` checks concluded `success`. It waits up to 35 min for
-  a build in progress. ci.yml has no push trigger (D-29); strict branch protection covers its checks.
+  a build in progress. Last, the Railway token must read the service's deployments (`check-latest.sh
+  --print-deployment-id`), so a revoked token refuses before `:latest` moves. ci.yml has no push trigger (D-29);
+  strict branch protection covers its checks. The e2e job builds its own stack from the same commit and
+  Dockerfile, so the released digest is the one built on main, not a digest e2e ran.
 - **Verification:** the new deployment must end `SUCCESS`; then Railway's `meta.imageDigest` must equal the
   `:latest` index digest or its linux/amd64 manifest, or, if Railway does not report it, `/healthz` `revision`
   must equal `:latest`'s revision label. Neither fails the release. For that fallback the image now carries
   `GIT_SHA` as `AITP_PLAYGROUND_REVISION`. Checked 2026-11-08: the project token can read `meta.imageDigest`.
 - **Rollback:** a dispatch with `rollback_to: X.Y.Z` retags `latest` to that release's digest, redeploys,
-  verifies, then marks that GitHub release Latest.
+  verifies, then marks that GitHub release Latest. The gate refuses a target tag with no GitHub release.
 - **Token scope:** a dedicated Railway project token, `gha-aitp-playground-release`, scoped to aitp-runner /
   production (the narrowest scope Railway offers). Its source of truth is Doppler `aitp-playground/prd`
   `RAILWAY_PLAYGROUND_TOKEN`, outside the sync allowlist. It is mirrored into the GitHub Environment

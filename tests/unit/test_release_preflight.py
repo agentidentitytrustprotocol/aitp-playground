@@ -56,7 +56,8 @@ DOCKER_STUB = textwrap.dedent(
     """
 )
 
-# `gh api repos/<repo>/commits/<sha>/check-runs...` prints $STUB_CHECKS.
+# `gh api repos/<repo>/commits/<sha>/check-runs...` prints $STUB_CHECKS;
+# `gh api repos/<repo>/releases/tags/<tag>` succeeds only for a tag in $STUB_RELEASES.
 GH_STUB = textwrap.dedent(
     """\
     #!{python}
@@ -64,7 +65,16 @@ GH_STUB = textwrap.dedent(
     argv = sys.argv[1:]
     with open(os.environ["STUB_LOG"], "a") as log:
         log.write(json.dumps({{"tool": "gh", "argv": argv}}) + "\\n")
-    if argv[0] != "api" or "/check-runs" not in argv[1]:
+    if argv[0] != "api":
+        sys.exit(97)
+    if "/releases/tags/" in argv[1]:
+        tag = argv[1].rsplit("/", 1)[1]
+        if tag not in json.loads(os.environ.get("STUB_RELEASES", "[]")):
+            print("gh: Not Found (HTTP 404)", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps({{"tag_name": tag}}))
+        sys.exit(0)
+    if "/check-runs" not in argv[1]:
         sys.exit(97)
     print(os.environ.get("STUB_CHECKS", '{{"check_runs": []}}'))
     """
@@ -177,6 +187,9 @@ def _run(
         "RAILWAY_SERVICE_ID": "svc",
         "WAIT_TIMEOUT_SECONDS": "0",
         "POLL_SECONDS": "0",
+        "STUB_RELEASES": json.dumps(["v0.2.0"]),
+        # Step 6 seam: the token must be in the environment; prints a deployment id.
+        "RAILWAY_TOKEN_CHECK_CMD": 'test -n "$RAILWAY_TOKEN" && echo dep-1',
     }
     env.update(env_over)
     return subprocess.run(
@@ -251,9 +264,11 @@ def test_rollback_happy_path(repo: dict) -> None:
     assert out["commit"] == repo["old"]
     assert out["source_ref"] == f"{IMAGE}:0.2.0"
     assert out["source_digest"] == _digest("b")
-    assert not [
-        c for c in _calls(repo) if c["tool"] == "gh"
-    ]  # rollback skips the checks
+    gh_calls = [c for c in _calls(repo) if c["tool"] == "gh"]
+    # Rollback asks for the target's GitHub release and skips the check-runs.
+    assert [c["argv"][1] for c in gh_calls] == [
+        "repos/agentidentitytrustprotocol/aitp-playground/releases/tags/v0.2.0"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -390,3 +405,98 @@ def test_rollback_refuses_missing_image_without_waiting(repo: dict) -> None:
     )
     assert proc.returncode == 1
     assert "not in GHCR yet" in proc.stderr
+
+
+def test_rollback_refuses_tag_without_github_release(repo: dict) -> None:
+    images = {f"{IMAGE}:0.2.0": {"digest": _digest("b"), "revision": repo["old"]}}
+    proc = _run(
+        repo,
+        images=images,
+        RELEASE_MODE="rollback",
+        VERSION="0.2.0",
+        COMMIT="",
+        STUB_RELEASES="[]",
+    )
+    assert proc.returncode == 1
+    assert "has no GitHub release" in proc.stderr
+    assert not [c for c in _calls(repo) if c["tool"] == "docker"]
+
+
+@pytest.mark.parametrize("cmd", ["false", "true", "echo dep-1; exit 3"])
+def test_refuses_when_railway_token_cannot_read_deployments(
+    repo: dict, cmd: str
+) -> None:
+    # A failing check, or one that answers with no deployment id, refuses before any retag.
+    proc = _run(repo, RAILWAY_TOKEN_CHECK_CMD=cmd)
+    assert proc.returncode == 1
+    assert "RAILWAY_TOKEN cannot read the service's deployments" in proc.stderr
+    assert not proc.stdout.strip()
+    _assert_never_retags_or_leaks(repo, proc)
+
+
+def test_rollback_also_checks_the_railway_token(repo: dict) -> None:
+    images = {f"{IMAGE}:0.2.0": {"digest": _digest("b"), "revision": repo["old"]}}
+    proc = _run(
+        repo,
+        images=images,
+        RELEASE_MODE="rollback",
+        VERSION="0.2.0",
+        COMMIT="",
+        RAILWAY_TOKEN_CHECK_CMD="false",
+    )
+    assert proc.returncode == 1
+    assert "RAILWAY_TOKEN cannot read" in proc.stderr
+
+
+def test_default_token_check_uses_check_latest_without_argv_token(
+    repo: dict, tmp_path: Path
+) -> None:
+    """Unset seam: preflight calls check-latest.sh --print-deployment-id from its own dir."""
+    rel = tmp_path / "release"
+    rel.mkdir()
+    shutil.copy(SCRIPT, rel / "preflight.sh")
+    stub = rel / "check-latest.sh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$*" >>"$STUB_LOG.cl"\n'
+        '[ -n "$RAILWAY_TOKEN" ] && echo dep-9\n'
+    )
+    stub.chmod(0o755)
+    env = {k: v for k, v in os.environ.items()}
+    proc = subprocess.run(
+        ["bash", str(rel / "preflight.sh")],
+        cwd=repo["work"],
+        env={
+            **env,
+            "PATH": f"{repo['bin']}{os.pathsep}{os.environ['PATH']}",
+            "STUB_LOG": str(repo["log"]),
+            "STUB_IMAGES": json.dumps(
+                {
+                    f"{IMAGE}:sha-{repo['head'][:7]}": {
+                        "digest": _digest("a"),
+                        "revision": repo["head"],
+                    }
+                }
+            ),
+            "STUB_CHECKS": _checks(),
+            "GITHUB_OUTPUT": str(repo["out"]),
+            "VERSION": "0.3.0",
+            "COMMIT": repo["head"],
+            "RAILWAY_TOKEN": TOKEN,
+            "RAILWAY_PROJECT_ID": "proj",
+            "RAILWAY_ENVIRONMENT_ID": "env",
+            "RAILWAY_SERVICE_ID": "svc",
+            "WAIT_TIMEOUT_SECONDS": "0",
+            "POLL_SECONDS": "0",
+            "RELEASE_MODE": "release",
+            "RELEASE_EVENT": "dispatch",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert Path(str(repo["log"]) + ".cl").read_text().split() == [
+        "--print-deployment-id"
+    ]
+    assert TOKEN not in proc.stdout + proc.stderr

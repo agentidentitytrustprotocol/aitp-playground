@@ -38,7 +38,9 @@ enough for many demos, and it's the largest single factor in build time.
 `docker.yml` builds `ghcr.io/agentidentitytrustprotocol/aitp-playground`
 (linux/amd64, `INSTALL_EXTRAS=all-agents`, `AITP_SDK_SOURCE=pypi-src`).
 Releases never rebuild: `release.yml` retags an image `docker.yml` already
-built, so a release tag has the same digest as the image that passed e2e
+built, so a release tag has the digest of the `sha-<short>` image built on
+`main`. The e2e job builds its own stack from that same commit and
+Dockerfile, and a release requires both jobs to have succeeded
 ([deployment.md § Releasing](deployment.md#releasing), DECISIONS D-33).
 
 | Tag | Set by | Moves when |

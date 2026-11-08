@@ -24,8 +24,9 @@ variable ships config; most of this page is about that.
 ## Releasing
 
 A release is a `vX.Y.Z` tag whose image is the **same digest** as the
-`sha-<short>` image `docker.yml` built and tested on `main`. Nothing is
-rebuilt. [`.github/workflows/release.yml`](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/.github/workflows/release.yml)
+`sha-<short>` image `docker.yml` built on `main`. Nothing is rebuilt. (The
+e2e job builds its own stack from the same commit and Dockerfile; the gate
+requires it to have succeeded.) [`.github/workflows/release.yml`](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/.github/workflows/release.yml)
 does it in one job:
 
 1. **Gate** ([`scripts/release/preflight.sh`](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/scripts/release/preflight.sh)).
@@ -34,7 +35,9 @@ does it in one job:
    holds `sha-<short>` with that commit as its revision label, and the
    `docker-compose e2e` and `Build & push playground image` checks on the
    commit concluded `success`. It waits up to 35 minutes for a main build
-   still in progress. Nothing is retagged before it passes.
+   still in progress. Last, it checks that the Railway token can read the
+   service's deployments, so a revoked or mis-scoped token refuses here.
+   Nothing is retagged before it passes.
 2. **Promote.** `docker buildx imagetools create` tags that digest `X.Y.Z`,
    `X.Y` and `latest`, then checks that all four tags resolve to it.
 3. **Tag and release.** It creates the tag (when dispatched) and a GitHub
@@ -73,8 +76,8 @@ Every release keeps its `X.Y.Z` tag, so a rollback re-points `latest`:
 gh workflow run release.yml -f rollback_to=0.2.0
 ```
 
-It checks that `v0.2.0` exists on `main` and that GHCR's `0.2.0` carries that
-commit, retags `latest` to that digest, redeploys, verifies, and then marks
+It checks that `v0.2.0` exists on `main`, has a GitHub release, that GHCR's
+`0.2.0` carries that commit, and that the Railway token works. Then it retags `latest` to that digest, redeploys, verifies, and then marks
 the `v0.2.0` GitHub release Latest. The invariant stays true during a
 rollback because it compares against the release GitHub marks Latest, not
 the highest tag. The next forward release needs a version greater than the
@@ -250,3 +253,16 @@ dry run: nothing to change
 The hash is the first 16 hex characters of the sha256 of the managed keys'
 sorted `KEY=VALUE` lines, so two people can compare it without seeing a
 value.
+
+After a deploy, run `uv run python scripts/console_e2e.py lockdown`. It is
+keyless and read-only. It checks that the playground returns 401 for keyless
+`/runs`, `/scenarios`, `/metrics` and `POST /runs`, that the control plane
+returns 401 for `/api/events/history` and `/api/metrics`, and that the
+console refuses its admin route anonymously. `uv run python
+scripts/console_e2e.py list` confirms the console proxy serves the live
+scenario list; it launches nothing. `matrix --auth anon|signed-in`,
+`ratelimit` and `quota` launch real runs through the console, so they cost
+LLM money and rate-limit budget. Run them only as part of a planned E2E pass
+(see `internal_docs/testing.md`, "Railway E2E through the console").
+Evidence is JSONL under `$TMPDIR`, and the exit status is non-zero on any
+failed assertion.

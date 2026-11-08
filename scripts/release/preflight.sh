@@ -15,9 +15,12 @@
 #      conclude success? ci.yml has no push-to-main trigger (D-29); its checks are covered by
 #      strict branch protection plus "the commit is on main".
 # Steps 4 and 5 wait (bounded) for the main build to finish; anything but success refuses at once.
+#   6. Can RAILWAY_TOKEN actually read the service's deployments? A revoked or mis-scoped token
+#      must refuse here, not after :latest has moved (check-latest.sh --print-deployment-id).
 #
-# Rollback mode (RELEASE_MODE=rollback) re-points :latest at an existing release, so it asks only
-# that tag vVERSION exists on main and that GHCR's VERSION image carries that commit's revision.
+# Rollback mode (RELEASE_MODE=rollback) re-points :latest at an existing release, so it asks that
+# tag vVERSION exists on main, has a GitHub release (so the rollback can mark it Latest), that
+# GHCR's VERSION image carries that commit's revision, and step 6.
 #
 # Environment (all inputs; nothing is read from argv):
 #   RELEASE_MODE          release (default) | rollback
@@ -30,6 +33,7 @@
 #   MAIN_REF              default origin/main
 #   REQUIRED_CHECKS       newline-separated check-run names (default: the two docker.yml jobs)
 #   WAIT_TIMEOUT_SECONDS  default 2100 (35 min);  POLL_SECONDS default 30
+#   RAILWAY_TOKEN_CHECK_CMD  test seam: a shell command run instead of step 6's check-latest.sh call
 #
 # Needs git, jq, gh (authenticated), docker buildx. Tested with PATH stubs in
 # tests/unit/test_release_preflight.py.
@@ -87,6 +91,8 @@ if [ "$RELEASE_MODE" = rollback ]; then
   [ -n "$existing" ] || refuse "rollback target $TAG is not a tag"
   [ -z "$COMMIT" ] || [ "$COMMIT" = "$existing" ] || refuse "COMMIT $COMMIT is not $TAG's commit $existing"
   COMMIT="$existing"
+  gh api "repos/$REPO/releases/tags/$TAG" >/dev/null 2>&1 \
+    || refuse "rollback target $TAG has no GitHub release (the rollback marks that release Latest)"
   prev_tag=""
 else
   [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || refuse "COMMIT must be a full 40-hex sha, got '$COMMIT'"
@@ -156,6 +162,15 @@ while :; do
   say "waiting: $waiting"
   sleep "$POLL_SECONDS"
 done
+
+# ── 6. the Railway token works (last, so a bounded wait cannot outlive the answer) ─────
+# The token travels in the environment only; check-latest.sh reads it into a header, never argv.
+if [ -n "${RAILWAY_TOKEN_CHECK_CMD:-}" ]; then
+  deployment_id="$(bash -c "$RAILWAY_TOKEN_CHECK_CMD" 2>/dev/null)" || deployment_id=""
+else
+  deployment_id="$("$(dirname "$0")/check-latest.sh" --print-deployment-id 2>/dev/null)" || deployment_id=""
+fi
+[ -n "$deployment_id" ] || refuse "RAILWAY_TOKEN cannot read the service's deployments (revoked, expired or wrong scope?)"
 
 say "ok: $RELEASE_MODE $TAG at $COMMIT, source $source_ref = $source_digest"
 out="mode=$RELEASE_MODE

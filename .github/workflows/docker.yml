@@ -33,7 +33,9 @@ name: Docker
 
 # No `v*` tag trigger: a release does not rebuild. release.yml retags the
 # main-built `sha-<short>` image to X.Y.Z / X.Y / latest, so the release digest
-# is the digest that passed e2e here (DECISIONS.md D-33).
+# is the digest built here. The e2e job builds its own stack from the same
+# commit and Dockerfile; the release gate requires both jobs to succeed on
+# that commit (DECISIONS.md D-33).
 on:
   push:
     branches: [main]
