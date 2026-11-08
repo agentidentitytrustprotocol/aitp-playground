@@ -207,3 +207,69 @@ def test_researcher_permit_branching(monkeypatch, load_main, handler, cap,
 def rec_note() -> str:
     import llm
     return llm.MOCK_NOTE
+
+
+# --- llm.complete metadata: capability / provider / model / stub ----------------
+
+def _complete(rec: _Recorder) -> dict[str, Any]:
+    done = [f for t, f in rec.events if t == "llm.complete"]
+    assert len(done) == 1
+    return done[0]
+
+
+def _run_agent(monkeypatch, load_main, agent: str, *, real: bool, permit: bool,
+               handler: str = "do_research") -> _Recorder:
+    """Run one agent's handler with its builder stubbed; return the recorder."""
+    if agent == "writer":
+        return _writer(monkeypatch, load_main, real=real, permit=permit)[1]
+    if agent == "analyzer":
+        return _analyzer(monkeypatch, load_main, real=real, permit=permit)[1]
+    main = load_main("researcher", ["research.query", "research.deep"])
+    rec = _Recorder(permit)
+    _wire(monkeypatch, main, rec, real=real)
+    monkeypatch.setattr(main, "build_crew",
+                        lambda inputs, *, use_llm: _RealCrew() if use_llm else _StubCrew())
+    asyncio.run(getattr(main, handler)("topic"))
+    return rec
+
+
+_AGENT_CAPS = [("writer", "write.content", "do_research"),
+               ("analyzer", "analyze.data", "do_research"),
+               ("researcher", "research.query", "do_research"),
+               ("researcher", "research.deep", "do_deep_research")]
+
+
+@pytest.mark.parametrize("agent,cap,handler", _AGENT_CAPS)
+@pytest.mark.parametrize("real,permit", [(False, True), (True, False)])
+def test_llm_complete_marks_the_stub(monkeypatch, load_main, agent, cap, handler,
+                                     real, permit):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+    rec = _run_agent(monkeypatch, load_main, agent, real=real, permit=permit, handler=handler)
+    done = _complete(rec)
+    assert done["stub"] is True
+    assert done["provider"] is None and done["model"] is None
+    assert done["capability"] == cap
+    # Additive: the existing fields are untouched.
+    assert "task" in done and "notes" in done
+
+
+@pytest.mark.parametrize("agent,cap,handler", _AGENT_CAPS)
+def test_llm_complete_names_the_real_provider(monkeypatch, load_main, agent, cap, handler):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test-model")
+    rec = _run_agent(monkeypatch, load_main, agent, real=True, permit=True, handler=handler)
+    done = _complete(rec)
+    assert (done["stub"], done["provider"], done["model"], done["capability"]) == (
+        False, "anthropic", "claude-test-model", cap)
+    assert "test-key-not-real" not in json.dumps(rec.events)
+
+
+def test_llm_complete_default_openai_model(monkeypatch, load_main):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key-not-real")
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    done = _complete(_run_agent(monkeypatch, load_main, "writer", real=True, permit=True))
+    assert done["provider"] == "openai" and done["model"] == "gpt-4o-mini"
+    assert done["stub"] is False

@@ -143,19 +143,89 @@ def test_expectation_sdk_unavailable_and_allowlist():
     assert fi.statuses == {"success"} and fi.llm is False and "allowlist" in fi.reason
 
 
+def _exp(caps=("research.query",), **kw):
+    return ce.Expectation(ref="r", statuses=frozenset({"success"}), llm=True, inputs={},
+                          llm_capabilities=list(caps), **kw)
+
+
+OK_RUN = {"status": "success", "llm_quota_exceeded": False, "llm_calls_on_mock": 0}
+
+
+def _checks(run, events, exp):
+    return {n: (ok, d) for n, ok, d in ce.classify_outcome(run, events, exp)}
+
+
 def test_classify_outcome_pass_and_each_failure():
-    exp = ce.Expectation(ref="r", statuses=frozenset({"success"}), llm=True, inputs={})
-    ok_events = [{"type": "llm.started"}, {"type": "llm.complete"}, {"type": "run.complete"}]
-    run = {"status": "success", "llm_quota_exceeded": False, "llm_calls_on_mock": 0}
-    assert all(ok for _, ok, _ in ce.classify_outcome(run, ok_events, exp))
+    exp = _exp()
+    ok_events = [{"type": "llm.started"}, _real("research.query"), {"type": "run.complete"}]
+    assert all(ok for _, ok, _ in ce.classify_outcome(OK_RUN, ok_events, exp))
 
     bad_run = {"status": "failed", "llm_quota_exceeded": True, "llm_calls_on_mock": 4}
     bad = {n: ok for n, ok, _ in ce.classify_outcome(
         bad_run, [{"type": "llm.quota_exceeded"}], exp)}
-    assert not any(bad.values())
-    assert set(bad) == {"terminal_status", "llm.started present", "llm.complete present",
-                        "no llm.quota_exceeded", "llm_quota_exceeded false",
-                        "llm_calls_on_mock == 0"}
+    assert {n for n, ok in bad.items() if not ok} == {
+        "terminal_status", "llm.started present", "real llm.complete for research.query",
+        "no llm.quota_exceeded", "llm_quota_exceeded false", "llm_calls_on_mock == 0"}
+
+
+def test_classify_outcome_fails_on_unexpected_status_despite_success():
+    # The runner records a designed rejection that came back wrong and still
+    # ends the run success (runner/engine.py probe steps).
+    events = [{"type": "llm.started"}, _real("research.query"),
+              {"type": "step.unexpected_status", "step_id": "probe-1"}]
+    c = _checks(OK_RUN, events, _exp())
+    assert c["terminal_status"][0] is True
+    assert c["no step.unexpected_status"] == (False, {"step_ids": ["probe-1"]})
+
+
+def test_classify_outcome_fails_on_probe_matched_false():
+    events = [{"type": "llm.started"}, _real("research.query"),
+              {"type": "step.complete", "step_id": "deny",
+               "result": {"status_code": 200, "expected_status": 403, "matched": False}},
+              {"type": "step.access_denied", "step_id": "top", "matched": False},
+              {"type": "step.complete", "step_id": "fine", "result": {"matched": True}}]
+    ok, detail = _checks(OK_RUN, events, _exp())["no probe with matched=false"]
+    assert ok is False and detail["step_ids"] == ["deny", "top"]
+
+
+def test_real_llm_is_asserted_per_capability():
+    exp = _exp(caps=("research.query", "write.content", "research.query"))
+    events = [{"type": "llm.started"}, _real("research.query"),
+              {"type": "llm.complete", "capability": "write.content", "provider": None,
+               "model": None, "stub": True}]
+    c = _checks(OK_RUN, events, exp)
+    assert c["real llm.complete for research.query"][0] is True
+    ok, detail = c["real llm.complete for write.content"]
+    assert ok is False and detail["reason"] == "every llm.complete for it ran on the stub"
+    # Distinct capabilities: research.query is checked once.
+    assert sum(1 for n in c if n.startswith("real llm.complete")) == 2
+
+
+def test_real_llm_missing_capability_is_named():
+    c = _checks(OK_RUN, [{"type": "llm.started"}, _real("research.query")],
+                _exp(caps=("research.query", "analyze.data")))
+    ok, detail = c["real llm.complete for analyze.data"]
+    assert ok is False and detail["reason"] == "no llm.complete for analyze.data"
+
+
+def test_real_llm_fails_clearly_when_deploy_predates_stub_field():
+    events = [{"type": "llm.started"}, {"type": "llm.complete", "task": "research"}]
+    ok, detail = _checks(OK_RUN, events, _exp())["real llm.complete for research.query"]
+    assert ok is False and detail["reason"] == ce.PREDATES_STUB_FIELD
+    assert "predates" in ce.PREDATES_STUB_FIELD
+
+
+def test_sdk_unavailable_requires_the_exact_failure_code():
+    exp = ce.expectation_for("x/y@1", _detail([{"capability": "write.content"}],
+                                              sdk_available=False))
+    assert exp.failure_code == "sdk_feature_unavailable"
+    failed = {"status": "failed"}
+    good = _checks(failed, [{"type": "run.failed", "code": "sdk_feature_unavailable"}], exp)
+    assert all(ok for ok, _ in good.values())
+    other = _checks(failed, [{"type": "run.failed", "code": "inputs_invalid"}], exp)
+    assert other["run.failed code = sdk_feature_unavailable"] == (
+        False, {"run_failed_codes": ["inputs_invalid"]})
+    assert other["terminal_status"][0] is True
 
 
 def test_classify_quota_outcome_and_badge_text():
@@ -184,6 +254,12 @@ def test_scrub_removes_keys_bearer_password_and_sensitive_fields():
     for leaked in (PASSWORD, "sk-proj-abcDEF123456", "eyJhbGciOi", "Zm9v", "v1.x", "pk_live"):
         assert leaked not in out
     assert "ok" in out and ce.REDACTED in out
+
+
+def test_scrub_sk_needs_word_boundary_and_length():
+    text = "task-abcd risk-assessment desk-lamp-0123456789abcdef sk-short"
+    assert ce.scrub(text) == text
+    assert ce.scrub("key=sk-proj-0123456789abcdef!") == f"key=sk-{ce.REDACTED}!"
 
 
 def test_evidence_file_never_contains_password(tmp_path):
@@ -231,8 +307,14 @@ DETAILS = {
         {"required": ["document"], "properties": {"document": {"type": "string",
                                                                "default": "Draft"}}}),
 }
-GOOD_EVENTS = [{"type": "run.started"}, {"type": "llm.started"}, {"type": "llm.complete"},
-               {"type": "run.complete"}]
+def _real(cap, **kw):
+    """An agent's ``llm.complete`` for a real provider call (agents/base/llm.py llm_meta)."""
+    return {"type": "llm.complete", "capability": cap, "provider": "openai",
+            "model": "gpt-4o-mini", "stub": False, **kw}
+
+
+GOOD_EVENTS = [{"type": "run.started"}, {"type": "llm.started"},
+               _real("research.query"), _real("write.content"), {"type": "run.complete"}]
 
 
 def _sse(events, end=True):
@@ -339,6 +421,25 @@ def test_follow_sse_transport_error_falls_back_to_polling():
     assert res.polled and "ReadTimeout" in res.sse_error and res.run["status"] == "success"
 
 
+def test_poll_honours_the_deadline_through_429s():
+    t = [0.0]
+    sleeps: list[float] = []
+
+    def sleep(s):
+        sleeps.append(s)
+        t[0] += s
+
+    def handler(req):
+        return httpx.Response(429, headers={"Retry-After": "30"},
+                              json={"code": "CONSOLE_RATE_LIMITED", "retryAfterSeconds": 30})
+
+    client = ce.ConsoleClient(CONSOLE, transport=httpx.MockTransport(handler),
+                              sleep=sleep, clock=lambda: t[0])
+    st = client.poll_until_terminal(RUN_ID, interval=5, deadline=100)
+    assert st is None
+    assert t[0] == 100 and sleeps == [30, 30, 30, 10]
+
+
 # --- whole modes --------------------------------------------------------------
 
 def _main(argv, fake, tmp_path, reader=lambda: PASSWORD):
@@ -377,6 +478,97 @@ def test_matrix_fails_on_quota_fallback(tmp_path):
     assert rc == 1
     failed = {r["name"] for r in recs if r.get("ok") is False}
     assert any(n.endswith("llm_calls_on_mock == 0") for n in failed)
+
+
+def _failing(fake, *, path_pred, error):
+    """Wrap ``fake``: requests matching ``path_pred`` get ``error`` (a status or exception)."""
+    def handler(req):
+        if path_pred(req):
+            if isinstance(error, int):
+                return httpx.Response(error, text="upstream down")
+            raise error("boom", request=req)
+        return fake(req)
+    return handler
+
+
+@pytest.mark.parametrize("what,pred,error", [
+    ("scenario detail 503",
+     lambda r: r.url.path.endswith("research-and-write@1.0.0"), 503),
+    ("scenario detail transport",
+     lambda r: r.url.path.endswith("research-and-write@1.0.0"), httpx.ConnectError),
+    ("launch transport",
+     lambda r: r.method == "POST" and r.url.path == "/api/playground/runs"
+     and b"research-and-write" in r.content, httpx.ReadTimeout),
+])
+def test_matrix_one_bad_ref_fails_it_and_continues(tmp_path, what, pred, error):
+    fake = FakeConsole()
+    rc, recs, _, _ = _main(["matrix"], _failing(fake, path_pred=pred, error=error), tmp_path)
+    assert rc == 1, what
+    failed = [r for r in recs if r.get("ok") is False]
+    assert len(failed) == 1 and SCENARIOS[0]["ref"] in failed[0]["name"]
+    assert failed[0]["reason"]
+    # The second ref still ran and passed.
+    assert [b["scenario_ref"] for b in fake.launched] == [SCENARIOS[1]["ref"]]
+    assert any(r.get("ok") and r["name"].startswith(SCENARIOS[1]["ref"]) for r in recs)
+    assert recs[-1]["kind"] == "end" and recs[-1]["failures"] == 1
+
+
+def test_matrix_final_run_fetch_5xx_fails_that_ref_only(tmp_path):
+    fake = FakeConsole()
+    calls = {"n": 0}
+
+    def pred(req):
+        if req.method == "GET" and req.url.path == f"/api/playground/runs/{RUN_ID}":
+            calls["n"] += 1
+            return calls["n"] == 1
+        return False
+
+    rc, recs, _, _ = _main(["matrix"], _failing(fake, path_pred=pred, error=502), tmp_path)
+    assert rc == 1 and len(fake.launched) == 2
+    (failed,) = [r for r in recs if r.get("ok") is False]
+    assert failed["name"].endswith("run followed") and "HTTP 502" in failed["reason"]
+    assert failed["run_id"] == RUN_ID
+    assert recs[-1]["kind"] == "end"
+
+
+def test_matrix_scenario_list_5xx_is_a_failure_not_a_traceback(tmp_path):
+    fake = FakeConsole()
+    handler = _failing(fake, path_pred=lambda r: r.url.path == "/api/playground/scenarios",
+                       error=500)
+    rc, recs, _, _ = _main(["matrix"], handler, tmp_path)
+    assert rc == 1 and fake.launched == []
+    assert recs[-1]["kind"] == "end"
+
+
+def test_quota_transport_error_still_writes_end(tmp_path):
+    fake = FakeConsole()
+    handler = _failing(fake, path_pred=lambda r: r.url.path.startswith(
+        "/api/playground/scenarios/"), error=httpx.ConnectError)
+    rc, recs, _, _ = _main(["quota"], handler, tmp_path)
+    assert rc == 1 and fake.launched == []
+    assert recs[-1]["kind"] == "end" and recs[-1]["failures"] == 1
+
+
+@pytest.mark.parametrize("raw", ["{not json", "[1, 2]"])
+def test_bad_inputs_json_exits_2_before_any_request(tmp_path, raw):
+    fake = FakeConsole()
+    seen: list[str] = []
+
+    def handler(req):
+        seen.append(req.url.path)
+        return fake(req)
+
+    out = tmp_path / "ev.jsonl"
+    rc = ce.main(["matrix", "--inputs", raw, "--out", str(out), "--console-url", CONSOLE],
+                 transport=httpx.MockTransport(handler), sleep=lambda s: None,
+                 password_reader=lambda: PASSWORD)
+    assert rc == 2 and seen == [] and fake.launched == []
+
+
+def test_setup_error_still_writes_end(tmp_path):
+    fake = FakeConsole(public=False)
+    rc, recs, _, _ = _main(["matrix"], fake, tmp_path)
+    assert rc == 2 and recs[-1]["kind"] == "end" and "setup_error" in recs[-1]
 
 
 def test_signed_in_without_password_refuses_before_launch(tmp_path):
@@ -460,6 +652,20 @@ def test_lockdown_asserts_status_codes(tmp_path):
 
     rc, recs, _, _ = _main(argv, leaky, tmp_path)
     assert rc == 1
+
+    def private(req):
+        # Public mode off: the console answers 401 to every anonymous route.
+        if req.url.host in ("pg.test", "cp.test"):
+            return handler(req)
+        return httpx.Response(401, json={"code": "unauthenticated"})
+
+    rc, recs, _, _ = _main(argv, private, tmp_path / "private")
+    asserts = [r for r in recs if r["kind"] == "assert"]
+    assert rc == 0 and all(r["ok"] for r in asserts)
+    assert not any(r["name"] == "console session anonymous" for r in asserts)
+    assert any(r["kind"] == "report" and r.get("name") == "console not in public mode"
+               for r in recs)
+    assert any(r["name"].startswith("console admin") and r["status"] == 401 for r in asserts)
 
 
 def test_help_documents_every_mode(capsys):

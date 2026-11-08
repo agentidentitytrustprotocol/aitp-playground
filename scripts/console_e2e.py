@@ -30,8 +30,10 @@ The operator password (signed-in mode) is read from ``CONSOLE_PASSWORD`` or,
 when unset, from ``doppler secrets get CONSOLE_PASSWORD --project aitp-ui-console
 --config prd --plain``. It is held in memory only and never logged.
 
-Exit status: 0 when every assertion held, 1 when any failed, 2 on a usage or
-setup error (bad URL, missing password, evidence path inside the repo).
+Exit status: 0 when every assertion held, 1 when any failed (a transport error
+or 5xx counts as a failure: in ``matrix`` it fails that ref and the matrix goes
+on), 2 on a usage or setup error (bad URL, bad ``--inputs`` JSON, missing
+password, evidence path inside the repo). An ``end`` record is always written.
 """
 
 from __future__ import annotations
@@ -76,7 +78,8 @@ SESSION_COOKIE = "__Host-aitp-console-session"
 TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled"})
 TERMINAL_EVENTS = frozenset({"run.complete", "run.failed", "run.cancelled"})
 #: Capability prefixes served by an LLM-backed agent (researcher / writer /
-#: analyzer); a successful call emits ``llm.started`` + ``llm.complete``.
+#: analyzer). Each call emits ``llm.started`` + ``llm.complete``, stub or not;
+#: ``llm.complete`` carries ``capability``/``provider``/``model``/``stub``.
 LLM_CAPABILITY_PREFIXES = ("research.", "write.", "analyze.")
 
 DOPPLER_CMD = [
@@ -85,12 +88,14 @@ DOPPLER_CMD = [
 ]
 
 #: Designed outcomes that the scenario packs cannot express. No pack declares
-#: an expected outcome (only per-step ``expect_status``, which the runner
-#: checks itself), and every pack is designed to end ``success``: fault and
-#: rejection steps record their result instead of failing the run. Entries
-#: here override what the tool derives from the pack:
+#: an expected outcome (only per-step ``expect_status``), and every pack is
+#: designed to end ``success``: fault and rejection steps record their result
+#: instead of failing the run. A rejection that came back with the wrong
+#: status is recorded too (``step.unexpected_status`` / ``matched: false``)
+#: and the run still ends ``success``, so ``classify_outcome`` fails on those.
+#: Entries here override what the tool derives from the pack:
 #:   statuses  - acceptable terminal statuses;
-#:   llm       - whether llm.started / llm.complete must appear.
+#:   llm       - whether a real (``stub: false``) llm.complete must appear.
 #: A pack whose ``sdk_available`` is false is expected to fail with
 #: ``sdk_feature_unavailable`` (derived, not listed here).
 DESIGNED_OUTCOMES: dict[str, dict[str, Any]] = {
@@ -111,11 +116,24 @@ class SetupError(Exception):
     """A usage or environment problem: exit 2, before any launch."""
 
 
+#: A transport failure, an HTTP error status (``raise_for_status``: 5xx and
+#: friends) or a non-JSON body. Caught per ref in ``matrix``; elsewhere it
+#: becomes a failed assertion (exit 1), never a traceback.
+TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (httpx.HTTPError, ValueError)
+
+
+def _err(exc: BaseException) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} from {exc.request.url.path}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Scrubbing and evidence
 # ---------------------------------------------------------------------------
 
-_SK_RE = re.compile(r"sk-[A-Za-z0-9_\-]{4,}")
+#: Word boundary + minimum length, so ``task-abcd`` / ``risk-assessment`` survive.
+_SK_RE = re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}")
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[^\s\"',;]+")
 _SENSITIVE_KEYS = frozenset({
     "password", "authorization", "cookie", "set-cookie", "x-api-key", "api_key",
@@ -357,6 +375,13 @@ class Expectation:
     reason: str = "pack: designed to end success"
     sdk_available: bool = True
     llm_capabilities: list[str] = field(default_factory=list)
+    #: The ``code`` a designed failure's ``run.failed`` event must carry.
+    failure_code: Optional[str] = None
+
+
+#: ``run.failed`` code for a pack the deployed SDK wheel can't run
+#: (``errors.SdkFeatureUnavailableError.code``, raised by runner/engine.py).
+SDK_UNAVAILABLE_CODE = "sdk_feature_unavailable"
 
 
 def derive_inputs(schema: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -409,31 +434,90 @@ def expectation_for(ref: str, detail: dict[str, Any],
     if not sdk_ok:
         exp.statuses = frozenset({"failed"})
         exp.llm = False
+        exp.failure_code = SDK_UNAVAILABLE_CODE
         exp.reason = "pack: sdk_available=false, refused with sdk_feature_unavailable"
     table = DESIGNED_OUTCOMES if overrides is None else overrides
     if ref in table:
         o = table[ref]
         if "statuses" in o:
             exp.statuses = frozenset(o["statuses"])
+            if "failed" not in exp.statuses:
+                exp.failure_code = None
         if "llm" in o:
             exp.llm = bool(o["llm"])
         exp.reason = "allowlist: DESIGNED_OUTCOMES"
     return exp
 
 
+def _probe_unmatched(evt: dict[str, Any]) -> bool:
+    """A probe step whose observed status differed from ``expect_status``:
+    ``matched: false`` at the top level or in the step result."""
+    if evt.get("matched") is False:
+        return True
+    res = evt.get("result")
+    return isinstance(res, dict) and res.get("matched") is False
+
+
+#: Shown when ``llm.complete`` lacks the ``stub`` field: the agents emit it
+#: from agents/base/llm.py ``llm_meta``; an older image cannot prove a real call.
+PREDATES_STUB_FIELD = ("llm.complete carries no 'stub' field: the deployed playground "
+                       "predates it (agents/base/llm.py llm_meta), so a real LLM call "
+                       "cannot be told from the stub. Redeploy, then re-run.")
+
+
+def _real_llm_checks(events: list[dict[str, Any]], capabilities: list[str]
+                     ) -> list[tuple[str, bool, dict[str, Any]]]:
+    """One check per distinct LLM capability: some ``llm.complete`` for it
+    has ``stub: false``. ``llm.started`` / ``llm.complete`` fire on the stub
+    too, so their presence alone proves nothing."""
+    completes = [e for e in events if e.get("type") == "llm.complete"]
+    caps = list(dict.fromkeys(capabilities)) or [None]
+    checks: list[tuple[str, bool, dict[str, Any]]] = []
+    for cap in caps:
+        mine = [e for e in completes if cap is None or e.get("capability") == cap]
+        real = [e for e in mine if e.get("stub") is False]
+        detail: dict[str, Any] = {
+            "capability": cap,
+            "llm_complete": [{k: e.get(k) for k in ("agent_id", "capability", "provider",
+                                                    "model", "stub", "notes")}
+                             for e in mine],
+        }
+        if not real:
+            if completes and any("stub" not in e for e in completes):
+                detail["reason"] = PREDATES_STUB_FIELD
+            elif not mine:
+                detail["reason"] = f"no llm.complete for {cap or 'any capability'}"
+            else:
+                detail["reason"] = "every llm.complete for it ran on the stub"
+        checks.append((f"real llm.complete for {cap or 'some capability'}", bool(real), detail))
+    return checks
+
+
 def classify_outcome(run: dict[str, Any], events: list[dict[str, Any]],
                      exp: Expectation) -> list[tuple[str, bool, dict[str, Any]]]:
     """The matrix assertions for one finished run, as (name, ok, detail)."""
-    types = [e.get("type") for e in events if isinstance(e, dict)]
+    events = [e for e in events if isinstance(e, dict)]
+    types = [e.get("type") for e in events]
     status = run.get("status")
     checks: list[tuple[str, bool, dict[str, Any]]] = [
         ("terminal_status", status in exp.statuses,
          {"status": status, "expected": sorted(exp.statuses), "error": run.get("error")}),
     ]
+    if exp.failure_code:
+        codes = [e.get("code") for e in events if e.get("type") == "run.failed"]
+        checks.append((f"run.failed code = {exp.failure_code}", exp.failure_code in codes,
+                       {"run_failed_codes": codes}))
+    # A designed rejection that came back with a different status does not
+    # fail the run: the runner records it and carries on to success
+    # (runner/engine.py probe steps), so the tool must look for it.
+    unexpected = [e.get("step_id") for e in events if e.get("type") == "step.unexpected_status"]
+    checks.append(("no step.unexpected_status", not unexpected, {"step_ids": unexpected}))
+    unmatched = [e.get("step_id") for e in events if _probe_unmatched(e)]
+    checks.append(("no probe with matched=false", not unmatched, {"step_ids": unmatched}))
     if exp.llm:
         checks.append(("llm.started present", "llm.started" in types,
                        {"capabilities": exp.llm_capabilities}))
-        checks.append(("llm.complete present", "llm.complete" in types, {}))
+        checks.extend(_real_llm_checks(events, exp.llm_capabilities))
     checks.append(("no llm.quota_exceeded", "llm.quota_exceeded" not in types,
                    {"count": types.count("llm.quota_exceeded")}))
     checks.append(("llm_quota_exceeded false", run.get("llm_quota_exceeded") is not True,
@@ -602,13 +686,20 @@ class ConsoleClient:
 
     def poll_until_terminal(self, run_id: str, *, interval: float, deadline: float
                             ) -> Optional[str]:
+        """Poll ``/status`` until terminal or ``deadline``; returns the last
+        status seen (None if none). A 429 sleeps its Retry-After, capped at
+        the time left, and never outlives the deadline."""
+        st: Optional[str] = None
         while True:
             try:
                 st = self.status(run_id).get("status")
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 429:
+                    left = deadline - self.clock()
+                    if left <= 0:
+                        return st
                     rl = classify_429(exc.response.headers, _json_or_none(exc.response))
-                    self.sleep(max(interval, rl.retry_after or interval))
+                    self.sleep(min(left, max(interval, rl.retry_after or interval)))
                     continue
                 raise
             if st in TERMINAL_STATUSES:
@@ -712,7 +803,17 @@ def mode_lockdown(args: argparse.Namespace, ev: Evidence,
                 r = http.get(f"{con}/api/auth/session")
             except httpx.HTTPError as exc:
                 ev.check("console /api/auth/session reachable", False, error=str(exc))
-            if r is not None:
+            if r is not None and r.status_code == 401:
+                # Public mode off: every console route, the session one
+                # included, is 401 to an anonymous caller (src/proxy.ts).
+                ev.record("report", name="console not in public mode",
+                          note="/api/auth/session 401: public-mode assertions skipped",
+                          status=r.status_code)
+                print("  [INFO] console not in public mode (session 401); "
+                      "public-mode assertions skipped")
+                _probe(ev, http, "GET", f"{con}/api/playground/metrics", {401},
+                       "console admin /api/playground/metrics refused anonymously")
+            elif r is not None:
                 body = _json_or_none(r) or {}
                 ev.check("console session anonymous", r.status_code == 200
                          and body.get("signedIn") is False, status=r.status_code, body=body)
@@ -752,7 +853,11 @@ def _signin(args: argparse.Namespace, client: ConsoleClient, ev: Evidence,
 
 def _expectations(client: ConsoleClient, ev: Evidence, args: argparse.Namespace
                   ) -> list[Expectation]:
-    listed = client.scenarios()
+    try:
+        listed = client.scenarios()
+    except TRANSIENT_ERRORS as exc:
+        ev.check("console scenario list fetched", False, reason=_err(exc))
+        return []
     ev.record("scenarios", count=len(listed), refs=[s.get("ref") for s in listed])
     only = set(args.only or [])
     skip = set(args.skip or [])
@@ -764,12 +869,17 @@ def _expectations(client: ConsoleClient, ev: Evidence, args: argparse.Namespace
             raise SetupError(f"--expect wants REF=status[,status]: {spec!r}")
         overrides.setdefault(ref, {})
         overrides[ref] = {**overrides[ref], "statuses": set(statuses.split(","))}
-    extra = json.loads(args.inputs) if args.inputs else {}
+    extra = args.inputs_obj or {}
     for s in listed:
         ref = s.get("ref")
         if not isinstance(ref, str) or (only and ref not in only) or ref in skip:
             continue
-        detail = client.scenario(ref)
+        try:
+            detail = client.scenario(ref)
+        except TRANSIENT_ERRORS as exc:
+            # One bad fetch fails this ref, not the whole matrix.
+            ev.check(f"{ref} scenario detail fetched", False, ref=ref, reason=_err(exc))
+            continue
         exp = expectation_for(ref, detail, s, overrides)
         exp.inputs.update(extra)
         out.append(exp)
@@ -831,11 +941,18 @@ def mode_matrix(args: argparse.Namespace, ev: Evidence, client: ConsoleClient,
                 client.sleep(wait)
         print(f"[{i}/{len(exps)}] {exp.ref}")
         last_launch = client.clock()
-        run_id = _launch(client, ev, args, exp.ref, exp.inputs)
-        if run_id is None:
+        run_id: Optional[str] = None
+        try:
+            run_id = _launch(client, ev, args, exp.ref, exp.inputs)
+            if run_id is None:
+                continue
+            res = client.follow(run_id, run_timeout=args.run_timeout,
+                                poll_interval=args.poll_interval)
+        except TRANSIENT_ERRORS as exc:
+            # A transport error or a 5xx on this ref fails it; the matrix goes on.
+            ev.check(f"{exp.ref} run followed", False, ref=exp.ref, run_id=run_id,
+                     reason=_err(exc))
             continue
-        res = client.follow(run_id, run_timeout=args.run_timeout,
-                            poll_interval=args.poll_interval)
         ev.record("run", ref=exp.ref, run_id=run_id, status=res.run.get("status"),
                   error=res.run.get("error"), sse_events=res.sse_events,
                   sse_complete=res.sse_complete, polled=res.polled, sse_error=res.sse_error,
@@ -904,8 +1021,7 @@ def mode_quota(args: argparse.Namespace, ev: Evidence, client: ConsoleClient,
     ref = args.ref or DEFAULT_QUOTA_REF
     detail = client.scenario(ref)
     inputs = derive_inputs(((detail.get("spec") or {}).get("inputs") or {}).get("schema"))
-    if args.inputs:
-        inputs.update(json.loads(args.inputs))
+    inputs.update(args.inputs_obj or {})
     run_id = _launch(client, ev, args, ref, inputs)
     if run_id is None:
         return
@@ -991,7 +1107,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "matrix", parents=[common, launch, select],
         help="launch every live ref through the console (paced), follow SSE (poll on a cut), "
-             "assert terminal status, llm.started/llm.complete for LLM steps, no "
+             "assert terminal status, no step.unexpected_status / matched=false, a real "
+             "(stub=false) llm.complete per LLM capability, no "
              "llm.quota_exceeded, llm_calls_on_mock == 0. Costs LLM money.")
     rp = sub.add_parser(
         "ratelimit", parents=[common, launch],
@@ -1017,11 +1134,14 @@ def main(argv: Optional[list[str]] = None, *,
          sleep: Callable[[float], None] = time.sleep,
          password_reader: Callable[[], str] = read_password) -> int:
     args = build_parser().parse_args(argv)
+    ev: Optional[Evidence] = None
+    out: Optional[Path] = None
     try:
         for name in ("console_url", "playground_url"):
             _origin(getattr(args, name))
         if args.cp_url:
             _origin(args.cp_url)
+        args.inputs_obj = parse_inputs(getattr(args, "inputs", None))
         out = safe_out_path(args.out or default_out_path(args.mode))
         ev = Evidence(out)
         ev.record("start", mode=args.mode, console_url=args.console_url,
@@ -1040,11 +1160,38 @@ def main(argv: Optional[list[str]] = None, *,
                 client.close()
     except SetupError as exc:
         print(f"setup error: {exc}", file=sys.stderr)
+        if ev is not None:
+            _end(ev, out, setup_error=str(exc))
         return 2
-    n_assert = sum(1 for r in ev.records if r["kind"] == "assert")
-    ev.record("end", assertions=n_assert, failures=len(ev.failures))
-    print(f"{n_assert - len(ev.failures)}/{n_assert} assertions passed; evidence: {out}")
+    except TRANSIENT_ERRORS as exc:
+        if ev is None:
+            raise
+        # Outside matrix's per-ref handling (ratelimit, quota, sign-in):
+        # a failed assertion, not a traceback.
+        ev.check("no unexpected transport/HTTP error", False, reason=_err(exc))
+    assert ev is not None
+    _end(ev, out)
     return 1 if ev.failures else 0
+
+
+def _end(ev: Evidence, out: Optional[Path], **extra: Any) -> None:
+    """The closing ``end`` record, written on every exit path."""
+    n_assert = sum(1 for r in ev.records if r["kind"] == "assert")
+    ev.record("end", assertions=n_assert, failures=len(ev.failures), **extra)
+    print(f"{n_assert - len(ev.failures)}/{n_assert} assertions passed; evidence: {out}")
+
+
+def parse_inputs(raw: Optional[str]) -> dict[str, Any]:
+    """``--inputs``: a JSON object, or SetupError (exit 2) before any request."""
+    if not raw:
+        return {}
+    try:
+        val = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SetupError(f"--inputs is not valid JSON: {exc.msg} (pos {exc.pos})") from None
+    if not isinstance(val, dict):
+        raise SetupError("--inputs must be a JSON object")
+    return val
 
 
 if __name__ == "__main__":

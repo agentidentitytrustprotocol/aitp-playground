@@ -226,6 +226,24 @@ QUOTA_CHECK_TIMEOUT_S = 5.0
 MOCK_NOTE = "mock LLM: quota refused real calls"
 
 
+def llm_meta(capability: str, use_llm: bool) -> dict[str, Any]:
+    """Non-secret fields every agent adds to ``llm.complete``.
+
+    ``stub`` is True when the capability's output came from the deterministic
+    stub (no provider key, the framework is missing, or the quota refused the
+    call), False when the provider produced it. ``provider`` and ``model``
+    name what served a real call and are None on the stub. ``llm.started`` /
+    ``llm.complete`` alone cannot tell the two apart: both fire either way.
+    """
+    provider = select_provider() if use_llm else None
+    return {
+        "capability": capability,
+        "provider": provider,
+        "model": model_name(provider) if provider else None,
+        "stub": not use_llm,
+    }
+
+
 async def llm_permit(
     bootstrap: dict, *, capability: str, calls: int, emit_event: Any,
 ) -> bool:
