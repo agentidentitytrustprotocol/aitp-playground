@@ -337,3 +337,29 @@ def test_update_keeps_events_and_persists_in_sqlite(tmp_path):
     assert again.get("r")["llm_quota_exceeded"] is True
     assert len(again.get("r")["events"]) == 1
     again.close()
+
+
+@pytest.mark.parametrize("header,charged_ip", [
+    ("2001:db8:1:2:aaaa::9", "2001:db8:1:2::/64"),  # normalised, as the launch saw it
+    (None, None),                                   # keyed, no header: global only
+])
+def test_launch_ip_flows_from_post_runs_to_the_quota_charge(header, charged_ip):
+    """The seam between the gate and the quota: the trusted client IP a keyed
+    launch carries is what a later quota check on that run charges."""
+    store = MemoryQuotaStore(limits(), clock=Clock())
+    app = _app(store)
+
+    async def _noop(**_kwargs):
+        return None
+
+    app.state.runner.run = _noop
+    c = _client(app)
+    headers = {"X-AITP-Client-IP": header} if header else {}
+    r = c.post("/runs", headers=headers,
+               json={"scenario_ref": "intra-org/trust-gate@1.0.0", "inputs": {"topic": "t"}})
+    assert r.status_code in (200, 201, 202), r.text
+    rid = r.json()["run_id"]
+    assert _ask(c, app, rid, calls=3).json()["allowed"]
+    assert store.usage("global_day", "*", DAY) == 3
+    ip_rows = {k[1]: v for k, v in store._counts.items() if k[0] == "ip_day"}
+    assert ip_rows == ({charged_ip: 3} if charged_ip else {})

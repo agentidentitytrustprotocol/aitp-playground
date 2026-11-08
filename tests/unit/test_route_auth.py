@@ -22,6 +22,7 @@ from aitp_playground.api._deps import (
     require_api_key,
     require_telemetry_token,
 )
+from aitp_playground.api.quota import require_direct_loopback
 from aitp_playground.config import Settings
 from aitp_playground.main import create_app
 from tests._auth import AUTH
@@ -38,14 +39,15 @@ PUBLIC_GET = {
     "/dashboard",
 }
 
-#: Routes authenticated by something other than the API key.
+#: Routes authenticated by something other than the API key, with every
+#: dependency each must carry.
 OTHER_AUTH = {
     # CP holds only the per-webhook HMAC secret; verified in the handler.
-    ("POST", "/webhooks/cp/{run_id}"): None,
+    ("POST", "/webhooks/cp/{run_id}"): (),
     # Agent subprocesses hold a per-process telemetry token, not the key.
-    ("POST", "/internal/telemetry"): require_telemetry_token,
+    ("POST", "/internal/telemetry"): (require_telemetry_token,),
     # Same token, and loopback-only always (api/quota.py).
-    ("POST", "/internal/llm-quota"): require_telemetry_token,
+    ("POST", "/internal/llm-quota"): (require_telemetry_token, require_direct_loopback),
 }
 
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
@@ -93,8 +95,8 @@ def test_every_route_is_authenticated_or_explicitly_public() -> None:
         for method in route.methods:
             key = (method, route.path)
             if key in OTHER_AUTH:
-                expected = OTHER_AUTH[key]
-                assert expected is None or expected in calls, key
+                missing = [d.__name__ for d in OTHER_AUTH[key] if d not in calls]
+                assert not missing, (key, missing)
                 continue
             if method in {"GET", "HEAD"} and route.path in PUBLIC_GET:
                 continue

@@ -227,7 +227,7 @@ per-process token only the playground's own agents hold. See
 | `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed (+ template list); same SDK fields, per template too |
 | `POST /runs` | Start a run (async; returns run_id immediately). Body accepts `template` to run a variant and an optional free-form `run_label` (echoed back in the create/list/get responses). |
 | `GET  /runs` | List recent runs (in-memory by default; `RUN_HISTORY_DB` makes them durable) |
-| `GET  /runs/{id}` | Full run record incl. outputs and events |
+| `GET  /runs/{id}` | Full run record incl. outputs and events, and the LLM quota flag (`llm_quota_exceeded`, `llm_quota.resets_at`, `llm_calls_on_mock`; [observability.md](observability.md#llm-quota)) |
 | `GET  /runs/{id}/status` | Just status + event count |
 | `GET  /runs/{id}/events` | SSE event stream (replay + live) |
 | `GET  /runs/{id}/narrate` | Human-readable narration of the event log (text/plain) |
@@ -237,10 +237,12 @@ per-process token only the playground's own agents hold. See
 | `POST /webhooks/cp/{run_id}` | Receiver Control Plane POSTs to during webhook fan-out (HMAC-verified, including the signed `X-Aitp-Timestamp`, which must be within 5 minutes; a repeated `deliveryId` is not recorded twice) |
 | `POST /runs/{id}/cancel` | Mark cancelled, then kill agent subprocesses (this order closes the D-16 race: a concurrent dispatch failure that lands after the mark sees `status=cancelled` already, never a stale `running`) |
 | `GET  /agents` | List currently-running agent processes |
-| `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |
+| `GET  /metrics` | Prometheus metrics ([observability.md](observability.md#llm-quota)) |
 | `GET  /dashboard` | Single-page trust console (HTML). The shell is public; its data calls need the key, so it is a local-dev view |
 | `GET  /cp/*` | Read-only Control Plane observability projections ([control-plane.md](control-plane.md)) |
+| `GET  /cp-proxy/*` | Key-gated passthrough to an allowlist of Control Plane reads, for the console ([control-plane.md](control-plane.md#console-passthrough-cp-proxy)) |
 | `POST /internal/telemetry` | Sink for agents — not for external use |
+| `POST /internal/llm-quota` | The LLM quota check agents make before a real call; loopback only, agent token ([SECURITY.md](../SECURITY.md#spend-limits)) |
 
 OpenAPI is at `http://localhost:8000/docs` while the server runs.
 

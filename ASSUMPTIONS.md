@@ -192,7 +192,7 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 
 ## playground-lockdown-quotas — PLAYGROUND_INTERNAL_URL defaults to http://127.0.0.1:8000
 - **Plan:** plans/playground-lockdown-quotas.md (Phase 1)
-- **Assumed:** the service listens on 8000 in the container (Dockerfile/Railway `PORT`), so agents report telemetry over loopback where the gate exempts `/internal/*`.
+- **Assumed:** the service listens on 8000 in the container (the Dockerfile CMD hard-codes `--port 8000` and ignores Railway's `PORT`), so agents report telemetry over loopback where the gate exempts `/internal/*`.
 - **Chose:** a separate internal URL instead of `PLAYGROUND_BASE_URL` (public, through the edge proxy, which the gate would reject once locked).
 - **Blast radius if wrong:** telemetry posts fail (fire-and-forget; runs unaffected) and startup warns; set `PLAYGROUND_INTERNAL_URL`.
 - **Status:** UNCONFIRMED
