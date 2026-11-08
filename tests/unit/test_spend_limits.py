@@ -39,6 +39,17 @@ def test_rolling_cap_refuses_the_n_plus_first_and_recovers_after_the_window() ->
     assert cap.try_acquire() is True
 
 
+
+def test_rolling_cap_refund_hands_back_one_acquisition() -> None:
+    clock = FakeClock()
+    cap = RollingCap(limit=1, window_secs=3600, clock=clock)
+    stamp = cap.acquire()
+    assert stamp is not None and cap.acquire() is None
+    cap.refund(stamp)
+    assert cap.try_acquire() is True
+    cap.refund(-1.0)  # unknown or aged-out stamp: no-op
+    assert cap.acquire() is None
+
 def _app(clock: FakeClock, **overrides):
     settings = Settings(
         rate_limit_per_minute=overrides.pop("rate_limit_per_minute", 100000),
