@@ -343,7 +343,7 @@ class ScenarioRunner:
         )
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
-        self._schedule_webhook_teardown(run_id, after=task)
+        self.schedule_webhook_teardown(run_id, after=task)
 
         if not completed:
             return RunResult(run_id=run_id, status="cancelled", outputs=step_outputs,
@@ -380,7 +380,7 @@ class ScenarioRunner:
             except OSError:
                 logger.warning("could not remove bootstrap file %s", path)
 
-    def _schedule_webhook_teardown(
+    def schedule_webhook_teardown(
         self, run_id: str, *, after: Optional[asyncio.Task[Any]] = None,
     ) -> None:
         """Delete the run's CP webhook subscription once the run has ended,
@@ -417,7 +417,7 @@ class ScenarioRunner:
         the cancellation the caller explicitly asked for, one HTTP round-trip
         later. See `DECISIONS.md` D-16.
         """
-        self._schedule_webhook_teardown(run_id)
+        self.schedule_webhook_teardown(run_id)
         if self._is_cancelled(run_id):
             return RunResult(run_id=run_id, status="cancelled", events=ctx.events, error=error)
         self.store.upsert(run_id, {

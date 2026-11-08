@@ -14,8 +14,21 @@ def _langgraph_ready() -> bool:
         return False
 
 
-async def run_analyzer(input_text: str) -> dict[str, Any]:
-    """Run an analysis pass over the input. Returns a structured summary."""
+#: Provider calls per analysis: summarise + critique.
+ANALYZE_LLM_CALLS = 2
+
+
+def real_path_available() -> bool:
+    """Whether :func:`run_analyzer` would call the provider (the same check)."""
+    return build_chat_model() is not None and _langgraph_ready()
+
+
+async def run_analyzer(input_text: str, *, use_llm: bool = True) -> dict[str, Any]:
+    """Run an analysis pass over the input. Returns a structured summary.
+
+    ``use_llm=False`` (the LLM quota refused) always takes the stub."""
+    if not use_llm:
+        return _stub_analyze(input_text)
     llm = build_chat_model()
     if llm is not None and _langgraph_ready():
         from langchain_core.messages import HumanMessage  # type: ignore

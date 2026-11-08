@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Set by Railway itself on every deployment; this repo never sets them.
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     agent_base_port: int = 8100
     agent_python: str = "python3"
     playground_base_url: str = "http://localhost:8000"
+    # Where this service's own agent subprocesses reach it (telemetry, LLM
+    # quota). Always loopback: /internal/* trusts only direct loopback peers.
+    # Port 8000 matches the Dockerfile CMD.
+    playground_internal_url: str = "http://127.0.0.1:8000"
     # Public origin this service advertises for agents it hosts (federated /
     # cross-domain demos). When set, agents hosted via POST /hosted-agents
     # advertise their handshake_endpoint + did:web serviceEndpoint at
@@ -40,6 +44,10 @@ class Settings(BaseSettings):
     insecure_localhost_dangerous: bool = False
     cp_base_url: str = ""
     cp_api_key: str = ""
+    # GET /cp-proxy/* (api/cp_proxy.py): the CP key used upstream (falls back
+    # to cp_api_key) and the per-request timeout.
+    cp_read_api_key: str = ""
+    cp_proxy_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     # ── Axis B: what to do about the ABSENCE of a fresh snapshot ─────────
     #
     # Kept strictly separate from Axis A (an unverifiable snapshot is always
@@ -87,6 +95,11 @@ class Settings(BaseSettings):
     # one. Empty means "not configured" and those routes fail closed with 503
     # rather than open — a missing secret must never read as "no auth".
     playground_api_key: str = ""
+    # Staged rollout of the backend lockdown (SECURITY.md). false: today's
+    # per-route auth, static listings public. true: every path except
+    # /healthz, the HMAC webhook and loopback /internal/* needs the key, and
+    # the service refuses to start without PLAYGROUND_API_KEY.
+    aitp_playground_require_api_key: bool = False
     # Token bucket on run creation and hosted-agent invoke, applied twice:
     # once per client IP and once per API key. `rate_limit_burst` requests
     # may go at once; the bucket refills at `rate_limit_per_minute`.
@@ -96,6 +109,31 @@ class Settings(BaseSettings):
     # hosted-agent invokes) in any rolling hour, across every caller. The
     # (N+1)th is refused with 429 before any agent or provider is touched.
     max_runs_per_hour: int = 30
+    # Run launch limits (POST /runs). The per-IP window applies only to a
+    # caller identified by a trusted X-AITP-Client-IP (a keyed caller such as
+    # the console); keyless and header-less traffic shares one edge-proxy IP,
+    # so it is limited by the buckets and caps above instead. The concurrency
+    # cap is service-wide. A run longer than `run_deadline_seconds` is ended
+    # `failed` (run_deadline_exceeded) and its agents torn down.
+    run_rate_limit_per_ip: int = Field(default=5, ge=1)
+    run_rate_limit_window_seconds: int = Field(default=600, ge=1)
+    max_concurrent_runs: int = Field(default=3, ge=1)
+    run_deadline_seconds: float = Field(default=900.0, gt=0)
+    # LLM-call quotas (src/aitp_playground/quota/), charged per real LLM call
+    # unit before an agent does real provider work. Per subject IP (a trusted
+    # X-AITP-Client-IP) and global, per UTC calendar day and month. 0 refuses
+    # every real call (the agents fall back to their deterministic mock).
+    llm_quota_per_ip_per_day: int = Field(default=30, ge=0)
+    llm_quota_per_ip_per_month: int = Field(default=300, ge=0)
+    llm_quota_global_per_day: int = Field(default=1000, ge=0)
+    llm_quota_global_per_month: int = Field(default=10000, ge=0)
+    # Where the counters live. auto: postgres when DATABASE_URL is set; else
+    # memory off Railway, and `unavailable` (refuse every real call) on
+    # Railway, so a missing database never silently means "reset on deploy".
+    llm_quota_store: Literal["auto", "postgres", "memory", "unavailable"] = "auto"
+    # The dedicated playground Postgres (a Railway reference variable in
+    # prod). A credential: never logged, kept out of repr.
+    database_url: str = Field(default="", repr=False)
     # Output-token budget for one run, split evenly across the run's agents
     # and enforced inside each agent before every provider call
     # (`agents/base/llm.py`). A hosted agent gets the whole budget for its
@@ -119,6 +157,21 @@ class Settings(BaseSettings):
                 "set on a Railway deployment"
             )
         return self
+
+    @model_validator(mode="after")
+    def _refuse_lockdown_without_key(self) -> Self:
+        if self.require_api_key and not any(
+            k.strip() for k in self.playground_api_key.split(",")
+        ):
+            raise ValueError(
+                "AITP_PLAYGROUND_REQUIRE_API_KEY=true requires PLAYGROUND_API_KEY; "
+                "refusing to start with every route locked and no key to open it"
+            )
+        return self
+
+    @property
+    def require_api_key(self) -> bool:
+        return self.aitp_playground_require_api_key
 
     @property
     def scenarios_path(self) -> Path:

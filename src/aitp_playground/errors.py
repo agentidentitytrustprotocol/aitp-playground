@@ -59,7 +59,35 @@ class SdkFeatureUnavailableError(PlaygroundError):
         )
 
 
+class RunLimitExceeded(Exception):
+    """A launch refused by a run limit: answered 429 with ``Retry-After``.
+
+    Not a :class:`PlaygroundError`: the body is the flat
+    ``{code, limit, retry_after, detail}`` shape clients key their back-off on.
+    """
+
+    def __init__(self, code: str, *, limit: int, retry_after: int, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.limit = limit
+        self.retry_after = max(1, int(retry_after))
+        self.detail = detail
+
+
 def install_handlers(app: FastAPI) -> None:
+    @app.exception_handler(RunLimitExceeded)
+    async def handle_run_limit(_: Request, exc: RunLimitExceeded) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "code": exc.code,
+                "limit": exc.limit,
+                "retry_after": exc.retry_after,
+                "detail": exc.detail,
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        )
+
     @app.exception_handler(PlaygroundError)
     async def handle_playground_error(_: Request, exc: PlaygroundError) -> JSONResponse:
         return JSONResponse(

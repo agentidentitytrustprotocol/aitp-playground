@@ -7,20 +7,23 @@ import logging
 import uuid
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..cp_client.client import CpClient
 from ..errors import RunNotFoundError
 from ..hosting.supervisor import AgentSupervisor
+from ..limits import Reservation
 from ..observability.metrics import record_event
 from ..observability.narrator import narrate_events
 from ..runner.context import RunEvent
 from ..runner.engine import ScenarioRunner
 from ..runner.store import RunStore
+from ..security import resolve_client
 from ._deps import (
-    enforce_spend_limits,
+    _settings,
+    enforce_run_limits,
     get_cp_client,
     get_run_store,
     get_runner,
@@ -30,6 +33,11 @@ from ._deps import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+_TERMINAL_STATUSES = {"success", "failed", "cancelled"}
+
+#: Error and event code of a run ended by ``RUN_DEADLINE_SECONDS``.
+DEADLINE_CODE = "run_deadline_exceeded"
 
 
 class RunRequest(BaseModel):
@@ -50,7 +58,34 @@ class RunCreated(BaseModel):
     run_label: Optional[str] = None
 
 
-class RunSummary(BaseModel):
+class LlmQuota(BaseModel):
+    """The quota that first refused a real LLM call in this run."""
+
+    reason: Optional[str] = None  # quota_exceeded | quota_store_unavailable | quota_check_failed
+    quota: Optional[str] = None  # e.g. per_ip_daily, global_monthly
+    limit: Optional[int] = None
+    resets_at: Optional[str] = None  # RFC 3339 UTC; null when the store was unavailable
+
+
+class LlmQuotaFields(BaseModel):
+    """Set once any capability in the run fell back to the mock LLM because
+    of the quota. ``llm_calls_on_mock`` counts the refused call units."""
+
+    llm_quota_exceeded: bool = False
+    llm_quota: Optional[LlmQuota] = None
+    llm_calls_on_mock: int = 0
+
+
+def _quota_fields(record: dict[str, Any]) -> dict[str, Any]:
+    quota = record.get("llm_quota")
+    return {
+        "llm_quota_exceeded": bool(record.get("llm_quota_exceeded")),
+        "llm_quota": LlmQuota(**quota) if isinstance(quota, dict) else None,
+        "llm_calls_on_mock": int(record.get("llm_calls_on_mock") or 0),
+    }
+
+
+class RunSummary(LlmQuotaFields):
     run_id: str
     status: Optional[str] = None
     scenario_ref: Optional[str] = None
@@ -63,14 +98,14 @@ class RunList(BaseModel):
     runs: list[RunSummary]
 
 
-class RunStatus(BaseModel):
+class RunStatus(LlmQuotaFields):
     run_id: str
     status: Optional[str] = None
     event_count: int = 0
     created_at: Optional[float] = None
 
 
-class RunResponse(BaseModel):
+class RunResponse(LlmQuotaFields):
     run_id: str
     status: str
     scenario_ref: str
@@ -81,18 +116,20 @@ class RunResponse(BaseModel):
     created_at: Optional[float] = None
 
 
-@router.post(
-    "", response_model=RunCreated, status_code=202,
-    dependencies=[Depends(enforce_spend_limits)],
-)
+@router.post("", response_model=RunCreated, status_code=202)
 async def create_run(
+    request: Request,
     background_tasks: BackgroundTasks,
     body: RunRequest,
+    reservation: Reservation = Depends(enforce_run_limits),
     runner: ScenarioRunner = Depends(get_runner),
     store: RunStore = Depends(get_run_store),
 ) -> RunCreated:
     """Start a scenario run asynchronously. Returns immediately with a run_id;
-    callers poll `GET /runs/{id}` or stream `GET /runs/{id}/events` to observe."""
+    callers poll `GET /runs/{id}` or stream `GET /runs/{id}/events` to observe.
+
+    Launch limits (`enforce_run_limits`) run first; the concurrency slot they
+    reserve is owned by the background task from here on."""
     run_id = str(uuid.uuid4())
     store.upsert(run_id, {
         "run_id": run_id,
@@ -102,8 +139,12 @@ async def create_run(
         "outputs": {},
         "events": [],
         "error": None,
+        # Private (no response model exposes it): the per-IP quota subject.
+        "subject_ip": resolve_client(request).subject_ip,
     })
-    background_tasks.add_task(_run_in_background, runner, run_id, body)
+    deadline = _settings(request).run_deadline_seconds
+    background_tasks.add_task(_run_in_background, runner, run_id, body, reservation, deadline)
+    reservation.handed_off = True
     return RunCreated(
         run_id=run_id,
         status="pending",
@@ -112,17 +153,64 @@ async def create_run(
     )
 
 
-async def _run_in_background(runner: ScenarioRunner, run_id: str, body: RunRequest) -> None:
+async def _run_in_background(
+    runner: ScenarioRunner,
+    run_id: str,
+    body: RunRequest,
+    reservation: Optional[Reservation] = None,
+    deadline_seconds: Optional[float] = None,
+) -> None:
+    """Run the scenario, bounded by the deadline, and free the run's
+    concurrency slot when it ends however it ends. A cancel does not free the
+    slot: the agents may still be shutting down, and this task's end (after
+    the engine's own teardown) is the one point that knows they are gone."""
     try:
-        await runner.run(
-            run_id=run_id,
-            scenario_ref=body.scenario_ref,
-            inputs=body.inputs,
-            run_label=body.run_label,
-            template=body.template,
+        await asyncio.wait_for(
+            runner.run(
+                run_id=run_id,
+                scenario_ref=body.scenario_ref,
+                inputs=body.inputs,
+                run_label=body.run_label,
+                template=body.template,
+            ),
+            timeout=deadline_seconds,
         )
+    except TimeoutError:
+        logger.warning("Run %s exceeded its %ss deadline", run_id, deadline_seconds)
+        _finalize_deadline(runner, run_id, deadline_seconds)
     except Exception:  # noqa: BLE001
         logger.exception("Background run %s crashed", run_id)
+    finally:
+        if reservation is not None:
+            reservation.release()
+
+
+def _finalize_deadline(runner: ScenarioRunner, run_id: str, deadline: Optional[float]) -> None:
+    """End a run cut off by the deadline as ``failed``.
+
+    By now ``wait_for`` has cancelled the engine and its ``finally`` has
+    killed the agents. A cancel may have landed first: then the record says
+    ``cancelled`` and stays so, with no second terminal event (the D-16
+    double count). Same two side effects as the cancel route: the event goes
+    to the store (and SSE) and to the metrics registry."""
+    store = runner.store
+    try:
+        record = store.get(run_id) or {}
+        if record.get("status") in _TERMINAL_STATUSES:
+            return
+        error = f"{DEADLINE_CODE}: the run did not finish within {deadline:g}s"
+        wrote = store.upsert_unless_cancelled(run_id, {"status": "failed", "error": error})
+        if wrote:
+            event = RunEvent(type="run.failed", run_id=run_id, code=DEADLINE_CODE, error=error)
+            store.append_event(run_id, event.model_dump())
+            try:
+                record_event(event.model_dump())
+            except Exception:  # noqa: BLE001 — metrics must never break finalisation
+                logger.exception("record_event failed for run.failed on %s", run_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("could not finalise run %s after its deadline", run_id)
+    finally:
+        runner.schedule_webhook_teardown(run_id)
 
 
 @router.get("", response_model=RunList, dependencies=[Depends(require_api_key)])
@@ -137,6 +225,7 @@ def list_runs(store: RunStore = Depends(get_run_store)) -> RunList:
             run_label=r.get("run_label"),
             created_at=r.get("created_at"),
             event_count=len(r.get("events", [])),
+            **_quota_fields(r),
         ))
     return RunList(runs=items)
 
@@ -155,6 +244,7 @@ def get_run(run_id: str, store: RunStore = Depends(get_run_store)) -> RunRespons
         events=list(record.get("events") or []),
         error=record.get("error"),
         created_at=record.get("created_at"),
+        **_quota_fields(record),
     )
 
 
@@ -304,10 +394,8 @@ def get_run_status(run_id: str, store: RunStore = Depends(get_run_store)) -> Run
         status=record.get("status"),
         event_count=len(record.get("events", [])),
         created_at=record.get("created_at"),
+        **_quota_fields(record),
     )
-
-
-_TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 
 
 @router.post("/{run_id}/cancel", status_code=202, dependencies=[Depends(require_api_key)])

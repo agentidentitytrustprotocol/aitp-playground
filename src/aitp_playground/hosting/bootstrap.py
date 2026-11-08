@@ -106,7 +106,15 @@ class BootstrapBuilder:
             "loopback_tls": None if public_origin else self.loopback.agent_tls(),
             "peers": peers,
             "playground": {
-                "telemetry_url": f"{self.settings.playground_base_url}/internal/telemetry",
+                # Loopback, never the public origin: /internal/* only trusts
+                # direct loopback peers once the key is required.
+                "telemetry_url": (
+                    f"{self.settings.playground_internal_url.rstrip('/')}/internal/telemetry"
+                ),
+                # Asked before every real LLM call (api/quota.py); same token.
+                "quota_url": (
+                    f"{self.settings.playground_internal_url.rstrip('/')}/internal/llm-quota"
+                ),
                 "telemetry_token": self.telemetry_token,
                 "run_id": run_id,
             },

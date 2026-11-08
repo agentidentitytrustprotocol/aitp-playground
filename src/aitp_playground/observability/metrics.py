@@ -84,10 +84,16 @@ class Metrics:
         with self._lock:
             self._counters[key] = self._counters.get(key, 0.0) + amount
 
-    def set(self, name: str, value: float, labels: Mapping[str, str] | None = None) -> None:
+    def set(
+        self, name: str, value: float, labels: Mapping[str, str] | None = None,
+    ) -> float | None:
+        """Set a gauge and return its previous value (None if unset), read
+        and written under one lock so callers can detect a transition."""
         key = (name, _norm(labels))
         with self._lock:
+            previous = self._gauges.get(key)
             self._gauges[key] = value
+            return previous
 
     def add_gauge(self, name: str, delta: float, *, floor: float | None = None) -> None:
         """Atomically add ``delta`` to an unlabelled gauge, clamped at ``floor``."""
@@ -123,6 +129,9 @@ _CAPABILITY_CALLS_TOTAL = "aitp_playground_capability_calls_total"
 _STEP_OUTCOMES_TOTAL = "aitp_playground_step_outcomes_total"
 _RUNS_ACTIVE = "aitp_playground_runs_active"
 _RUNS_REFUSED_TOTAL = "aitp_playground_runs_refused_total"
+LLM_QUOTA_CHARGED_TOTAL = "aitp_playground_llm_quota_charged_total"
+LLM_QUOTA_DENIALS_TOTAL = "aitp_playground_llm_quota_denials_total"
+LLM_QUOTA_STORE_UP = "aitp_playground_llm_quota_store_up"
 
 metrics.register(_RUNS_TOTAL, "Scenario runs by terminal status")
 metrics.register(_HANDSHAKES_TOTAL, "AITP handshakes by outcome")
@@ -136,6 +145,12 @@ metrics.register(_RUNS_ACTIVE, "Scenario runs currently executing")
 metrics.register(
     _RUNS_REFUSED_TOTAL,
     "Scenario runs that failed before run.started, by run.failed code",
+)
+metrics.register(LLM_QUOTA_CHARGED_TOTAL, "LLM call units charged against the quota")
+metrics.register(LLM_QUOTA_DENIALS_TOTAL, "LLM quota checks denied, by reason")
+metrics.register(
+    LLM_QUOTA_STORE_UP,
+    "1 when the last LLM quota check reached a working store, 0 when it failed closed",
 )
 
 

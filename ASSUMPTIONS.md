@@ -181,3 +181,80 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** leave both without keys of their own.
 - **Blast radius if wrong:** none until a staging service exists; populate `stg` then.
 - **Status:** **DECIDED (Opus, 2026-11-07)**: recorded in DECISIONS.md D-28.
+
+## playground-lockdown-quotas — Bearer kept as a compatibility key header
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 1)
+- **Assumed:** the console (and any script) may still send `Authorization: Bearer <key>`; wave 3 makes `x-api-key` canonical.
+- **Chose:** the gate accepts either header; a valid key in either is enough.
+- **Alternatives:** x-api-key only (breaks today's console calls when the flag flips).
+- **Blast radius if wrong:** none for security (same key, same constant-time match); drop Bearer later in one commit.
+- **Status:** CONFIRMED (2026-11-07, Opus after Fable analysis; DECISIONS D-32)
+
+## playground-lockdown-quotas — PLAYGROUND_INTERNAL_URL defaults to http://127.0.0.1:8000
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 1)
+- **Assumed:** the service listens on 8000 in the container (the Dockerfile CMD hard-codes `--port 8000` and ignores Railway's `PORT`), so agents report telemetry over loopback where the gate exempts `/internal/*`.
+- **Chose:** a separate internal URL instead of `PLAYGROUND_BASE_URL` (public, through the edge proxy, which the gate would reject once locked).
+- **Blast radius if wrong:** telemetry posts fail and so do the agents' quota checks (same base URL), which fail closed: every real LLM call runs on the mock, and the run is not flagged because that report goes to the same URL. Startup warns only for a non-loopback URL, not a wrong loopback port; set `PLAYGROUND_INTERNAL_URL`.
+- **Status:** CONFIRMED (2026-11-07, Opus; blast radius corrected; DECISIONS D-32)
+
+## playground-lockdown-quotas — per-IP token bucket keys on the trusted subject IP
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 2; diverges from decision 3, which kept the bucket on right-most XFF/peer)
+- **Assumed:** a keyed caller sending `X-AITP-Client-IP` (the console) fronts many visitors from one egress IP.
+- **Chose:** with a trusted subject IP, the per-IP token bucket keys on that IP and the per-key bucket is skipped; otherwise the bucket keys on the right-most XFF/peer as before.
+- **Alternatives:** keep the bucket on the egress IP (every console visitor shares one 5-burst bucket, throttling the console as a whole).
+- **Blast radius if wrong:** the console can launch up to the per-IP window per visitor instead of one shared burst; still bounded by the concurrency cap and the global hourly cap. One-line revert in `api/_deps.py`.
+- **Status:** CONFIRMED (2026-11-07, Opus after Fable analysis; SECURITY.md corrected; DECISIONS D-32)
+
+## playground-lockdown-quotas — stale concurrency slots reclaimed after deadline + 120 s
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 2; R4 said the slot is released only in the background task's finally)
+- **Assumed:** a slot can leak if the background task never starts (a failure after handoff, before the response is sent).
+- **Chose:** keep the finally as the only normal release, plus a backstop: a slot held longer than `RUN_DEADLINE_SECONDS + 120` is reclaimed on the next reservation. A run cannot legitimately hold a slot that long (the deadline ends it, 120 s covers teardown).
+- **Blast radius if wrong:** a run whose teardown takes over 120 s past the deadline briefly lets a 4th run start. Remove the reclaim in one commit.
+- **Status:** CONFIRMED (2026-11-07, Opus; DECISIONS D-32)
+
+## playground-lockdown-quotas — a quota denial quotes the exceeded counter that resets last
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 3; decision 6 said "the tightest exceeded counter's resets_at")
+- **Assumed:** callers use `resets_at` as "when can I call again".
+- **Chose:** when several counters are exceeded, name the one whose window resets last (a spent month beats a spent day); ties keep the fixed counter order.
+- **Alternatives:** the earliest reset (promises a retry that will still be refused).
+- **Blast radius if wrong:** a different counter name/reset in the denial and run summary; one-line change in `quota/store.py:_deny`.
+- **Status:** CONFIRMED (2026-11-07, Opus; DECISIONS D-32)
+
+## playground-lockdown-quotas — quota store selection edge cases
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 3, decision 6)
+- **Assumed:** decision 6 only specified `auto`.
+- **Chose:** explicit `LLM_QUOTA_STORE=postgres` without `DATABASE_URL` ⇒ unavailable (deny all, WARNING); explicit `memory` on Railway is honoured with a WARNING (a deliberate operator opt-in, never a silent fallback); a store-unavailable denial carries `quota=quota_store_unavailable` with null `limit`/`resets_at`.
+- **Alternatives:** refuse to start on `postgres` without a URL; refuse `memory` on Railway.
+- **Blast radius if wrong:** an operator could opt into reset-on-deploy counting on Railway; logged loudly. Tighten in `select_store` in one commit.
+- **Status:** CONFIRMED (2026-11-07, Opus; DECISIONS D-32)
+
+## playground-lockdown-quotas — quota metrics carry the aitp_playground_ prefix
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4 named `llm_quota_charged_total`, `llm_quota_denials_total`, `llm_quota_store_up`)
+- **Assumed:** the plan's names were shorthand.
+- **Chose:** `aitp_playground_llm_quota_charged_total`, `aitp_playground_llm_quota_denials_total{reason}`, `aitp_playground_llm_quota_store_up`, matching every other series in `observability/metrics.py`.
+- **Blast radius if wrong:** a rename in one module and docs/observability.md; no dashboard reads these yet.
+- **Status:** CONFIRMED (2026-11-07, Opus; DECISIONS D-32)
+
+## playground-lockdown-quotas — agent-reported check failures fold into the run's single quota event
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4, decision 5: "one llm.quota_exceeded event")
+- **Assumed:** an agent that gets no answer from `/internal/llm-quota` must still flag the run, but the run should still show one event.
+- **Chose:** the agent emits `llm.quota_exceeded` (`code=quota_check_failed`) through telemetry; `/internal/telemetry` routes it through the same `record_llm_fallback` as a decided denial (adds to `llm_calls_on_mock`, emits only on the run's first fallback, never creates an unknown run) and counts it in `llm_quota_denials_total{reason="quota_check_failed"}`.
+- **Alternatives:** append each agent report raw (several events per run); drop agent reports (a failed check would be invisible).
+- **Blast radius if wrong:** event count per run; one branch in `api/telemetry.py`.
+- **Status:** CONFIRMED with a change (2026-11-07, Opus): the reason is pinned to `quota_check_failed`, never read from the body; DECISIONS D-32
+
+## playground-lockdown-quotas — hosted agents and run-less checks charge the global counters only
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4; hosted invokes not addressed)
+- **Assumed:** a hosted agent (run id `hosted-<id>`) has no run record and so no trusted subject IP.
+- **Chose:** a `hosted-` or empty run id charges the global day/month counters only and records nothing on any run; any other unknown run id is a 404 and charges nothing.
+- **Alternatives:** carry the invoker's subject IP into the hosted agent's bootstrap (a per-invoke bootstrap change, out of scope here).
+- **Blast radius if wrong:** hosted LLM spend is bounded by the global quota but not per IP; add the IP to the hosted bootstrap in one change.
+- **Status:** DEFERRED (2026-11-07, Opus): correct while hosted agents are key-only; revisit when a hosted agent gets a public origin on Railway. DECISIONS D-32
+
+## playground-lockdown-quotas — the quota check trusts the playground's own agents
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 4: loopback-only, telemetry-token gated)
+- **Assumed:** agents launched by this playground are cooperative; the quota bounds honest spend, not a compromised agent (which already holds a provider key).
+- **Chose:** the telemetry token is per process, not per run, so `run_id` is not bound to the token. A token holder can charge another run's IP or send no run id (global only), but can never choose the IP: it always comes from the run record. Documented in SECURITY.md.
+- **Alternatives:** a per-run quota token in each bootstrap, checked against `run_id` (a bootstrap and telemetry change).
+- **Blast radius if wrong:** a misbehaving agent could shift charges between runs inside one process; per-run tokens close it in one change.
+- **Status:** CONFIRMED (2026-11-07, Opus after Fable analysis; DECISIONS D-32)

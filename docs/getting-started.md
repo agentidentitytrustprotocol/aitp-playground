@@ -111,9 +111,12 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `REGISTRY_CACHE_TTL_MS` | `0` | `0` = reload every lookup (hot reload while authoring) |
 | `AGENT_BASE_PORT` | `8100` | First port handed to spawned agents |
 | `AGENT_PYTHON` | `python3` | Interpreter for agent subprocesses |
-| `PLAYGROUND_BASE_URL` | `http://localhost:8000` | Where agents POST telemetry |
+| `PLAYGROUND_BASE_URL` | `http://localhost:8000` | This service's public origin: the CP webhook URL it subscribes and the CLI's default target |
+| `PLAYGROUND_INTERNAL_URL` | `http://127.0.0.1:8000` | Where this service's own agents reach it (telemetry, LLM quota). Must be loopback: `/internal/*` only trusts direct loopback peers |
 | `CP_BASE_URL` | _(empty)_ | Optional Control Plane base URL ([control-plane.md](control-plane.md)) |
 | `CP_API_KEY` | _(empty)_ | Optional CP bearer |
+| `CP_READ_API_KEY` | _(empty)_ | Optional CP bearer used only by `GET /cp-proxy/*` (a read-only CP key). Falls back to `CP_API_KEY` |
+| `CP_PROXY_TIMEOUT_SECONDS` | `10` | Per-request timeout for `GET /cp-proxy/*` (connect and each read; the event stream has no read timeout) |
 | `CP_TIMEOUT_MS` | `5000` | Per-request timeout for CP calls |
 | `CP_WEBHOOK_TEARDOWN_GRACE_SECS` | `120` | How long after a run ends (and its events are ingested) its CP webhook subscription is deleted |
 | `REVOCATION_FAIL_MODE` | `fail_closed` | Axis B: what to do about the *absence* of a fresh verified list. With `CP_BASE_URL` set, each agent verifies its own signed list against its own AID. `fail_closed` refuses capability calls while degraded (the spec's own default); `soft_fail` serves on the last verified deny-set. Never governs authenticity — an unverifiable list is discarded either way. |
@@ -127,9 +130,20 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `OPENAI_MODEL` | `gpt-4o-mini` | Override |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Override |
 | `RUN_HISTORY_DB` | _(empty)_ | When set, persist runs + events to this SQLite file so they survive a restart. Empty = in-memory only. |
-| `PLAYGROUND_API_KEY` | _(empty)_ | Bearer key(s) for every authenticated route (see the endpoint table). Comma-separated to overlap a rotation. **Empty fails closed:** those routes answer `503`. |
+| `PLAYGROUND_API_KEY` | _(empty)_ | Key(s) for every authenticated route (see the endpoint table), sent as `x-api-key` or `Authorization: Bearer`. Comma-separated to overlap a rotation. **Empty fails closed:** those routes answer `503`. |
+| `AITP_PLAYGROUND_REQUIRE_API_KEY` | `false` | `true` puts every path except `/healthz`, the CP webhook and loopback `/internal/*` behind the key, static listings included. The service refuses to start if this is `true` and `PLAYGROUND_API_KEY` is empty. See [SECURITY.md](../SECURITY.md) |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `10` / `5` | Token bucket on `POST /runs` and `POST /hosted-agents/{id}/invoke`, applied per client IP and per API key |
 | `MAX_RUNS_PER_HOUR` | `30` | Global cap on run creations plus hosted invokes in any rolling hour; the next one gets `429` before any agent starts |
+| `RUN_RATE_LIMIT_PER_IP` | `5` | Run launches (`POST /runs`) and hosted invokes per trusted client IP (`X-AITP-Client-IP` with a valid key) in `RUN_RATE_LIMIT_WINDOW_SECONDS`; the next gets `429 run_rate_limited`. Keyless and header-less callers are not per-IP limited |
+| `RUN_RATE_LIMIT_WINDOW_SECONDS` | `600` | Sliding window for `RUN_RATE_LIMIT_PER_IP` |
+| `MAX_CONCURRENT_RUNS` | `3` | Runs in progress at once, service-wide; the next launch gets `429 max_concurrent_runs` with `Retry-After: 10`. A slot frees when the run ends (success, failure, cancel or deadline) |
+| `RUN_DEADLINE_SECONDS` | `900` | A run still going after this ends `failed` with `code: run_deadline_exceeded`, its agents torn down |
+| `LLM_QUOTA_PER_IP_PER_DAY` | `30` | Real LLM call units per trusted client IP (`X-AITP-Client-IP`) per UTC day. Over quota, the agent answers with its deterministic mock. `0` refuses every real call |
+| `LLM_QUOTA_PER_IP_PER_MONTH` | `300` | The same, per UTC calendar month |
+| `LLM_QUOTA_GLOBAL_PER_DAY` | `1000` | Real LLM call units across every caller per UTC day |
+| `LLM_QUOTA_GLOBAL_PER_MONTH` | `10000` | The same, per UTC calendar month |
+| `LLM_QUOTA_STORE` | `auto` | Where the quota counters live: `postgres`, `memory`, `unavailable` (refuse every real call), or `auto`: `postgres` when `DATABASE_URL` is set, else `memory` locally and `unavailable` on Railway |
+| `DATABASE_URL` | unset | The dedicated playground Postgres for the quota counters (a Railway reference variable in prod, not a Doppler key). The table `playground_llm_usage` is created on first connect. Never logged |
 | `RUN_TOKEN_BUDGET` | `40000` | Output-token budget per run, split across the run's agents and enforced in each agent before every provider call (`429` once spent). A hosted agent gets the whole budget for its lifetime. |
 | `LLM_MAX_TOKENS_PER_CALL` | `1024` | `max_tokens` cap on every single provider call |
 | `LOG_LEVEL` | `INFO` | Standard logging level |
@@ -146,6 +160,11 @@ quota, unreachable) does **not** fall back to the stub: the agent emits
 `llm.failed` (with the provider's error text) and answers HTTP 502, and the
 run fails with a message of the form `<agent> self-execute <capability>
 failed: status=502 detail=…`.
+
+Before a real call the agent also asks the playground's LLM quota
+(`LLM_QUOTA_*` above). Over quota, the capability answers with its stub and
+the run is flagged rather than failed; see
+[observability.md § LLM quota](observability.md#llm-quota).
 
 ## Run the service
 
@@ -191,8 +210,10 @@ curl -s -X POST -H "Authorization: Bearer $PLAYGROUND_API_KEY" http://localhost:
 
 Only the static routes are public: `/healthz`, `/capabilities`, `/packs`,
 `/scenarios*`, the `/dashboard` HTML shell and the OpenAPI docs. Every other
-route needs `Authorization: Bearer $PLAYGROUND_API_KEY` (`401` without it,
-`503` when the service has no key configured). `POST /webhooks/cp/{run_id}`
+route needs the key, as `x-api-key: $PLAYGROUND_API_KEY` or
+`Authorization: Bearer $PLAYGROUND_API_KEY` (`401` without it, `503` when the
+service has no key configured). With `AITP_PLAYGROUND_REQUIRE_API_KEY=true`
+the static routes need it too; only `/healthz` stays open. `POST /webhooks/cp/{run_id}`
 is verified by the CP's HMAC instead, and `POST /internal/telemetry` by a
 per-process token only the playground's own agents hold. See
 [SECURITY.md](../SECURITY.md).
@@ -206,7 +227,7 @@ per-process token only the playground's own agents hold. See
 | `GET  /scenarios/{pack}/{scenario}@{version}` | Full scenario YAML, parsed (+ template list); same SDK fields, per template too |
 | `POST /runs` | Start a run (async; returns run_id immediately). Body accepts `template` to run a variant and an optional free-form `run_label` (echoed back in the create/list/get responses). |
 | `GET  /runs` | List recent runs (in-memory by default; `RUN_HISTORY_DB` makes them durable) |
-| `GET  /runs/{id}` | Full run record incl. outputs and events |
+| `GET  /runs/{id}` | Full run record incl. outputs and events, and the LLM quota flag (`llm_quota_exceeded`, `llm_quota.resets_at`, `llm_calls_on_mock`; [observability.md](observability.md#llm-quota)) |
 | `GET  /runs/{id}/status` | Just status + event count |
 | `GET  /runs/{id}/events` | SSE event stream (replay + live) |
 | `GET  /runs/{id}/narrate` | Human-readable narration of the event log (text/plain) |
@@ -219,7 +240,9 @@ per-process token only the playground's own agents hold. See
 | `GET  /metrics` | Prometheus metrics ([observability.md](observability.md)) |
 | `GET  /dashboard` | Single-page trust console (HTML). The shell is public; its data calls need the key, so it is a local-dev view |
 | `GET  /cp/*` | Read-only Control Plane observability projections ([control-plane.md](control-plane.md)) |
+| `GET  /cp-proxy/*` | Key-gated passthrough to an allowlist of Control Plane reads, for the console ([control-plane.md](control-plane.md#console-passthrough-cp-proxy)) |
 | `POST /internal/telemetry` | Sink for agents — not for external use |
+| `POST /internal/llm-quota` | The LLM quota check agents make before a real call; loopback only, agent token ([SECURITY.md](../SECURITY.md#spend-limits)) |
 
 OpenAPI is at `http://localhost:8000/docs` while the server runs.
 

@@ -184,7 +184,7 @@ otherwise). The hosted service's variables come from Doppler; see
 #    the comments in pyproject.toml.)
 uv sync                               # or: pip install -e .
 
-# 2. Run. Every non-static route needs a bearer key; unset, they answer 503.
+# 2. Run. Every non-static route needs the key (x-api-key, or Bearer); unset, they answer 503.
 export PLAYGROUND_API_KEY=$(openssl rand -hex 32)
 uv run uvicorn aitp_playground.main:app --reload --port 8000
 
@@ -222,7 +222,7 @@ aitp-playground/
 ├── docs/                  # reader-facing docs (published to the docs site)
 ├── internal_docs/         # contributor & build docs (not published)
 ├── src/aitp_playground/   # FastAPI service — no AITP protocol logic here
-│   ├── api/               # routes: /runs /scenarios /agents /hosted-agents /packs /capabilities /metrics /dashboard /cp/* /webhooks /healthz /internal/telemetry
+│   ├── api/               # routes: /runs /scenarios /agents /hosted-agents /packs /capabilities /metrics /dashboard /cp/* /cp-proxy/* /webhooks /healthz /internal/telemetry /internal/llm-quota
 │   ├── registry/          # YAML pack loader + index + templates
 │   ├── runner/            # scenario engine + run store (+ optional SQLite) + SSE
 │   ├── hosting/           # subprocess spawn, identity, port alloc, adapters

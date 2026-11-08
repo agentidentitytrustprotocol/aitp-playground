@@ -105,7 +105,8 @@ swallowed rather than failing the run):
 | `tct.revoked` | — | `/admin/revoke-tct` adds a jti. |
 | `identity.key.rotated` | `old_aid`, `new_aid` | `/admin/rotate-keys` replaces this agent's keypair. |
 | `capability.self_execute` | — | `/admin/self-execute` runs. |
-| `llm.started` / `llm.complete` | — | Wraps the LLM call — the clearest signal in the log that real work happened, not a stub. |
+| `llm.started` / `llm.complete` | `notes` (only when the quota refused) | Wraps the LLM call — the clearest signal in the log that real work happened, not a stub. When the LLM quota refused the call, both carry `notes: "mock LLM: quota refused real calls"` and the capability ran on its stub. |
+| `llm.quota_exceeded` | `code` (`quota_exceeded`, `quota_store_unavailable`, `quota_check_failed`), `quota`, `limit`, `resets_at`, `capability`, `agent_id`, `calls` | The first time in a run that the LLM quota refused real calls. Emitted once per run, by the playground (see [LLM quota](#llm-quota)); later refusals only add to the run's `llm_calls_on_mock`. |
 | `llm.failed` | `task`, `detail` (research tasks also carry `topic`) | The real provider call was attempted (a key was configured) but failed — bad/expired key, quota, unreachable. Surfaces as a 502 from the capability route, `detail` is the provider's own error text. |
 | `manifest.verify_failed` | `cause` (the SDK's `.code`: `pop_failed`, `signature_invalid`, `expired`, `aid_mismatch`, `malformed`, …; `unknown` when it has none), `source_url` | A fetched peer manifest failed verification. The SDK checks the proof of possession before the signature (RFC-AITP-0003 §5 steps 4–5), so `pop_failed` says nothing about the signature: it was never assessed. |
 | `tct.renewal.requested` / `tct.renewal.issued` | `jti`, plus TCT identifying fields | Holder requests a fresh TCT before the held one expires / issuer mints it. |
@@ -183,9 +184,37 @@ so `/metrics` returns a stable, complete surface even before the first run.
 | `aitp_playground_key_rotations_total` | counter | — | `identity.key.rotated` |
 | `aitp_playground_capability_calls_total` | counter | `outcome` = success/denied | capability step complete/denied |
 | `aitp_playground_step_outcomes_total` | counter | `outcome` = complete/denied/skipped | every workflow step |
+| `aitp_playground_llm_quota_charged_total` | counter | — | real LLM call units the quota allowed (`POST /internal/llm-quota`) |
+| `aitp_playground_llm_quota_denials_total` | counter | `reason` = quota_exceeded/quota_store_unavailable/quota_check_failed | every refused quota check, including ones an agent reports because it got no answer |
+| `aitp_playground_llm_quota_store_up` | gauge | — | `1` when the quota store answered at startup or on the last check, `0` when it is unavailable (every real call is then refused) |
 
 Output is deterministically ordered (by metric name then labels) with
 Prometheus-spec label escaping. It needs the API key like every non-static route (Prometheus: `authorization: { credentials: ... }`).
+
+## LLM quota
+
+Before a capability makes real provider calls, its agent asks
+`POST /internal/llm-quota` (loopback only, telemetry token) for the number of
+call units it is about to spend (`calls`: 1 per writer call, 2 for the
+analyzer, `MAX_ITER + 1` per research call, the crew's ceiling). The playground charges the
+counters in `src/aitp_playground/quota/` against the run's trusted client IP,
+taken from the run record, never from the agent. Keyless runs and hosted
+agents charge the global counters only.
+
+A refusal sends that whole capability to its deterministic stub, so a step is
+never half real and half mock. It fails closed: a full quota, an unavailable
+quota store, or an agent that gets no clear answer (timeout, error, non-200)
+all refuse. The run then shows it in three places:
+
+- the run summary (`GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/status`):
+  `llm_quota_exceeded: true`, `llm_quota: {reason, quota, limit, resets_at}`
+  for the first refusal (`resets_at` is the UTC reset of the counter that
+  refused; `limit` and `resets_at` are null when the store is unavailable),
+  and `llm_calls_on_mock`, the call units that ran on the mock;
+- one `llm.quota_exceeded` event per run;
+- `notes` on the capability's `llm.started` / `llm.complete` events.
+
+A run that falls back to the mock still ends `success`.
 
 ## Dashboard
 

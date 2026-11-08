@@ -10,10 +10,10 @@ from agent_admin import build_admin_router
 from revocation_state import RevocationState
 from aitp_server import AitpServer, ready_lifespan, run_agent
 from bootstrap import create_agent, get_manifest_json, load_bootstrap
-from llm import call_llm_or_502
+from llm import MOCK_NOTE, call_llm_or_502, llm_permit
 from telemetry import emit_event
 
-from .chain import run_writer  # type: ignore[import-not-found]
+from .chain import real_path_available, run_writer  # type: ignore[import-not-found]
 
 
 bootstrap = load_bootstrap()
@@ -60,17 +60,31 @@ def _payload_to_findings(payload: Any) -> str:
     return str(payload)
 
 
+#: One provider call per article (chain.py).
+WRITE_LLM_CALLS = 1
+
+
 async def do_write(payload: Any, commissioned_by: str = "self") -> dict[str, Any]:
     findings = _payload_to_findings(payload)
     style = str(bootstrap["inputs"].get("style", "casual"))
+    # Ask the quota before creating the coroutine: a refusal runs the whole
+    # capability on the stub and never reserves token budget.
+    real = real_path_available()
+    use_llm = real and await llm_permit(
+        bootstrap, capability="write.content", calls=WRITE_LLM_CALLS, emit_event=emit_event,
+    )
+    notes = MOCK_NOTE if real and not use_llm else None
     await emit_event(
-        "llm.started", bootstrap, task="write", commissioned_by=commissioned_by,
+        "llm.started", bootstrap, task="write", commissioned_by=commissioned_by, notes=notes,
     )
-    article = await call_llm_or_502(
-        run_writer(findings, style=style), emit_event=emit_event,
-        bootstrap=bootstrap, task="write",
-    )
-    await emit_event("llm.complete", bootstrap, task="write")
+    if use_llm:
+        article = await call_llm_or_502(
+            run_writer(findings, style=style, use_llm=True), emit_event=emit_event,
+            bootstrap=bootstrap, task="write", llm_calls=WRITE_LLM_CALLS,
+        )
+    else:
+        article = await run_writer(findings, style=style, use_llm=False)
+    await emit_event("llm.complete", bootstrap, task="write", notes=notes)
     return {"article": article, "style": style, "agent": bootstrap["agent_id"]}
 
 

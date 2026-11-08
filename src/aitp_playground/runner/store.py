@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,24 @@ class RunStore:
         merged = {**existing, **record}
         merged["events"] = list(existing.get("events", [])) + list(record.get("events", []))
         self._runs[run_id] = merged
+
+    def update(self, run_id: str, fn: Callable[[dict[str, Any]], None]) -> bool:
+        """Read-modify-write a run's scalars as one step under the lock.
+
+        ``fn`` gets a copy of the record without ``events`` and edits it in
+        place; it must be pure and quick (it runs under the store lock) and
+        must not touch ``events``. False, with ``fn`` never called, when the
+        run is unknown: unlike :meth:`append_event`, this never creates one.
+        """
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return False
+            scalars = {k: v for k, v in record.items() if k != "events"}
+            fn(scalars)
+            scalars.pop("events", None)
+            record.update(scalars)
+            return True
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
         with self._lock:
@@ -210,6 +228,13 @@ class SqliteRunStore(RunStore):
         if written:
             self._persist_record(run_id)
         return written
+
+    def update(self, run_id: str, fn: Callable[[dict[str, Any]], None]) -> bool:
+        # Persist outside the (non-reentrant) store lock, like upsert.
+        updated = super().update(run_id, fn)
+        if updated:
+            self._persist_record(run_id)
+        return updated
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
         super().append_event(run_id, event)

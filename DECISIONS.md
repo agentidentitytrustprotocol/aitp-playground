@@ -760,3 +760,55 @@ No job `name:` or matrix value changed, so every required context still reports 
   run (`intra-org/research-and-write@1.0.0`, run `e9e346b0`) reached `success`, with `llm.started` → `llm.complete` for
   research and write, no `llm.failed`, and real (non-stub) outputs. `call_llm_or_502` turns any non-2xx provider
   response into `llm.failed`/502, so `llm.complete` means the provider returned 200.
+
+## D-31 — Backend lockdown, run limits and LLM quotas (flag off)
+
+2026-11-07, aitp-hardening wave 2 (prompt "Wave 3: Playground backend", ref acdp-playground #132). Opus calls,
+reversible unless noted; the full design is in the wave's plan.
+- **Key header:** `x-api-key` is canonical and `Authorization: Bearer` stays accepted, through one matcher, so the
+  console (Bearer today) keeps working while it moves over.
+- **`AITP_PLAYGROUND_REQUIRE_API_KEY`**, default `false`: off keeps today's per-route auth; on gates every request
+  before routing except `GET /healthz`, the HMAC webhook, loopback-only `/internal/*` and `OPTIONS`. On with no key
+  refuses to start. Shipped `false` in prd; wave 4 flips it after the console sends the key.
+- **Client IP:** `X-AITP-Client-IP` is trusted only with a valid key and normalised like aitp-docs
+  `normalizeClientIp` (IPv4, or IPv6 /64). Per-IP limits and quotas apply only to that trusted subject; keyless
+  traffic has none until the key is required, because on Railway every keyless caller shares the edge address.
+- **Run limits:** 5 launches per 10 min per trusted IP and 3 concurrent runs, `429` with `Retry-After`, checked before
+  the hourly cap so a refusal does not use it up. A 900 s run deadline bounds how long a run holds a slot.
+- **LLM quotas:** agents ask `POST /internal/llm-quota` before a real call; the playground charges the run's IP
+  (from the run record, never the agent) and the global counters, all or nothing. Over quota the capability runs on
+  its mock and the run is flagged with the reset time. Fails closed: no store, or an unreachable one, refuses.
+- **Store:** a dedicated Railway Postgres `playground-db`, reached through the reference
+  `DATABASE_URL=${{playground-db.DATABASE_URL}}`, kept off the Doppler allowlist (the sync refuses references). The
+  limit and flag values are Doppler-managed. Dropping the database loses only usage counters.
+- **`/cp-proxy`:** a key-gated, GET-only passthrough to an exact allowlist of the CP's read routes, so the console
+  stops calling the CP anonymously. At most 20 open event streams; buffered replies are capped at 5 MiB within one
+  deadline. Upstream auth is `CP_READ_API_KEY` when set, else `CP_API_KEY`.
+
+## D-32 — Reconciled assumptions of the lockdown and quota work
+
+2026-11-07, `/reconcile` over the ten UNCONFIRMED entries of plans/playground-lockdown-quotas.md. The three on a
+trust boundary were analysed by Fable first; none was a one-way door, so all ten were settled by Opus without the
+owner. Any can be reopened from ASSUMPTIONS.md.
+- **Bearer as a second key header: confirmed.** One constant-time matcher; the telemetry token and the API key never
+  cross. Drop Bearer only after the console is verified on `x-api-key` in prod with the flag on, together with the
+  doc sweep.
+- **Per-IP bucket on the trusted subject IP: confirmed.** It supersedes plan decision 3 ("bucket keeps right-most
+  XFF"). The launch window and the quota already key on that IP; keying the bucket on the console's egress would
+  throttle every visitor together. SECURITY.md's paragraph saying otherwise was corrected.
+- **Quota check trusts the playground's agents: confirmed.** Abusing the shared token needs code running in an agent,
+  which already holds the provider key; `run_id` comes from the bootstrap, never from model output. Trigger: once
+  agents stop holding the provider key, the token must become per run and bound to `run_id`.
+- **`PLAYGROUND_INTERNAL_URL` = `http://127.0.0.1:8000`: confirmed** (matches the Dockerfile CMD). Its blast radius
+  was understated and is corrected: a wrong port also fails every quota check closed, so runs go to mock unflagged.
+- **Stale slot reclaim after deadline + 120 s: confirmed.** The background task can fail to start after handoff; a
+  late release of a reclaimed slot is a no-op.
+- **Denial quotes the counter that resets last: confirmed.** That is the earliest time the same charge can succeed.
+- **Store selection edge cases: confirmed.** `postgres` without a URL denies (the service stays up on a visible mock);
+  `memory` on Railway only as an explicit, logged opt-in.
+- **`aitp_playground_` metric prefix: confirmed now,** before any dashboard reads the names.
+- **Agent-reported check failures: confirmed with a change.** The reason was taken from the request body and used as
+  a metric label and the run's reason, so a token holder could add label values or double-count a decided denial.
+  It is now fixed to `quota_check_failed` (`api/telemetry.py`), with a test.
+- **Hosted agents charge global counters only: deferred.** Hosted agents are created and invoked only with the key,
+  and `/invoke` already goes through the per-IP window. Trigger: a hosted agent gets a public origin on Railway.

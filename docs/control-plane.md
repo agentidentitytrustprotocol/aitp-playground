@@ -207,6 +207,44 @@ to call unconditionally from a dashboard.
 | `GET /cp/trust-anchors` | `/api/trust-anchors` | configured OIDC issuer bindings |
 | `GET /cp/pinned-keys` | `/api/pinned-keys` | registered pinned keys |
 
+## Console passthrough (`/cp-proxy`)
+
+`GET /cp-proxy/{path}` forwards a fixed list of CP **read** routes, so the
+console reads the CP through the playground instead of calling it
+anonymously (`api/cp_proxy.py`).
+
+- **Always key-gated.** The playground API key (`x-api-key` or
+  `Authorization: Bearer`) is required whatever
+  `AITP_PLAYGROUND_REQUIRE_API_KEY` says. The route is new, so it has no
+  keyless behaviour to keep.
+- **GET only, exact allowlist.** Anything else is a 404 before any upstream
+  call; other methods are a 405. Allowed: `api/health`, `api/readyz`,
+  `api/dashboard/overview`, `api/dashboard/agents`, `api/delegations`,
+  `api/events/history`, `api/events/stream`, `api/pinned-keys`,
+  `api/registry/agents`, `api/registry/agents/{id}`,
+  `api/registry/agents/{id}/manifest`, `api/sessions`, `api/sessions/{id}`,
+  `api/sessions/{id}/replay`, `api/tcts`, `api/trust-anchors`,
+  `api/trust-anchors/{id}`, `.well-known/aitp-manifest`. Admin and export
+  reads are not on the list.
+- **Path safety.** The raw, still-encoded path is checked segment by
+  segment. Empty segments, `.`/`..` (encoded or not), and segments that
+  decode to `/`, `\`, `%` or a control character are refused. Each segment
+  is re-encoded before it goes upstream. The query string is passed through
+  unchanged.
+- **Credentials.** Nothing from the caller's credentials goes upstream. The
+  request carries only `accept`, `if-none-match` and `last-event-id`, plus
+  the playground's own CP key: `CP_READ_API_KEY` (a read-only key) when it
+  is set, otherwise `CP_API_KEY`.
+- **Responses.** Status, `content-type`, `cache-control`, `etag`,
+  `last-modified`, `expires` and `retry-after` are passed through. Cookies
+  and `location` are dropped, and redirects are never followed. Bodies are
+  buffered up to 5 MiB (larger is a 502 `cp_response_too_large`).
+  `api/events/stream` is streamed as server-sent events with no read
+  timeout, and the upstream connection closes when the caller disconnects.
+- **Errors** are `{"code", "detail"}` JSON: 404 `not_found`, 503
+  `cp_disabled` (no `CP_BASE_URL`), and 502 `cp_unreachable`. The upstream
+  timeout is `CP_PROXY_TIMEOUT_SECONDS` (default 10).
+
 ## Event ingest
 
 (CP side: [api.md § Events](https://github.com/agentidentitytrustprotocol/aitp-control-plane/blob/main/docs/api.md#events).)

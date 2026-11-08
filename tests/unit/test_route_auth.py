@@ -3,7 +3,8 @@ is on the explicit public allowlist.
 
 Applies per route (not per router) so the static scenario listings stay
 public. A new route fails this test until it either takes
-``require_api_key`` (directly, or through ``enforce_spend_limits``) or is
+``require_api_key`` (directly, or through ``enforce_spend_limits`` /
+``enforce_run_limits``) or is
 added to an allowlist below with a reason.
 """
 from __future__ import annotations
@@ -16,10 +17,12 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from aitp_playground.api._deps import (
+    enforce_run_limits,
     enforce_spend_limits,
     require_api_key,
     require_telemetry_token,
 )
+from aitp_playground.api.quota import require_direct_loopback
 from aitp_playground.config import Settings
 from aitp_playground.main import create_app
 from tests._auth import AUTH
@@ -36,12 +39,15 @@ PUBLIC_GET = {
     "/dashboard",
 }
 
-#: Routes authenticated by something other than the API key.
+#: Routes authenticated by something other than the API key, with every
+#: dependency each must carry.
 OTHER_AUTH = {
     # CP holds only the per-webhook HMAC secret; verified in the handler.
-    ("POST", "/webhooks/cp/{run_id}"): None,
+    ("POST", "/webhooks/cp/{run_id}"): (),
     # Agent subprocesses hold a per-process telemetry token, not the key.
-    ("POST", "/internal/telemetry"): require_telemetry_token,
+    ("POST", "/internal/telemetry"): (require_telemetry_token,),
+    # Same token, and loopback-only always (api/quota.py).
+    ("POST", "/internal/llm-quota"): (require_telemetry_token, require_direct_loopback),
 }
 
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
@@ -89,8 +95,8 @@ def test_every_route_is_authenticated_or_explicitly_public() -> None:
         for method in route.methods:
             key = (method, route.path)
             if key in OTHER_AUTH:
-                expected = OTHER_AUTH[key]
-                assert expected is None or expected in calls, key
+                missing = [d.__name__ for d in OTHER_AUTH[key] if d not in calls]
+                assert not missing, (key, missing)
                 continue
             if method in {"GET", "HEAD"} and route.path in PUBLIC_GET:
                 continue
@@ -110,11 +116,18 @@ def test_every_mutating_route_is_guarded() -> None:
 
 
 def test_spend_routes_carry_the_spend_limits() -> None:
-    spend = {("POST", "/runs"), ("POST", "/hosted-agents/{hosted_id}/invoke")}
+    spend = {
+        ("POST", "/runs"): enforce_run_limits,
+        ("POST", "/hosted-agents/{hosted_id}/invoke"): enforce_spend_limits,
+    }
+    seen = set()
     for route in _api_routes():
         for method in route.methods:
-            if (method, route.path) in spend:
-                assert enforce_spend_limits in set(_calls(route.dependant))
+            dep = spend.get((method, route.path))
+            if dep is not None:
+                assert dep in set(_calls(route.dependant)), (method, route.path)
+                seen.add((method, route.path))
+    assert seen == set(spend)
 
 
 def _concrete(path: str) -> str:
@@ -155,6 +168,24 @@ def test_any_key_in_the_rotation_list_is_accepted() -> None:
         assert r.status_code == 200
     r = TestClient(app).get("/runs", headers={"Authorization": "Bearer old-key, new-key"})
     assert r.status_code == 401
+
+
+#: With AITP_PLAYGROUND_REQUIRE_API_KEY=true the middleware gates everything
+#: except these (security.py ``_exempt``): health, the HMAC webhook, and the
+#: agents' loopback-only /internal/* (exercised in test_backend_lockdown.py).
+LOCKED_EXEMPT = {("GET", "/healthz"), ("POST", "/webhooks/cp/{run_id}")}
+
+
+@pytest.mark.parametrize("method,path", sorted({
+    (m, r.path) for r in _api_routes() for m in r.methods if (m, r.path) not in LOCKED_EXEMPT
+}))
+def test_locked_every_route_without_key_is_401_from_the_gate(method: str, path: str) -> None:
+    """Flag true: every route, public listings and /internal/* from a
+    non-loopback peer included, answers the gate's 401 before routing."""
+    client = TestClient(create_app(Settings(aitp_playground_require_api_key=True)), client=("203.0.113.5", 1))
+    r = client.request(method, _concrete(path))
+    assert r.status_code == 401, (method, path)
+    assert r.headers["www-authenticate"] == 'ApiKey header="x-api-key"'
 
 
 def test_public_listings_need_no_key() -> None:

@@ -21,8 +21,14 @@ def _crewai_ready() -> bool:
         return False
 
 
-def build_crew(inputs: dict[str, Any]):
-    """Return an object with a .kickoff() method. Real CrewAI when available, stub otherwise.
+def real_path_available() -> bool:
+    """Whether :func:`build_crew` would build a real crew (the same check)."""
+    return _crewai_ready()
+
+
+def build_crew(inputs: dict[str, Any], *, use_llm: bool = True):
+    """Return an object with a .kickoff() method. Real CrewAI when available
+    and ``use_llm`` (the LLM quota permitted it), stub otherwise.
 
     Recognized inputs:
       - topic: subject of research (required)
@@ -33,7 +39,7 @@ def build_crew(inputs: dict[str, Any]):
     if depth not in ("short", "deep"):
         depth = "short"
 
-    if _crewai_ready():
+    if use_llm and _crewai_ready():
         from crewai import Agent, Crew, Process, Task  # type: ignore
 
         llm = build_crewai_llm()

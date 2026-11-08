@@ -40,6 +40,13 @@ class RunEvent(BaseModel):
     # whichever channel a consumer sees them.
     cause: Optional[str] = None
     source_url: Optional[str] = None
+    # llm.quota_exceeded: the counter that refused (e.g. per_ip_daily), its
+    # limit and when it resets (RFC 3339 UTC). ``code`` carries the reason
+    # (quota_exceeded | quota_store_unavailable | quota_check_failed).
+    quota: Optional[str] = None
+    limit: Optional[int] = None
+    resets_at: Optional[str] = None
+    calls: Optional[int] = None
 
 
 @dataclass
