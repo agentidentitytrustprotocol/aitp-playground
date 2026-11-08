@@ -112,11 +112,15 @@ fi
 
 # ---- Mint and store (apply) ---------------------------------------------------------------------
 if [ "$mode" = apply ] && [ "$need_new" = 1 ]; then
-  # The new token goes straight from the GraphQL response into Doppler through a pipe.
-  jq -nc --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_ENVIRONMENT_ID" --arg n "$TOKEN_NAME" \
+  # The new token is held in a shell variable (never printed, never in argv: printf is a builtin) so an
+  # empty or null answer is refused before Doppler's current value is overwritten.
+  new_token="$(jq -nc --arg p "$RAILWAY_PROJECT_ID" --arg e "$RAILWAY_ENVIRONMENT_ID" --arg n "$TOKEN_NAME" \
     '{query:"mutation($i:ProjectTokenCreateInput!){projectTokenCreate(input:$i)}",variables:{i:{projectId:$p,environmentId:$e,name:$n}}}' \
-    | gql | jq -j '.data.projectTokenCreate' \
+    | gql | jq -je '.data.projectTokenCreate | strings | select(length > 0)')" \
+    || die "Railway returned no token for $TOKEN_NAME; Doppler left unchanged"
+  printf '%s' "$new_token" \
     | doppler secrets set "$SECRET" --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" --silent --no-interactive >/dev/null
+  unset new_token
   [ -n "$(doppler secrets get "$SECRET" --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" --plain)" ] \
     || die "Doppler did not store $SECRET"
   say "minted: $TOKEN_NAME (stored in Doppler $SECRET, sha256 $(doppler secrets get "$SECRET" --project "$DOPPLER_PROJECT" --config "$DOPPLER_CONFIG" --plain | sha_prefix))"

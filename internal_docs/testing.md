@@ -366,7 +366,7 @@ It warns about stale `aitp-live-*` projects left by a crashed run.
 Cost guard (`docker-compose.live.yml`): the global daily LLM quota is the
 ceiling on provider call units for the whole run, `LIVE_MAX_CALLS` (default
 120, refused above 1000), with in-memory counters on a fresh stack;
-`LLM_MAX_TOKENS_PER_CALL=512`; the cheapest model per provider
+`LLM_MAX_TOKENS_PER_CALL=512`; a small model per provider
 (`LIVE_OPENAI_MODEL`, `LIVE_ANTHROPIC_MODEL`); `RUN_TOKEN_BUDGET=24000`. The
 worst case on gpt-4o-mini is well under $0.10 per run. The live stack also
 runs with `AITP_PLAYGROUND_REQUIRE_API_KEY=true`.

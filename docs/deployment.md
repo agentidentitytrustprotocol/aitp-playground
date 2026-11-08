@@ -59,7 +59,9 @@ gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId -
 
 Pushing a tag yourself does the same for the tagged commit, which must be on
 `main`: `git tag v0.3.0 <sha> && git push origin v0.3.0`. The workflow
-creates the GitHub release if the tag has none.
+creates the GitHub release if the tag has none. An older commit may have no
+`sha-<short>` image: docker.yml's concurrency group replaces a queued main
+build with a newer one. The gate then refuses; release a later commit.
 
 A run that fails after the retag but before the deploy is verified leaves
 `:latest` ahead of what runs, and `check-latest.sh` says `MISMATCH`.

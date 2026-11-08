@@ -35,7 +35,7 @@
 #   WAIT_TIMEOUT_SECONDS  default 2100 (35 min);  POLL_SECONDS default 30
 #   RAILWAY_TOKEN_CHECK_CMD  test seam: a shell command run instead of step 6's check-latest.sh call
 #
-# Needs git, jq, gh (authenticated), docker buildx. Tested with PATH stubs in
+# Needs git, jq, gh (authenticated), docker buildx, curl (step 6). Tested with PATH stubs in
 # tests/unit/test_release_preflight.py.
 
 # The docker --format templates are single-quoted on purpose.
@@ -57,7 +57,7 @@ REQUIRED_CHECKS="${REQUIRED_CHECKS:-$DEFAULT_CHECKS}"
 say() { printf 'preflight: %s\n' "$*" >&2; }
 refuse() { say "REFUSED: $*"; exit 1; }
 
-for c in git jq gh docker; do command -v "$c" >/dev/null || refuse "$c is not on PATH"; done
+for c in git jq gh docker curl; do command -v "$c" >/dev/null || refuse "$c is not on PATH"; done
 
 # ── 1. credentials (names only; a value is never printed) ────────────────────
 for v in RAILWAY_TOKEN RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID RAILWAY_SERVICE_ID; do

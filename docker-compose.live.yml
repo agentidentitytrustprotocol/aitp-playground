@@ -9,7 +9,7 @@
 # Cost guard. The global daily LLM quota is the hard ceiling on provider call
 # units for the whole stack (one script run = one fresh stack, in-memory
 # counters): LIVE_MAX_CALLS, default 120. Each call is capped at 512 output
-# tokens on the cheapest model. Worst case on gpt-4o-mini: 120 x 512 output
+# tokens on a small model. Worst case on gpt-4o-mini: 120 x 512 output
 # tokens plus prompts, well under $0.10.
 #
 # This file sets AITP_LIVE_LLM=1 (the gate for live-only tests); the base

@@ -24,7 +24,7 @@
 #
 # Cost guard (docker-compose.live.yml): the global daily LLM quota is the
 # ceiling on provider call units for the whole run, LIVE_MAX_CALLS (default
-# 120, refused above 1000); 512 output tokens per call; cheapest model.
+# 120, refused above 1000); 512 output tokens per call; small model.
 #
 # Env:
 #   LIVE_PROVIDER         openai | anthropic            (default openai)

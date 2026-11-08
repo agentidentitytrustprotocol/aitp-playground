@@ -129,7 +129,8 @@ key (by name; it never prints a value), finds the CP checkout and
 `aitp-live-<epoch>-<pid>` that is torn down on exit, Ctrl-C included. The
 override caps spend: the global daily LLM quota (`LIVE_MAX_CALLS`, default
 120) is the ceiling on provider call units, each call is capped at 512 output
-tokens, and the model is the provider's cheapest. It also turns the backend
+tokens, and the model is a small one (gpt-4o-mini, or claude-haiku-4-5, which
+has thinking off by default). It also turns the backend
 lockdown on and sets a per-IP quota of 4 for the quota test. The `tests`
 container runs `test_live_quota_e2e.py` first, then `test_llm_e2e.py` and
 `test_protocol_e2e.py`. The log (scrubbed of `sk-…` and `Bearer …`) is written
