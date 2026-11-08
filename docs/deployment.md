@@ -40,26 +40,33 @@ does it in one job:
    Nothing is retagged before it passes.
 2. **Promote.** `docker buildx imagetools create` tags that digest `X.Y.Z`,
    `X.Y` and `latest`, then checks that all four tags resolve to it.
-3. **Tag and release.** It creates the tag (when dispatched) and a GitHub
-   release with generated notes, marked Latest.
+3. **GitHub release.** It creates the GitHub release for the existing tag
+   (`--verify-tag`, so it never creates a tag), with generated notes, marked
+   Latest.
 4. **Redeploy.** `railway redeploy --from-source` on `aitp-runner` /
-   `production` / `aitp-playground`, with the CLI pinned to 5.70.0.
+   `production` / `aitp-playground`. The CLI is the 5.70.0 release binary,
+   pinned by version and sha256 (no `npx`); to bump it, take the new asset's
+   digest from the Railway CLI GitHub release and update both values in
+   `release.yml` (DECISIONS D-35).
 5. **Verify.** It waits up to 15 minutes for the new deployment and fails
    with its id if it ends `FAILED` or `CRASHED`. Then
    [`scripts/release/check-latest.sh`](https://github.com/agentidentitytrustprotocol/aitp-playground/blob/main/scripts/release/check-latest.sh)
    must print `MATCH`. The job summary lists the digests and names which
    check passed.
 
-Cut a release from `main` HEAD:
+`v*` tags are admin-only: the repository ruleset `release-tags-v` lets only
+repo and org admins create, move or delete them (DECISIONS D-35). The
+workflow cannot create one, so a release starts with an admin pushing the
+tag on a `main` commit; the push runs the release:
 
 ```bash
-gh workflow run release.yml -f version=0.3.0
+git fetch origin && git tag v0.3.1 origin/main && git push origin v0.3.1
 gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
-Pushing a tag yourself does the same for the tagged commit, which must be on
-`main`: `git tag v0.3.0 <sha> && git push origin v0.3.0`. The workflow
-creates the GitHub release if the tag has none. An older commit may have no
+`gh workflow run release.yml --ref main -f version=0.3.1` releases `main`
+HEAD only when tag `v0.3.1` already exists and points at it; otherwise it
+refuses before anything moves. The workflow creates the GitHub release if the tag has none. An older commit may have no
 `sha-<short>` image: docker.yml's concurrency group replaces a queued main
 build with a newer one. The gate then refuses; release a later commit.
 

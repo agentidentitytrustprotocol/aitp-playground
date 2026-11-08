@@ -873,3 +873,26 @@ All nine entries were reversible; a fresh Opus analysis checked each against the
   DEFERRED.md.
 - **Socket test through the token bucket:** confirmed. FastAPI 0.162.0 solves dependencies before it
   validates the body (`fastapi/dependencies/utils.py`), and reordering would fail the test loudly.
+
+## D-35 — Release hardening: no persisted token, pinned Railway CLI, admin-only `v*` tags (2026-11-08)
+Wave 9, from the wave-5 Fable review of release.yml.
+- **Checkout:** `persist-credentials: false`. No step pushes with git (the GitHub release goes through `gh`
+  with `GH_TOKEN`), so the token is not left in `.git/config` for later steps.
+- **Railway CLI:** the `railway-v5.70.0-x86_64-unknown-linux-musl.tar.gz` release binary, checked with
+  `sha256sum -c` against `f518230646acc7a6a7a67365e7642618f659d5d8cdd7cf8c180336140d0504eb` (GitHub's asset
+  digest, confirmed by a local download), replaces `npx -y @railway/cli@5.70.0` (an npm resolution plus a
+  postinstall binary download at release time). Bump: new version and digest in the one step, both checked.
+- **`v*` tag ruleset:** repository ruleset `release-tags-v`, **id 26814446**, enforcement active, target tags
+  `refs/tags/v*`, rules creation + update + deletion, bypass = repository admin role and organization admins.
+  Inspect: `gh api repos/agentidentitytrustprotocol/aitp-playground/rulesets/26814446`. Delete (reverts it
+  fully): `gh api -X DELETE repos/agentidentitytrustprotocol/aitp-playground/rulesets/26814446`.
+- **Release automation is not a bypass actor.** The brief asked for "release automation or admins". GitHub
+  refused the GitHub Actions app (Integration 15368) as a bypass actor on this org's repo ruleset (422:
+  "must be part of the ruleset source or owner organization"; the org is on the free plan). The other
+  routes need a new secret (a deploy key or a GitHub App key for the release job), which this wave may not
+  create. So release.yml no longer creates tags: an admin pushes `vX.Y.Z` (that push runs the release), and
+  a dispatch with `version` refuses in its resolve step, before `:latest` moves, unless the tag exists.
+  `gh release create --verify-tag` never creates a tag. To restore dispatch-creates-tag: delete the
+  ruleset, or add a bypass-capable credential (deploy key or App) and use it for the tag step.
+- **Validation:** actionlint (with shellcheck) passes. Not exercised by a release: cutting one only to test
+  the workflow was out of scope, and the workflow has no dry-run path.

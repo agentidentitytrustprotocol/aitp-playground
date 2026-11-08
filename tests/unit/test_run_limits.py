@@ -95,9 +95,12 @@ def test_concurrency_refusal_does_not_use_a_window_entry() -> None:
 def test_cancel_hands_back_the_slot_and_the_window_entry() -> None:
     lim = _limiter(FakeClock(), per_ip=1, concurrent=1)
     r = lim.reserve("a", slot=True)
+    undone: list[int] = []
+    r.on_cancel(lambda: undone.append(1))
     r.cancel()
     r.cancel()
     assert lim.active == 0
+    assert undone == [1]  # registered undo runs once, however often cancel is called
     lim.reserve("a", slot=True)
 
 
@@ -340,6 +343,33 @@ def test_record_error_before_handoff_hands_back_the_slot(monkeypatch) -> None:
     client = TestClient(app, raise_server_exceptions=False)
     assert client.post("/runs", json=_RUN, headers=_keyed()).status_code == 500
     assert app.state.run_limiter.active == 0
+
+
+def test_failed_keyed_launch_refunds_the_hourly_slot(monkeypatch) -> None:
+    """A keyed launch that fails before handoff (422 body, record error) leaves
+    the global hourly count unchanged; the cap of 1 still admits a real run."""
+    app = _app(FakeClock(), max_runs_per_hour=1)
+    hourly = app.state.spend_limits.hourly
+    client = TestClient(app, raise_server_exceptions=False)
+
+    assert client.post("/runs", json={"inputs": {}}, headers=_keyed()).status_code == 422
+    assert len(hourly._stamps) == 0
+
+    store = app.state.run_store
+    real_upsert = store.upsert
+
+    def broken(*a, **k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(store, "upsert", broken)
+    assert client.post("/runs", json=_RUN, headers=_keyed()).status_code == 500
+    assert len(hourly._stamps) == 0
+
+    monkeypatch.setattr(store, "upsert", real_upsert)
+    assert client.post("/runs", json=_RUN, headers=_keyed()).status_code == 202
+    assert len(hourly._stamps) == 1  # a handed-off run keeps its hourly slot
+    r = client.post("/runs", json=_RUN, headers=_keyed())
+    assert r.status_code == 429 and "hourly" in r.json()["detail"]
 
 
 def test_subject_ip_is_stored_privately_on_the_run() -> None:

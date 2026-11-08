@@ -75,14 +75,28 @@ class RollingCap:
         self._stamps: deque[float] = deque()
 
     def try_acquire(self) -> bool:
+        return self.acquire() is not None
+
+    def acquire(self) -> float | None:
+        """Take one acquisition; return its stamp (for :meth:`refund`), or
+        ``None`` when the cap is reached."""
         now = self._clock()
         with self._lock:
             while self._stamps and now - self._stamps[0] >= self.window:
                 self._stamps.popleft()
             if len(self._stamps) >= self.limit:
-                return False
+                return None
             self._stamps.append(now)
-            return True
+            return now
+
+    def refund(self, stamp: float) -> None:
+        """Hand back one acquisition taken at ``stamp`` (a launch abandoned
+        before it ran). A stamp that already aged out is a no-op."""
+        with self._lock:
+            try:
+                self._stamps.remove(stamp)
+            except ValueError:
+                pass
 
 
 class SpendLimits:
@@ -107,12 +121,13 @@ class Reservation:
     """One admitted launch: a concurrency slot (optional) and a window stamp.
 
     ``release()`` frees the slot and is idempotent; ``cancel()`` also takes
-    the window stamp back, for a launch refused or abandoned before a run was
-    created. ``handed_off`` is set once a background run owns the slot, so the
+    the window stamp back, plus anything registered with :meth:`on_cancel`
+    (the global hourly acquisition), for a launch refused or abandoned before
+    a run was created. ``handed_off`` is set once a background run owns the slot, so the
     request's own cleanup leaves it alone.
     """
 
-    __slots__ = ("_limiter", "_slot_id", "_ip", "_stamp", "handed_off")
+    __slots__ = ("_limiter", "_slot_id", "_ip", "_stamp", "_on_cancel", "handed_off")
 
     def __init__(
         self, limiter: RunLimiter, slot_id: int | None, ip: str | None, stamp: float | None,
@@ -121,6 +136,7 @@ class Reservation:
         self._slot_id = slot_id
         self._ip = ip
         self._stamp = stamp
+        self._on_cancel: list[Callable[[], None]] = []
         self.handed_off = False
 
     @property
@@ -132,12 +148,19 @@ class Reservation:
         if slot_id is not None:
             self._limiter._release_slot(slot_id)
 
+    def on_cancel(self, undo: Callable[[], None]) -> None:
+        """Register one more thing :meth:`cancel` hands back (run once)."""
+        self._on_cancel.append(undo)
+
     def cancel(self) -> None:
         self.release()
         ip, stamp = self._ip, self._stamp
         self._ip = self._stamp = None
         if ip is not None and stamp is not None:
             self._limiter._unstamp(ip, stamp)
+        undo, self._on_cancel = self._on_cancel, []
+        for fn in undo:
+            fn()
 
 
 class RunLimiter:

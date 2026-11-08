@@ -2,18 +2,21 @@ name: Release
 
 # A release PROMOTES the image main already built and e2e-tested; it never rebuilds
 # (DECISIONS.md D-33). It retags ghcr.io/…/aitp-playground:sha-<short> to X.Y.Z, X.Y and latest
-# (same digest), tags the commit and publishes a GitHub release, redeploys the Railway service
+# (same digest), publishes the GitHub release for the commit's tag, redeploys the Railway service
 # from source, and verifies that what runs is that digest. Afterwards
 #
 #     running on Railway == :latest == the GitHub release marked Latest
 #
 # holds by construction; scripts/release/check-latest.sh checks it at any time.
 #
+# A release starts from a tag vX.Y.Z on a main commit. v* tags are admin-only: repository ruleset
+# `release-tags-v` restricts their creation, update and deletion to repo and org admins
+# (DECISIONS.md D-35). This workflow never creates a tag; GITHUB_TOKEN cannot bypass the ruleset.
 # Two ways in, both doing the same promotion:
-#   * workflow_dispatch with `version` (X.Y.Z): releases main HEAD. The tag is created here with
-#     GITHUB_TOKEN, which does not trigger workflows, so nothing runs twice.
-#   * a human pushing a tag vX.Y.Z on a main commit: releases that commit (the tag already exists;
-#     the GitHub release is created if it is missing).
+#   * an admin pushing the tag (the normal path): releases that commit and creates the GitHub
+#     release if it is missing.
+#   * workflow_dispatch with `version` (X.Y.Z), run from main: releases main HEAD, whose tag vX.Y.Z
+#     must already exist and point at it; it refuses before anything moves otherwise.
 # Rollback: workflow_dispatch with `rollback_to` (X.Y.Z of an existing release) re-points latest
 # at that release's digest, redeploys, verifies, then marks that GitHub release Latest.
 #
@@ -26,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version X.Y.Z (no leading v); releases main HEAD. Leave empty for a rollback."
+        description: "Release version X.Y.Z (no leading v); releases main HEAD; tag vX.Y.Z must exist at main HEAD. Leave empty for a rollback."
         required: false
         type: string
       rollback_to:
@@ -54,7 +57,7 @@ jobs:
     timeout-minutes: 75
     environment: production
     permissions:
-      contents: write # create the tag and the GitHub release, mark a release Latest
+      contents: write # create the GitHub release, mark a release Latest
       packages: write # retag in GHCR
       checks: read # read the docker.yml check runs on the commit
     steps:
@@ -63,6 +66,9 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          # Nothing here pushes with git (tags and releases go through gh + GH_TOKEN), so the
+          # token is not left in .git/config for later steps to read.
+          persist-credentials: false
 
       - name: Resolve what to release
         id: what
@@ -77,6 +83,12 @@ jobs:
             mode=release; event=tag; version="${REF_NAME#v}"
           elif [ -n "$IN_VERSION" ] && [ -z "$IN_ROLLBACK" ]; then
             mode=release; event=dispatch; version="$IN_VERSION"
+            # This workflow cannot create v* tags (ruleset release-tags-v, D-35): refuse now,
+            # before :latest moves, rather than at the tag step.
+            if ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+              echo "::error::tag v$version does not exist; an admin pushes it first: git tag v$version <main sha> && git push origin v$version (that push runs the release)"
+              exit 1
+            fi
           elif [ -z "$IN_VERSION" ] && [ -n "$IN_ROLLBACK" ]; then
             mode=rollback; event=dispatch; version="$IN_ROLLBACK"
           else
@@ -148,21 +160,38 @@ jobs:
             for t in "${targets[@]}"; do echo "- \`$t\`"; done
           } >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Tag and GitHub release
+      - name: GitHub release
         if: steps.pre.outputs.mode == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.pre.outputs.tag }}
-          COMMIT: ${{ steps.pre.outputs.commit }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "GitHub release $TAG already exists (resumed run)"
-          elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --latest
           else
-            gh release create "$TAG" --target "$COMMIT" --title "$TAG" --generate-notes --latest
+            # The tag exists (resolve step and preflight); --verify-tag never creates one.
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --latest
           fi
+
+      # Version- and checksum-pinned CLI binary: no npm resolution at release time. To bump,
+      # take the new asset's sha256 from the GitHub release (asset digest) and re-download to
+      # confirm it (DECISIONS.md D-35).
+      - name: Install Railway CLI (pinned)
+        env:
+          RAILWAY_CLI_VERSION: "5.70.0"
+          RAILWAY_CLI_SHA256: f518230646acc7a6a7a67365e7642618f659d5d8cdd7cf8c180336140d0504eb
+        run: |
+          set -euo pipefail
+          asset="railway-v${RAILWAY_CLI_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          dir="$RUNNER_TEMP/railway-cli"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/$asset" \
+            "https://github.com/railwayapp/cli/releases/download/v${RAILWAY_CLI_VERSION}/$asset"
+          echo "$RAILWAY_CLI_SHA256  $dir/$asset" | sha256sum -c -
+          tar -xzf "$dir/$asset" -C "$dir" railway
+          "$dir/railway" --version
+          echo "$dir" >>"$GITHUB_PATH"
 
       - name: Redeploy Railway from source
         id: deploy
@@ -178,7 +207,7 @@ jobs:
           echo "previous deployment: $prev"
           # --from-source re-resolves the image tag (:latest); a plain redeploy may reuse the
           # previous deployment's digest.
-          npx -y @railway/cli@5.70.0 redeploy --from-source --yes \
+          railway redeploy --from-source --yes \
             --project "$RAILWAY_PROJECT_ID" \
             --environment "$RAILWAY_ENVIRONMENT_ID" \
             --service "$RAILWAY_SERVICE_ID"

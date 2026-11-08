@@ -150,7 +150,9 @@ def _admit(
        window. The window only applies to a trusted subject IP; keyless and
        header-less traffic all arrives from one edge-proxy address.
     3. The global hourly cap, last, so a 429 above never burns it. A refusal
-       here hands back the slot and the window entry taken in step 2.
+       here hands back the slot and the window entry taken in step 2. An
+       admitted hourly acquisition is tied to the reservation, so a launch
+       abandoned before handoff (``Reservation.cancel``) refunds it too.
     """
     client = resolve_client(request)
     ip_key = client.subject_ip if client.trusted_header else client_ip(request)
@@ -161,13 +163,15 @@ def _admit(
             status_code=429, detail="rate limit exceeded", headers={"Retry-After": "60"},
         )
     reservation = limiter.reserve(client.subject_ip, slot=slot)
-    if not limits.hourly.try_acquire():
+    hourly_stamp = limits.hourly.acquire()
+    if hourly_stamp is None:
         reservation.cancel()
         raise HTTPException(
             status_code=429,
             detail="hourly run limit reached for this service",
             headers={"Retry-After": "300"},
         )
+    reservation.on_cancel(lambda: limits.hourly.refund(hourly_stamp))
     return reservation
 
 
@@ -192,8 +196,8 @@ def enforce_run_limits(
 
     The route hands the reservation to the run's background task (sets
     ``handed_off``), which releases the slot when the run ends. If the request
-    fails before that (a 422 body, an error creating the record) the slot and
-    the window entry are handed back here.
+    fails before that (a 422 body, an error creating the record) the slot, the
+    window entry and the global hourly acquisition are handed back here.
     """
     reservation = _admit(request, key_id, limits, limiter, slot=True)
     try:
