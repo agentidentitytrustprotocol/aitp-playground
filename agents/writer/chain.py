@@ -1,7 +1,7 @@
 """LangChain writer chain — with a deterministic fallback when LangChain isn't installed."""
 from __future__ import annotations
 
-from llm import build_chat_model  # type: ignore[import-not-found]
+from llm import build_chat_model, response_text  # type: ignore[import-not-found]
 
 
 async def run_writer(findings: str, *, style: str = "casual") -> str:
@@ -17,7 +17,7 @@ async def run_writer(findings: str, *, style: str = "casual") -> str:
         )
         msg = HumanMessage(content=f"Findings:\n\n{findings}\n\nWrite the article now.")
         out = await llm.ainvoke([sys_msg, msg])
-        return getattr(out, "content", str(out))
+        return response_text(out)
 
     return _stub_article(findings, style)
 

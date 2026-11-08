@@ -745,3 +745,18 @@ in-flight image publish. Measurement, reasoning and the re-measure method:
   docs), a merge-queue path filter (there is no merge queue; the recipe is in the doc).
 
 No job `name:` or matrix value changed, so every required context still reports (D-13).
+
+## D-30 — Prod LLM: OpenAI only; Anthropic responses normalised to text
+
+2026-11-08, aitp-hardening wave 1 (prompt "Wave 2: LLM keys").
+- **Owner decision (2026-11-07):** prod uses OpenAI only. `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` stay in
+  `deploy/doppler-keys/playground.txt` with no value in Doppler `aitp-playground/prd` or on Railway, so the sync
+  reports them as `absent`. Anthropic is for dev and local use.
+- **Bug fixed:** `ChatAnthropic` returns `AIMessage.content` as a list of content blocks. The writer and the analyzer
+  passed it through raw. They now go through `llm.response_text()`, which joins text blocks in order (the same as
+  `AIMessage.text`) and drops thinking/tool_use blocks. This matches acdp-playground #131. The researcher (CrewAI →
+  litellm `result.raw`) was already a string.
+- **Verified:** Doppler prd and Railway are hash-equal (`690a601691b49038`, 10 managed keys, no redeploy). One real prod
+  run (`intra-org/research-and-write@1.0.0`, run `e9e346b0`) reached `success`, with `llm.started` → `llm.complete` for
+  research and write, no `llm.failed`, and real (non-stub) outputs. `call_llm_or_502` turns any non-2xx provider
+  response into `llm.failed`/502, so `llm.complete` means the provider returned 200.

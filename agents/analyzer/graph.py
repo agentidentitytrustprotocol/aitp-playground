@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from llm import build_chat_model  # type: ignore[import-not-found]
+from llm import build_chat_model, response_text  # type: ignore[import-not-found]
 
 
 def _langgraph_ready() -> bool:
@@ -23,11 +23,11 @@ async def run_analyzer(input_text: str) -> dict[str, Any]:
 
         async def summarise(state: dict) -> dict:
             resp = await llm.ainvoke([HumanMessage(content=f"Summarise in 3 bullets:\n\n{state['text']}")])
-            return {"text": state["text"], "summary": resp.content}
+            return {"text": state["text"], "summary": response_text(resp)}
 
         async def critique(state: dict) -> dict:
             resp = await llm.ainvoke([HumanMessage(content=f"Give two concrete risks for:\n\n{state['summary']}")])
-            return {**state, "risks": resp.content}
+            return {**state, "risks": response_text(resp)}
 
         g = StateGraph(dict)
         g.add_node("summarise", summarise)

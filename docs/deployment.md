@@ -40,12 +40,12 @@ is the allowlist: the script manages these keys and no others.
 | `PLAYGROUND_API_KEY` | secret | Bearer key(s) for the authenticated routes. Comma-separated to overlap a rotation. |
 | `CP_API_KEY` | secret | Control Plane bearer |
 | `OPENAI_API_KEY` | secret | Used when `LLM_PROVIDER=openai` |
-| `ANTHROPIC_API_KEY` | secret | Used when `LLM_PROVIDER=anthropic`; not set today |
+| `ANTHROPIC_API_KEY` | secret | Used when `LLM_PROVIDER=anthropic`. **Dev/local only:** never set in prd (owner, 2026-11-07; DECISIONS D-30) |
 | `CP_BASE_URL` | config | Control Plane base URL |
 | `PLAYGROUND_BASE_URL` | config | Where agents POST telemetry |
 | `LLM_PROVIDER` | config | `openai` or `anthropic` |
 | `OPENAI_MODEL` | config | |
-| `ANTHROPIC_MODEL` | config | Not set today |
+| `ANTHROPIC_MODEL` | config | Dev/local only, like `ANTHROPIC_API_KEY` |
 | `INSTALL_EXTRAS` | build arg | Read by the Dockerfile. Inert while the service deploys the prebuilt image; kept so a source build gets the same extras. |
 
 Every other variable the service reads keeps its default

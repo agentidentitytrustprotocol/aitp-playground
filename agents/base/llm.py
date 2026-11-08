@@ -135,6 +135,30 @@ def build_chat_model():
     return None
 
 
+def response_text(resp: Any) -> str:
+    """Return the text of a LangChain chat-model response.
+
+    ``ChatOpenAI`` returns ``AIMessage.content`` as a string, but
+    ``ChatAnthropic`` returns a list of content blocks (``{"type": "text",
+    "text": ...}`` plus ``thinking``/``tool_use`` blocks). Text blocks — and
+    bare string items — are joined in order, matching ``AIMessage.text``;
+    every other block is dropped. An object without ``content`` falls back
+    to ``str()``. (Same fix as acdp-playground #131.)
+    """
+    content = getattr(resp, "content", resp)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
+    return str(content)
+
+
 def build_crewai_llm():
     """Construct a ``crewai.LLM`` for the active provider, or None.
 
