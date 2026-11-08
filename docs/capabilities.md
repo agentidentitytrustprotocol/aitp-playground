@@ -113,8 +113,9 @@ levels:
   error such as
   `sdk_feature_unavailable: intra-org/tct-renewal@1.0.0 needs tct_renewal; the installed aitp-sdk 0.24.0 lacks it`.
   There is no `run.started`. A refused run still counts against
-  `MAX_RUNS_PER_HOUR`, like the other preflight failures (unknown scenario,
-  invalid inputs).
+  `MAX_RUNS_PER_HOUR` and the per-IP launch window, and holds a
+  `MAX_CONCURRENT_RUNS` slot until it ends, like the other preflight
+  failures (unknown scenario, invalid inputs).
 - **Discovery.** `GET /scenarios`, `GET /scenarios/{ref}` (and each of its
   templates), `GET /scenarios/{ref}/templates` and
   `GET /scenarios/{ref}/templates/{name}` report `sdk_features_required`

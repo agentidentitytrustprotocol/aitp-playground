@@ -3,7 +3,8 @@ is on the explicit public allowlist.
 
 Applies per route (not per router) so the static scenario listings stay
 public. A new route fails this test until it either takes
-``require_api_key`` (directly, or through ``enforce_spend_limits``) or is
+``require_api_key`` (directly, or through ``enforce_spend_limits`` /
+``enforce_run_limits``) or is
 added to an allowlist below with a reason.
 """
 from __future__ import annotations
@@ -16,6 +17,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from aitp_playground.api._deps import (
+    enforce_run_limits,
     enforce_spend_limits,
     require_api_key,
     require_telemetry_token,
@@ -110,11 +112,18 @@ def test_every_mutating_route_is_guarded() -> None:
 
 
 def test_spend_routes_carry_the_spend_limits() -> None:
-    spend = {("POST", "/runs"), ("POST", "/hosted-agents/{hosted_id}/invoke")}
+    spend = {
+        ("POST", "/runs"): enforce_run_limits,
+        ("POST", "/hosted-agents/{hosted_id}/invoke"): enforce_spend_limits,
+    }
+    seen = set()
     for route in _api_routes():
         for method in route.methods:
-            if (method, route.path) in spend:
-                assert enforce_spend_limits in set(_calls(route.dependant))
+            dep = spend.get((method, route.path))
+            if dep is not None:
+                assert dep in set(_calls(route.dependant)), (method, route.path)
+                seen.add((method, route.path))
+    assert seen == set(spend)
 
 
 def _concrete(path: str) -> str:

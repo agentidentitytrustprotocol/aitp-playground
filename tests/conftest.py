@@ -25,6 +25,8 @@ os.environ.setdefault("PLAYGROUND_API_KEY", TEST_API_KEY)
 os.environ.setdefault("RATE_LIMIT_BURST", "100000")
 os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
 os.environ.setdefault("MAX_RUNS_PER_HOUR", "100000")
+os.environ.setdefault("RUN_RATE_LIMIT_PER_IP", "100000")
+os.environ.setdefault("MAX_CONCURRENT_RUNS", "100000")
 
 
 def pytest_configure(config) -> None:

@@ -132,6 +132,10 @@ you set `LLM_PROVIDER=anthropic`). Everything else has a sensible default.
 | `AITP_PLAYGROUND_REQUIRE_API_KEY` | `false` | `true` puts every path except `/healthz`, the CP webhook and loopback `/internal/*` behind the key, static listings included. The service refuses to start if this is `true` and `PLAYGROUND_API_KEY` is empty. See [SECURITY.md](../SECURITY.md) |
 | `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_BURST` | `10` / `5` | Token bucket on `POST /runs` and `POST /hosted-agents/{id}/invoke`, applied per client IP and per API key |
 | `MAX_RUNS_PER_HOUR` | `30` | Global cap on run creations plus hosted invokes in any rolling hour; the next one gets `429` before any agent starts |
+| `RUN_RATE_LIMIT_PER_IP` | `5` | Run launches (`POST /runs`) and hosted invokes per trusted client IP (`X-AITP-Client-IP` with a valid key) in `RUN_RATE_LIMIT_WINDOW_SECONDS`; the next gets `429 run_rate_limited`. Keyless and header-less callers are not per-IP limited |
+| `RUN_RATE_LIMIT_WINDOW_SECONDS` | `600` | Sliding window for `RUN_RATE_LIMIT_PER_IP` |
+| `MAX_CONCURRENT_RUNS` | `3` | Runs in progress at once, service-wide; the next launch gets `429 max_concurrent_runs` with `Retry-After: 10`. A slot frees when the run ends (success, failure, cancel or deadline) |
+| `RUN_DEADLINE_SECONDS` | `900` | A run still going after this ends `failed` with `code: run_deadline_exceeded`, its agents torn down |
 | `RUN_TOKEN_BUDGET` | `40000` | Output-token budget per run, split across the run's agents and enforced in each agent before every provider call (`429` once spent). A hosted agent gets the whole budget for its lifetime. |
 | `LLM_MAX_TOKENS_PER_CALL` | `1024` | `max_tokens` cap on every single provider call |
 | `LOG_LEVEL` | `INFO` | Standard logging level |

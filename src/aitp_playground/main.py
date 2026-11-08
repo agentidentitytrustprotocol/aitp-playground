@@ -27,7 +27,7 @@ from .hosting.hosted import HostedAgentManager
 from .hosting.loopback import AgentLoopback
 from .hosting.port_allocator import PortAllocator
 from .hosting.supervisor import AgentSupervisor
-from .limits import SpendLimits
+from .limits import RunLimiter, SpendLimits
 from .registry.service import RegistryService
 from .runner.engine import ScenarioRunner
 from .runner.store import build_run_store
@@ -138,6 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.cp = cp
     app.state.hosted = hosted
     app.state.spend_limits = SpendLimits(settings)
+    app.state.run_limiter = RunLimiter.from_settings(settings)
     app.state.telemetry_token = telemetry_token
 
     install_handlers(app)

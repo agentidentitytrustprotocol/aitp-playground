@@ -69,18 +69,27 @@ its IPv4 address, and a value that isn't a bare IP (`host:port`, `[v6]`, a
 hostname) is ignored. This is the same normalisation as `aitp-docs`'
 `normalizeClientIp`.
 
-That trusted address is the subject of the per-IP limits and quotas. A keyless
+That trusted address is the subject of the per-IP limits and quotas. It is
+kept on the run record (and in the SQLite history when `RUN_HISTORY_DB` is set,
+for as long as that file keeps the run), never returned by any API. A keyless
 request, or a keyed one without the header, has no subject IP: on Railway every
 keyless caller appears as the edge proxy, so a per-IP limit there would throttle
 every visitor together.
 
 ## Spend limits
 
-These run before any agent is spawned or any provider is called:
+These run before any agent is spawned or any provider is called, cheapest
+first: token buckets, then concurrency, then the per-IP window, then the
+global hourly cap. A launch refused at an earlier step never uses up a later
+one. The run-limit `429`s carry `{code, limit, retry_after, detail}` and a
+`Retry-After` header:
 
 | Limit | Setting | Scope |
 | --- | --- | --- |
-| Token bucket | `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_BURST` | `POST /runs` and `POST /hosted-agents/{id}/invoke`, per client IP and per API key |
+| Token bucket | `RATE_LIMIT_PER_MINUTE`, `RATE_LIMIT_BURST` | `POST /runs` and `POST /hosted-agents/{id}/invoke`, per client IP (the subject IP when sent, else the proxy-appended address) and per API key. The per-key bucket is skipped when a subject IP is sent: that key (the console) fronts many visitors, and the per-IP limits take over |
+| Per-IP launch window | `RUN_RATE_LIMIT_PER_IP`, `RUN_RATE_LIMIT_WINDOW_SECONDS` | `POST /runs` and hosted invokes per trusted client IP (5 per 10 minutes). Only a caller with a subject IP (above) is counted; the next gets `429 run_rate_limited` |
+| Concurrency cap | `MAX_CONCURRENT_RUNS` | Runs in progress, service-wide (3). The next launch gets `429 max_concurrent_runs`, `Retry-After: 10`. The slot frees when the run's task ends; a cancel does not free it early, because the agents may still be stopping |
+| Run deadline | `RUN_DEADLINE_SECONDS` | A run past 900 s ends `failed` (`run_deadline_exceeded`) and its agents are torn down, so a stuck run can't hold a slot |
 | Global hourly cap | `MAX_RUNS_PER_HOUR` | Run creations plus hosted invokes, all callers. The next one gets `429` |
 | Per-run token budget | `RUN_TOKEN_BUDGET`, `LLM_MAX_TOKENS_PER_CALL` | Enforced in each agent (`agents/base/llm.py`) before every provider call. Every call is capped at `max_tokens`, and the call that would exceed the budget gets `429` without contacting the provider |
 
@@ -92,7 +101,7 @@ spend limit set in the OpenAI and Anthropic dashboards; set both.
 
 ### Single-replica assumption
 
-The rate limit, the hourly cap and the token budget are all held **in
+The rate limit, the hourly cap, the run limits and the token budget are all held **in
 process memory**. They are correct only while the service runs as **one
 replica**: N replicas multiply every limit by N, and a restart resets them.
 The Railway service is deployed with one replica. Before scaling out, move

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Set by Railway itself on every deployment; this repo never sets them.
@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     # hosted-agent invokes) in any rolling hour, across every caller. The
     # (N+1)th is refused with 429 before any agent or provider is touched.
     max_runs_per_hour: int = 30
+    # Run launch limits (POST /runs). The per-IP window applies only to a
+    # caller identified by a trusted X-AITP-Client-IP (a keyed caller such as
+    # the console); keyless and header-less traffic shares one edge-proxy IP,
+    # so it is limited by the buckets and caps above instead. The concurrency
+    # cap is service-wide. A run longer than `run_deadline_seconds` is ended
+    # `failed` (run_deadline_exceeded) and its agents torn down.
+    run_rate_limit_per_ip: int = Field(default=5, ge=1)
+    run_rate_limit_window_seconds: int = Field(default=600, ge=1)
+    max_concurrent_runs: int = Field(default=3, ge=1)
+    run_deadline_seconds: float = Field(default=900.0, gt=0)
     # Output-token budget for one run, split evenly across the run's agents
     # and enforced inside each agent before every provider call
     # (`agents/base/llm.py`). A hosted agent gets the whole budget for its

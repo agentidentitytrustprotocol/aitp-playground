@@ -196,3 +196,18 @@ Entries are reconciled via `/reconcile` before ship. `Plan:` scopes each entry.
 - **Chose:** a separate internal URL instead of `PLAYGROUND_BASE_URL` (public, through the edge proxy, which the gate would reject once locked).
 - **Blast radius if wrong:** telemetry posts fail (fire-and-forget; runs unaffected) and startup warns; set `PLAYGROUND_INTERNAL_URL`.
 - **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — per-IP token bucket keys on the trusted subject IP
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 2; diverges from decision 3, which kept the bucket on right-most XFF/peer)
+- **Assumed:** a keyed caller sending `X-AITP-Client-IP` (the console) fronts many visitors from one egress IP.
+- **Chose:** with a trusted subject IP, the per-IP token bucket keys on that IP and the per-key bucket is skipped; otherwise the bucket keys on the right-most XFF/peer as before.
+- **Alternatives:** keep the bucket on the egress IP (every console visitor shares one 5-burst bucket, throttling the console as a whole).
+- **Blast radius if wrong:** the console can launch up to the per-IP window per visitor instead of one shared burst; still bounded by the concurrency cap and the global hourly cap. One-line revert in `api/_deps.py`.
+- **Status:** UNCONFIRMED
+
+## playground-lockdown-quotas — stale concurrency slots reclaimed after deadline + 120 s
+- **Plan:** plans/playground-lockdown-quotas.md (Phase 2; R4 said the slot is released only in the background task's finally)
+- **Assumed:** a slot can leak if the background task never starts (a failure after handoff, before the response is sent).
+- **Chose:** keep the finally as the only normal release, plus a backstop: a slot held longer than `RUN_DEADLINE_SECONDS + 120` is reclaimed on the next reservation. A run cannot legitimately hold a slot that long (the deadline ends it, 120 s covers teardown).
+- **Blast radius if wrong:** a run whose teardown takes over 120 s past the deadline briefly lets a 4th run start. Remove the reclaim in one commit.
+- **Status:** UNCONFIRMED
