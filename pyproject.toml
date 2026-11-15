@@ -124,6 +124,9 @@ dependencies = [
   #     Scenario agents therefore serve TLS on loopback (hosting/loopback.py);
   #     `insecure_localhost_dangerous` is local/test config only. Still
   #     `aitp/0.3`.
+  #   0.25.2 — Patch release: the Node binding refuses non-finite times and
+  #     quinn-udp moves to 0.5.16 (RUSTSEC-2026-0538). No Python API change;
+  #     still `aitp/0.3`.
   #   Upgrade guides: ../aitp-rs/docs/upgrading-0.14.md to upgrading-0.19.md;
   #   0.20 is in ../aitp-rs/CHANGELOG.md.
   # To develop against unreleased SDK source instead of the PyPI wheel, add a
