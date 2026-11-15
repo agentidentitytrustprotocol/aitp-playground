@@ -30,3 +30,11 @@ updates:
       major-updates:
         update-types:
           - major
+    # crewai (the all-agents extra) caps pydantic <2.13 and openai <3, so uv
+    # can't resolve those upgrades and every Dependabot run fails. Remove
+    # these entries once crewai lifts its caps.
+    ignore:
+      - dependency-name: pydantic
+        versions: [">=2.13"]
+      - dependency-name: openai
+        versions: [">=3"]
